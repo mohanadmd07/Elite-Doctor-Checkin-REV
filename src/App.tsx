@@ -1530,13 +1530,15 @@ export default function App() {
   const fetchHeaderImageBase64 = async (
     dateStr?: string,
     weekdayStr?: string,
-    titleStr?: string
+    titleStr?: string,
+    englishWeekdayStr?: string
   ): Promise<string> => {
     try {
       const params = new URLSearchParams();
       if (dateStr) params.set("date", dateStr);
       if (weekdayStr) params.set("day", weekdayStr);
       if (titleStr) params.set("title", titleStr);
+      if (englishWeekdayStr) params.set("englishWeekday", englishWeekdayStr);
       params.set("w", "1200");
       params.set("h", "150");
 
@@ -1671,7 +1673,7 @@ export default function App() {
         const worksheet = workbook.addWorksheet(sheetName, {
           views: [{ showGridLines: true }]
         });
-        const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday);
+        const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, weekday);
         applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`);
 
         const buffer = await workbook.xlsx.writeBuffer();
@@ -1784,11 +1786,12 @@ export default function App() {
           if (hour >= 19) tabTargetDate.setDate(tabTargetDate.getDate() + 1);
         }
         const tabArabicWeekday = new Intl.DateTimeFormat("ar-EG", { timeZone: "Africa/Cairo", weekday: "long" }).format(tabTargetDate);
+        const tabEnglishWeekday = new Intl.DateTimeFormat("en-US", { timeZone: "Africa/Cairo", weekday: "long" }).format(tabTargetDate);
         const tabFormattedDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(tabTargetDate);
         const tabTitle = `الأطباء المتواجدين عن يوم ${tabArabicWeekday} ${tabFormattedDate}`;
 
         // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-        const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday);
+        const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday, tabTitle, tabEnglishWeekday);
         applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, tabTitle);
 
         // Group check-ins under this day by department (Speciality)
@@ -1973,6 +1976,10 @@ export default function App() {
       timeZone: "Africa/Cairo",
       weekday: "long"
     }).format(d);
+    const englishWeekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Cairo",
+      weekday: "long"
+    }).format(d);
     const formattedDate = new Intl.DateTimeFormat("en-GB", {
       timeZone: "Africa/Cairo",
       year: "numeric",
@@ -1982,7 +1989,7 @@ export default function App() {
     const dailyTitle = `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`;
 
     // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday);
+    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, dailyTitle, englishWeekday);
     applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, dailyTitle);
 
     let currentRowNum = 8;
@@ -2138,8 +2145,7 @@ export default function App() {
             <p className="text-[10px] text-emerald-800 font-bold tracking-widest uppercase mt-0.5">All rights reserved to Dr. Mohanad El Ma'moun , MSC</p>
           </div>
         </div>
-        <div className="flex items-center gap-4 sm:gap-6 relative z-10">
-          <img src="/elite_logo.png" alt="Elite Hospital Emblem" className="w-10 h-10 object-contain hidden md:block drop-shadow-sm opacity-90" />
+        <div className="flex items-center gap-6 relative z-10">
           <div className="text-right hidden sm:block leading-none">
             <LiveClock />
           </div>

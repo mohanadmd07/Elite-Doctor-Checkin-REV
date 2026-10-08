@@ -2037,6 +2037,19 @@ function getEliteLogoBase64(): string {
   return "";
 }
 
+const ARABIC_TO_ENGLISH_WEEKDAYS: Record<string, string> = {
+  "السبت": "Saturday",
+  "الأحد": "Sunday",
+  "الاحد": "Sunday",
+  "الإثنين": "Monday",
+  "الاثنين": "Monday",
+  "الثلاثاء": "Tuesday",
+  "الأربعاء": "Wednesday",
+  "الاربعاء": "Wednesday",
+  "الخميس": "Thursday",
+  "الجمعة": "Friday"
+};
+
 // Helper to get localized Egypt (Africa/Cairo) weekday and formatted date
 function getEgyptDateInfo(dateInput?: string | Date) {
   let d: Date;
@@ -2047,7 +2060,16 @@ function getEgyptDateInfo(dateInput?: string | Date) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
       d = new Date(trimmed + "T12:00:00+02:00");
     } else {
-      d = new Date(trimmed);
+      // Support DD/MM/YYYY or DD-MM-YYYY (e.g. 08/10/2026) to prevent US MM/DD swap
+      const ddmmyyyy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (ddmmyyyy) {
+        const day = ddmmyyyy[1].padStart(2, "0");
+        const month = ddmmyyyy[2].padStart(2, "0");
+        const year = ddmmyyyy[3];
+        d = new Date(`${year}-${month}-${day}T12:00:00+02:00`);
+      } else {
+        d = new Date(trimmed);
+      }
     }
   } else {
     d = dateInput;
@@ -2096,7 +2118,18 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
   const dateInfo = getEgyptDateInfo(options.date);
   const arabicWeekday = options.day && options.day.trim() ? options.day.trim() : dateInfo.arabicWeekday;
   const formattedDate = options.date && options.date.trim() ? options.date.trim() : dateInfo.formattedDate;
-  const englishWeekday = options.englishWeekday || dateInfo.englishWeekday;
+
+  // Resolve englishWeekday with absolute accuracy: check explicit options, Arabic mapping, or dateInfo
+  let englishWeekday = options.englishWeekday && options.englishWeekday.trim() ? options.englishWeekday.trim() : "";
+  if (!englishWeekday && arabicWeekday) {
+    const cleanAr = arabicWeekday.replace(/^يوم\s+/, "").trim();
+    if (ARABIC_TO_ENGLISH_WEEKDAYS[cleanAr]) {
+      englishWeekday = ARABIC_TO_ENGLISH_WEEKDAYS[cleanAr];
+    }
+  }
+  if (!englishWeekday) {
+    englishWeekday = dateInfo.englishWeekday;
+  }
 
   const titlePrefix = options.title !== undefined ? options.title.trim() : "الأطباء المتواجدين عن يوم";
   const fullArabicTitle = `${titlePrefix} ${arabicWeekday} ${formattedDate}`.trim();
@@ -2170,6 +2203,9 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
   const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
   const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
   const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : (typeof req.query.weekday === "string" ? req.query.weekday.trim() : undefined);
+  const englishWeekdayParam = typeof req.query.englishWeekday === "string" 
+    ? req.query.englishWeekday.trim() 
+    : (typeof req.query.enDay === "string" ? req.query.enDay.trim() : (typeof req.query.enWeekday === "string" ? req.query.enWeekday.trim() : undefined));
   const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
   const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
   const formatParam = String(req.query.format || "").toLowerCase();
@@ -2178,6 +2214,7 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
     title: titleParam,
     day: dayParam,
     date: dateParam,
+    englishWeekday: englishWeekdayParam,
     subTitle: subTitleParam,
     width: widthParam,
     height: heightParam
@@ -2187,12 +2224,14 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
     const dateInfo = getEgyptDateInfo(dateParam);
     const day = dayParam || dateInfo.arabicWeekday;
     const date = dateParam || dateInfo.formattedDate;
+    const englishWeekday = englishWeekdayParam || ARABIC_TO_ENGLISH_WEEKDAYS[day.replace(/^يوم\s+/, "").trim()] || dateInfo.englishWeekday;
     const title = titleParam || "الأطباء المتواجدين عن يوم";
     res.json({
       svg,
       title,
       day,
       date,
+      englishWeekday,
       fullTitle: `${title} ${day} ${date}`
     });
     return;
@@ -2216,12 +2255,16 @@ app.get("/api/sheet-header", (req, res) => {
   const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
   const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
   const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : (typeof req.query.weekday === "string" ? req.query.weekday.trim() : undefined);
+  const englishWeekdayParam = typeof req.query.englishWeekday === "string" 
+    ? req.query.englishWeekday.trim() 
+    : (typeof req.query.enDay === "string" ? req.query.enDay.trim() : (typeof req.query.enWeekday === "string" ? req.query.enWeekday.trim() : undefined));
   const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
   const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
 
   const dateInfo = getEgyptDateInfo(dateParam);
   const arabicWeekday = dayParam || dateInfo.arabicWeekday;
   const formattedDate = dateParam || dateInfo.formattedDate;
+  const englishWeekday = englishWeekdayParam || ARABIC_TO_ENGLISH_WEEKDAYS[arabicWeekday.replace(/^يوم\s+/, "").trim()] || dateInfo.englishWeekday;
   const title = titleParam || "الأطباء المتواجدين عن يوم";
   const fullTitle = `${title} ${arabicWeekday} ${formattedDate}`;
 
@@ -2229,6 +2272,7 @@ app.get("/api/sheet-header", (req, res) => {
     title,
     day: arabicWeekday,
     date: formattedDate,
+    englishWeekday,
     subTitle: subTitleParam,
     width: widthParam,
     height: heightParam
