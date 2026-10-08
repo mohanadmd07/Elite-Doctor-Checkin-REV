@@ -1791,7 +1791,7 @@ export default function App() {
         const tabTitle = `الأطباء المتواجدين عن يوم ${tabArabicWeekday} ${tabFormattedDate}`;
 
         // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-        const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday, tabTitle, tabEnglishWeekday);
+        const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday, undefined, tabEnglishWeekday);
         applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, tabTitle);
 
         // Group check-ins under this day by department (Speciality)
@@ -1989,7 +1989,7 @@ export default function App() {
     const dailyTitle = `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`;
 
     // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, dailyTitle, englishWeekday);
+    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, englishWeekday);
     applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, dailyTitle);
 
     let currentRowNum = 8;

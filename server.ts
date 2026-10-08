@@ -2131,8 +2131,32 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
     englishWeekday = dateInfo.englishWeekday;
   }
 
-  const titlePrefix = options.title !== undefined ? options.title.trim() : "الأطباء المتواجدين عن يوم";
-  const fullArabicTitle = `${titlePrefix} ${arabicWeekday} ${formattedDate}`.trim();
+  // De-duplicate Arabic title: ensure "الأطباء المتواجدين عن يوم [اليوم] [التاريخ]" appears strictly once
+  let fullArabicTitle = "";
+  const basePrefix = "الأطباء المتواجدين عن يوم";
+  if (options.title && options.title.trim()) {
+    let t = options.title.trim();
+    if (t.includes(formattedDate) || t.includes(arabicWeekday)) {
+      fullArabicTitle = t;
+    } else {
+      fullArabicTitle = `${t} ${arabicWeekday} ${formattedDate}`;
+    }
+  } else {
+    fullArabicTitle = `${basePrefix} ${arabicWeekday} ${formattedDate}`;
+  }
+
+  // Scrub any duplicate weekday or date tokens
+  const token = `${arabicWeekday} ${formattedDate}`;
+  while (fullArabicTitle.includes(`${token} ${token}`)) {
+    fullArabicTitle = fullArabicTitle.replace(`${token} ${token}`, token);
+  }
+  while (fullArabicTitle.includes(`${arabicWeekday} ${arabicWeekday}`)) {
+    fullArabicTitle = fullArabicTitle.replace(`${arabicWeekday} ${arabicWeekday}`, arabicWeekday);
+  }
+  while (fullArabicTitle.includes(`${formattedDate} ${formattedDate}`)) {
+    fullArabicTitle = fullArabicTitle.replace(`${formattedDate} ${formattedDate}`, formattedDate);
+  }
+
   const subTitle = options.subTitle || `Attending Physicians • ${englishWeekday}, ${formattedDate}`;
 
   const width = Number(options.width) || 1200;
@@ -2142,6 +2166,11 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
   const imageElement = b64
     ? `<image href="data:image/png;base64,${b64}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="xMidYMid slice" />`
     : `<rect width="${width}" height="${height}" fill="#063b30" />`;
+
+  // Left badge: x=30, y=26, width=220, height=98, rx=10 (ends at x=250)
+  // Right badge: x=width-128=1072, y=26, width=98, height=98, rx=10 (ends at x=1170, 30px right margin)
+  // Center between badges: (250 + 1072) / 2 = 661
+  const centerX = Math.round((250 + (width - 128)) / 2);
 
   return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -2168,30 +2197,28 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
           fill="none" stroke="#34d399" stroke-width="1.5" opacity="0.35" />
 
     <!-- Left Brand Badge / Logo Pill -->
-    <g transform="translate(30, 25)">
-      <rect x="0" y="0" width="220" height="98" rx="8" fill="rgba(2, 28, 23, 0.75)" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" filter="url(#shadow)" />
+    <g transform="translate(30, 26)">
+      <rect x="0" y="0" width="220" height="98" rx="10" fill="rgba(2, 28, 23, 0.75)" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" filter="url(#shadow)" />
       <text x="110" y="38" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="20" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="3">ELITE</text>
       <text x="110" y="58" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#34d399" text-anchor="middle" letter-spacing="2">HOSPITAL SYSTEM</text>
       <line x1="30" y1="68" x2="190" y2="68" stroke="#10b981" stroke-width="0.8" opacity="0.4" />
       <text x="110" y="84" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#a7f3d0" text-anchor="middle">PHYSICIAN ROSTER</text>
     </g>
 
-    <!-- Center/Right Title Box (with words: الأطباء المتواجدين عن يوم and today's weekday and date) -->
-    <g transform="translate(${Math.round(width / 2 + 50)}, 42)">
-      <text x="0" y="24" font-family="'Cairo', 'Segoe UI', Tahoma, 'Traditional Arabic', Arial, sans-serif" font-size="28" font-weight="800" fill="#ffffff" text-anchor="middle" filter="url(#shadow)">
+    <!-- Center Title Area: Balanced & Symmetric with 180px+ clear margin on each side -->
+    <g transform="translate(${centerX}, 0)">
+      <text x="0" y="62" font-family="'Cairo', 'Segoe UI', Tahoma, 'Traditional Arabic', Arial, sans-serif" font-size="24" font-weight="800" fill="#ffffff" text-anchor="middle" filter="url(#shadow)">
         ${escapeXml(fullArabicTitle)}
       </text>
-      <g transform="translate(0, 48)">
-        <text x="0" y="16" font-family="'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif" font-size="15" font-weight="700" fill="#6ee7b7" text-anchor="middle">
-          ${escapeXml(subTitle)}
-        </text>
-      </g>
+      <text x="0" y="94" font-family="'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif" font-size="14" font-weight="700" fill="#6ee7b7" text-anchor="middle">
+        ${escapeXml(subTitle)}
+      </text>
     </g>
 
-    <!-- Right-aligned Elite Hospital Logo (elite_logo.png) -->
-    <g transform="translate(${width - 150}, 16)">
-      <rect x="0" y="0" width="118" height="118" rx="14" fill="rgba(2, 28, 23, 0.70)" stroke="#10b981" stroke-width="1.2" stroke-opacity="0.45" filter="url(#shadow)" />
-      ${getEliteLogoBase64() ? `<image href="data:image/png;base64,${getEliteLogoBase64()}" x="12" y="12" width="94" height="94" preserveAspectRatio="xMidYMid meet" />` : ''}
+    <!-- Right-aligned Elite Hospital Emblem Badge: Symmetrically aligned with left badge (y=26, height=98, rx=10) -->
+    <g transform="translate(${width - 128}, 26)">
+      <rect x="0" y="0" width="98" height="98" rx="10" fill="rgba(2, 28, 23, 0.75)" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" filter="url(#shadow)" />
+      ${getEliteLogoBase64() ? `<image href="data:image/png;base64,${getEliteLogoBase64()}" x="12" y="12" width="74" height="74" preserveAspectRatio="xMidYMid meet" />` : ''}
     </g>
   </g>
 </svg>`;
