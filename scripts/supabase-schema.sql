@@ -96,6 +96,17 @@ CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (depar
 -- Enforce canonical medical specialties on active records
 DO $$
 BEGIN
+  -- Pre-sanitization: Ensure no legacy rows violate the upcoming constraint
+  UPDATE public.doctors
+  SET is_active = false
+  WHERE is_active IS NULL 
+     OR (is_active = true AND department NOT IN (
+       'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
+       'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+       'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
+     ));
+
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_active_canonical_dept') THEN
     ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
     CHECK (
@@ -109,18 +120,42 @@ BEGIN
   END IF;
 END $$;
 
--- Daily checkins: unique index on doctor_id ensures 1 active check-in per physician and enables atomic upserts
+-- 1. Daily checkins: Deduplicate keeping newest record per doctor, then create unique index
+DELETE FROM public.checkins
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY doctor_id ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
+    ) AS rn FROM public.checkins
+  ) dupes WHERE dupes.rn > 1
+);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_doctor_id_unique ON public.checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_date ON public.checkins (checkin_date);
 CREATE INDEX IF NOT EXISTS idx_checkins_timestamp ON public.checkins (checkin_timestamp);
 
--- Monthly checkins: 30-day rolling window indexes
+-- 2. Monthly checkins: Deduplicate keeping newest record per (doctor_id, checkin_date), then create unique index
+DELETE FROM public.monthly_checkins
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY doctor_id, checkin_date ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
+    ) AS rn FROM public.monthly_checkins
+  ) dupes WHERE dupes.rn > 1
+);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_date ON public.monthly_checkins (doctor_id, checkin_date);
 CREATE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_id ON public.monthly_checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date ON public.monthly_checkins (checkin_date ASC);
 CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date_ts ON public.monthly_checkins (checkin_date, checkin_timestamp DESC);
 
--- Weekly checkins: backward-compatible indexes
+-- 3. Weekly checkins: Deduplicate keeping newest record per (doctor_id, checkin_date), then create unique index
+DELETE FROM public.weekly_checkins
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY doctor_id, checkin_date ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
+    ) AS rn FROM public.weekly_checkins
+  ) dupes WHERE dupes.rn > 1
+);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_date ON public.weekly_checkins (doctor_id, checkin_date);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_id ON public.weekly_checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_timestamp ON public.weekly_checkins (checkin_timestamp);
