@@ -582,6 +582,8 @@ export default function App() {
     isOpen: boolean;
     type: "single" | "batch";
     idToDelete?: string;
+    nameToDelete?: string;
+    doctorToDelete?: Doctor;
     errorMsg?: string;
   }>({ isOpen: false, type: "single" });
   const [isDeletingDoctor, setIsDeletingDoctor] = useState(false);
@@ -667,11 +669,14 @@ export default function App() {
     }
   };
 
-  const handleOpenSingleDeleteModal = (id: string) => {
+  const handleOpenSingleDeleteModal = (docOrId: Doctor | string) => {
+    const doc = typeof docOrId === "object" ? docOrId : fullDoctorList.find((d) => d.id === docOrId);
     setDeleteModalState({
       isOpen: true,
       type: "single",
-      idToDelete: id,
+      idToDelete: doc ? doc.id : String(docOrId),
+      nameToDelete: doc ? doc.name : undefined,
+      doctorToDelete: doc,
       errorMsg: ""
     });
   };
@@ -691,14 +696,20 @@ export default function App() {
     try {
       if (deleteModalState.type === "single" && deleteModalState.idToDelete) {
         const id = deleteModalState.idToDelete;
-        const targetDoc = fullDoctorList.find((d) => d.id === id);
-        const nameParam = targetDoc?.name ? `?name=${encodeURIComponent(targetDoc.name)}` : "";
+        const targetDoc = deleteModalState.doctorToDelete || fullDoctorList.find((d) => d.id === id);
+        const targetName = targetDoc?.name || deleteModalState.nameToDelete;
+        const nameParam = targetName ? `?name=${encodeURIComponent(targetName)}` : "";
         const res = await fetch(`/api/doctors/delete/${encodeURIComponent(id)}${nameParam}`, {
           method: "DELETE"
         });
         if (res.ok) {
-          // Immediately remove from UI with zero fallback delay
-          setFullDoctorList((prev) => prev.filter((item) => item.id !== id));
+          // Immediately remove ONLY this chosen doctor entry from UI
+          setFullDoctorList((prev) => prev.filter((item) => {
+            if (targetName) {
+              return !(item.id === id && item.name === targetName);
+            }
+            return item.id !== id;
+          }));
           setSelectedDbDoctorIds((prev) => prev.filter((item) => item !== id));
           await fetchFullDoctorsDatabase(true);
           setDeleteModalState({ isOpen: false, type: "single" });
@@ -2747,7 +2758,7 @@ export default function App() {
                                         <span>Edit</span>
                                       </button>
                                       <button
-                                        onClick={() => handleOpenSingleDeleteModal(doc.id)}
+                                        onClick={() => handleOpenSingleDeleteModal(doc)}
                                         className="p-2 min-w-[32px] min-h-[32px] flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded transition-colors cursor-pointer"
                                         title="Delete physician from database"
                                         aria-label={`Delete physician Dr. ${doc.name} from database`}
@@ -4386,11 +4397,17 @@ export default function App() {
                 <div className="text-slate-700 text-sm leading-relaxed">
                   {deleteModalState.type === "single" ? (
                     <p>
-                      Are you sure you want to permanently remove physician ID{" "}
+                      Are you sure you want to permanently remove physician{" "}
+                      {deleteModalState.nameToDelete && (
+                        <strong className="text-slate-900 font-bold">
+                          "{deleteModalState.nameToDelete}"{" "}
+                        </strong>
+                      )}
+                      (ID:{" "}
                       <strong className="font-mono text-rose-700 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
                         "{deleteModalState.idToDelete}"
-                      </strong>{" "}
-                      from the persistent database?
+                      </strong>
+                      ) from the persistent database?
                     </p>
                   ) : (
                     <p>

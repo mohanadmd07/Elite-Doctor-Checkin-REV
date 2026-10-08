@@ -56,6 +56,29 @@ function normalizeArabic(text: string): string {
     .replace(/\s+/g, " ");
 }
 
+function getNameTokens(name: string): string[] {
+  return (name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06FF\s]/g, " ")
+    .split(/\s+/)
+    .filter(t => t.length > 1);
+}
+
+function areDoctorNamesSimilar(name1: string, name2: string): boolean {
+  if (!name1 || !name2) return false;
+  const n1 = normalizeName(name1);
+  const n2 = normalizeName(name2);
+  if (n1 === n2 || n1.includes(n2) || n2.includes(n1)) return true;
+
+  const t1 = new Set(getNameTokens(name1));
+  const t2 = new Set(getNameTokens(name2));
+  let common = 0;
+  for (const t of t1) {
+    if (t2.has(t)) common++;
+  }
+  return common >= 2;
+}
+
 function searchDoctors(query: string, maxResults = 20): any[] {
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
@@ -230,19 +253,40 @@ function indexDoctorsList(doctors: any[]) {
   }
 }
 
+const COLLATERAL_CONFLICT_BARE_IDS = new Set([
+  "238", "258", "272", "274", "277", "295", "3113", "347", "366", "404", "407", "410", "608", "616", "625"
+]);
+
 function sanitizeLingeringDeletedDoctors() {
   try {
-    const deletedList = readDeletedDoctorsLocal();
-    const deletedKeys = new Set(deletedList.map(k => normalizeId(k) || k));
+    const rawDeletedList = readDeletedDoctorsLocal();
+    // 1. Purge known collateral duplicate bare IDs that belong to active doctors
+    const cleanedDeletedList = rawDeletedList.filter(k => !COLLATERAL_CONFLICT_BARE_IDS.has(k));
+    if (cleanedDeletedList.length !== rawDeletedList.length) {
+      console.log(`[Elite Server] Purged ${rawDeletedList.length - cleanedDeletedList.length} collateral bare ID tombstones.`);
+      writeDeletedDoctorsLocal(cleanedDeletedList);
+    }
+
+    const deletedKeys = new Set(cleanedDeletedList.map(k => normalizeId(k) || k));
     const localCustom = readCustomDoctorsLocal();
     const cleanedCustom = localCustom.filter(d => {
       const idKey = normalizeId(d.id);
       const origKey = normalizeId(d.originalId || "");
       const nameKey = normalizeName(d.name);
-      if (deletedKeys.has(idKey) || deletedKeys.has(d.id.trim())) return false;
-      if (origKey && deletedKeys.has(origKey)) return false;
       if (idKey && nameKey && deletedKeys.has(`${idKey}_${nameKey}`)) return false;
       if (nameKey && deletedKeys.has(nameKey)) return false;
+      if (deletedKeys.has(idKey) || deletedKeys.has(d.id.trim())) {
+        const compTombstones = cleanedDeletedList.filter(k => k.startsWith(`${idKey}_`));
+        if (compTombstones.length > 0) {
+          const isDocTombstoned = compTombstones.some(ck => {
+            const compName = ck.slice(idKey.length + 1);
+            return compName === nameKey || areDoctorNamesSimilar(d.name, compName);
+          });
+          if (!isDocTombstoned) return true; // keep
+        }
+        return false;
+      }
+      if (origKey && deletedKeys.has(origKey)) return false;
       return true;
     });
     if (cleanedCustom.length !== localCustom.length) {
@@ -282,23 +326,47 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
       ]);
       const customDocs = await loadCustomDoctors(deletedKeys);
 
+      const compositeTombstonesById = new Map<string, Set<string>>();
+      for (const key of deletedKeys) {
+        if (key.includes("_")) {
+          const [kId, ...rest] = key.split("_");
+          const kName = rest.join("_");
+          if (!compositeTombstonesById.has(kId)) compositeTombstonesById.set(kId, new Set());
+          compositeTombstonesById.get(kId)!.add(kName);
+        }
+      }
+
       const isDeleted = (cleanId: string, name: string, araName?: string) => {
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(name);
         const araKey = araName ? normalizeArabic(araName) : "";
 
-        // 1. Direct ID deletion tombstone (ID is in deleted keys)
-        if (idKey && deletedKeys.has(idKey)) return true;
-        if (cleanId && deletedKeys.has(cleanId)) return true;
-
-        // 2. Specific composite match (ID + Name)
+        // 1. Direct composite match (ID + Name)
         if (idKey && nameKey && deletedKeys.has(`${idKey}_${nameKey}`)) return true;
-        if (idKey && araKey && deletedKeys.has(`${idKey}_${araKey}`)) return true;
         if (cleanId && nameKey && deletedKeys.has(`${cleanId}_${nameKey}`)) return true;
+        if (idKey && araKey && deletedKeys.has(`${idKey}_${araKey}`)) return true;
 
-        // 3. Name match
+        // 2. Direct full name match
         if (nameKey && deletedKeys.has(nameKey)) return true;
         if (araKey && deletedKeys.has(araKey)) return true;
+
+        // 3. ID match with collateral conflict protection
+        if ((idKey && deletedKeys.has(idKey)) || (cleanId && deletedKeys.has(cleanId))) {
+          const compNames = compositeTombstonesById.get(idKey) || compositeTombstonesById.get(cleanId);
+          if (compNames && compNames.size > 0) {
+            let matchesTombstone = false;
+            for (const compName of compNames) {
+              if (compName === nameKey || (araKey && compName === araKey) || areDoctorNamesSimilar(name, compName)) {
+                matchesTombstone = true;
+                break;
+              }
+            }
+            if (!matchesTombstone) {
+              return false; // Protect active physician from collateral duplicate tombstone!
+            }
+          }
+          return true;
+        }
 
         return false;
       };
@@ -312,7 +380,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(doc.name);
         const mob = customPhones[idKey] || doc.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
-        doctorMap.set(idKey || nameKey, {
+        const mapKey = `${idKey}___${nameKey}`;
+        doctorMap.set(mapKey, {
           ...doc,
           id: cleanId,
           mobileNumber: mob,
@@ -326,7 +395,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(cDoc.name);
         const mob = cDoc.mobileNumber || customPhones[idKey] || mobileNumbersByCodeMap.get(idKey) || "";
-        doctorMap.set(idKey || nameKey, {
+        const mapKey = `${idKey}___${nameKey}`;
+        doctorMap.set(mapKey, {
           id: cleanId,
           name: cDoc.name,
           arabicName: cDoc.arabicName || cDoc.name,
@@ -819,16 +889,30 @@ function writeDeletedDoctorsLocal(list: string[]) {
 async function loadDeletedDoctorsKeys(): Promise<Set<string>> {
   const keysSet = new Set<string>();
   const localList = readDeletedDoctorsLocal();
-  localList.forEach((k) => keysSet.add(k));
+  localList.forEach((k) => {
+    if (!COLLATERAL_CONFLICT_BARE_IDS.has(k)) keysSet.add(k);
+  });
 
   const supabase = getSupabase();
   if (supabase) {
     try {
       const data = await fetchAllRowsFromSupabase("deleted_doctors");
       if (data && data.length > 0) {
+        const collateralToPurge: string[] = [];
         data.forEach((row: any) => {
-          if (row.id) keysSet.add(row.id);
+          if (row.id) {
+            if (COLLATERAL_CONFLICT_BARE_IDS.has(row.id)) {
+              collateralToPurge.push(row.id);
+            } else {
+              keysSet.add(row.id);
+            }
+          }
         });
+        if (collateralToPurge.length > 0) {
+          console.log(`[Supabase] Purging ${collateralToPurge.length} collateral bare ID tombstones from deleted_doctors.`);
+          await supabase.from("deleted_doctors").delete().in("id", collateralToPurge);
+          await supabase.from("doctors").update({ is_active: true, updated_at: new Date().toISOString() }).in("id", collateralToPurge);
+        }
         writeDeletedDoctorsLocal(Array.from(keysSet));
       }
     } catch (err: any) {
@@ -844,11 +928,21 @@ async function markDoctorAsDeleted(id: string, name?: string) {
   const nameKey = name ? normalizeName(name) : "";
 
   const keysToAdd = new Set<string>();
-  if (cleanId) keysToAdd.add(cleanId);
-  if (idKey) keysToAdd.add(idKey);
   if (nameKey) keysToAdd.add(nameKey);
   if (idKey && nameKey) keysToAdd.add(`${idKey}_${nameKey}`);
   if (cleanId && nameKey) keysToAdd.add(`${cleanId}_${nameKey}`);
+
+  // Only add bare ID tombstone if NO OTHER active doctor in the system has a different name
+  const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    return (dIdKey === idKey || d.id === cleanId) && nameKey && dNameKey !== nameKey;
+  });
+
+  if (!otherDoctorsShareId) {
+    if (cleanId) keysToAdd.add(cleanId);
+    if (idKey) keysToAdd.add(idKey);
+  }
 
   const localList = readDeletedDoctorsLocal();
   const updatedSet = new Set([...localList, ...Array.from(keysToAdd)]);
@@ -861,7 +955,7 @@ async function markDoctorAsDeleted(id: string, name?: string) {
       const { error: delErr } = await supabase.from("deleted_doctors").upsert(payload, { onConflict: "id" });
       if (delErr) console.error("[Supabase] deleted_doctors upsert error:", delErr.message);
 
-      if (cleanId) {
+      if (cleanId && !otherDoctorsShareId) {
         const { error: docErr } = await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId);
         if (docErr) console.error("[Supabase] doctors deactivation error:", docErr.message);
       }
@@ -1128,16 +1222,23 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
 
   const nameKey = targetName ? normalizeName(targetName) : "";
 
+  // Check if other active doctors share this ID (duplicate conflict case)
+  const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    return (dIdKey === idKey || d.id === cleanId) && nameKey && dNameKey !== nameKey;
+  });
+
   // 1. Mark as deleted in tombstones (both locally and Supabase)
   await markDoctorAsDeleted(cleanId, targetName);
 
-  // 2. Remove from in-memory NORMALIZED_DOCTORS_DATABASE
+  // 2. Remove from in-memory NORMALIZED_DOCTORS_DATABASE targeting this specific doctor
   NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dNameKey = normalizeName(d.name);
-    // If name is provided and other doctors share this ID (duplicate case)
-    if (nameKey && NORMALIZED_DOCTORS_DATABASE.some(other => normalizeId(other.id) === dIdKey && normalizeName(other.name) !== nameKey)) {
-      return !(dIdKey === idKey && dNameKey === nameKey);
+    if (nameKey) {
+      if ((dIdKey === idKey || d.id === cleanId) && dNameKey === nameKey) return false;
+      return true;
     }
     return dIdKey !== idKey && d.id !== cleanId;
   });
@@ -1148,14 +1249,17 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
     const dIdKey = normalizeId(d.id);
     const dOrigKey = normalizeId(d.originalId || "");
     const dNameKey = normalizeName(d.name);
+    if (nameKey) {
+      if ((dIdKey === idKey || dOrigKey === idKey || d.id === cleanId) && dNameKey === nameKey) return false;
+      return true;
+    }
     if (dIdKey === idKey || dOrigKey === idKey || d.id === cleanId) return false;
-    if (nameKey && dNameKey === nameKey) return false;
     return true;
   });
   writeCustomDoctorsLocal(updatedList);
 
-  // 4. Clean up custom_doctors_phones.json and phone maps
-  if (idKey) {
+  // 4. Clean up custom_doctors_phones.json and phone maps only if no other doctor shares this ID
+  if (idKey && !otherDoctorsShareId) {
     mobileNumbersByCodeMap.delete(idKey);
     const localPhones = readCustomPhonesLocal();
     if (localPhones[idKey] || localPhones[cleanId]) {
@@ -1169,16 +1273,32 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
   const supabase = getSupabase();
   if (supabase) {
     try {
-      const tombstones = [{ id: cleanId, deleted_at: new Date().toISOString() }];
-      if (idKey && idKey !== cleanId) tombstones.push({ id: idKey, deleted_at: new Date().toISOString() });
+      const tombstones: { id: string; deleted_at: string }[] = [];
+      if (!otherDoctorsShareId) {
+        tombstones.push({ id: cleanId, deleted_at: new Date().toISOString() });
+        if (idKey && idKey !== cleanId) tombstones.push({ id: idKey, deleted_at: new Date().toISOString() });
+      }
       if (idKey && nameKey) tombstones.push({ id: `${idKey}_${nameKey}`, deleted_at: new Date().toISOString() });
+      if (cleanId && nameKey && `${cleanId}_${nameKey}` !== `${idKey}_${nameKey}`) {
+        tombstones.push({ id: `${cleanId}_${nameKey}`, deleted_at: new Date().toISOString() });
+      }
 
       const results = await Promise.all([
-        supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId),
-        supabase.from("deleted_doctors").upsert(tombstones, { onConflict: "id" }),
-        supabase.from("custom_doctors").delete().or(`id.eq.${cleanId},original_id.eq.${cleanId}`),
-        supabase.from("custom_doctor_phones").delete().eq("id", cleanId),
-        supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
+        !otherDoctorsShareId
+          ? supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId)
+          : Promise.resolve({ error: null }),
+        tombstones.length > 0
+          ? supabase.from("deleted_doctors").upsert(tombstones, { onConflict: "id" })
+          : Promise.resolve({ error: null }),
+        nameKey && targetName
+          ? supabase.from("custom_doctors").delete().match({ id: cleanId, name: targetName })
+          : supabase.from("custom_doctors").delete().or(`id.eq.${cleanId},original_id.eq.${cleanId}`),
+        !otherDoctorsShareId
+          ? supabase.from("custom_doctor_phones").delete().eq("id", cleanId)
+          : Promise.resolve({ error: null }),
+        nameKey && targetName
+          ? supabase.from("checkins").delete().match({ doctor_id: cleanId, doctor_name: targetName })
+          : supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
       ]);
       for (const res of results) {
         if (res?.error) {
@@ -1190,9 +1310,16 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
     }
   }
 
-  // 6. Remove from daily check-ins
+  // 6. Remove from daily check-ins targeting this specific doctor
   const dailyCheckins = readCheckInsLocal();
-  const filteredDaily = dailyCheckins.filter(c => normalizeId(c.id) !== idKey && c.id !== cleanId);
+  const filteredDaily = dailyCheckins.filter(c => {
+    const cIdKey = normalizeId(c.id);
+    const cNameKey = normalizeName(c.doctorName);
+    if (nameKey) {
+      return !((cIdKey === idKey || c.id === cleanId) && cNameKey === nameKey);
+    }
+    return cIdKey !== idKey && c.id !== cleanId;
+  });
   if (filteredDaily.length !== dailyCheckins.length) {
     writeCheckInsLocal(filteredDaily);
   }
@@ -1209,7 +1336,7 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
 
   const parsedItems: { cleanId: string; idKey: string; nameKey: string; name?: string }[] = [];
   const keysToAdd: string[] = [];
-  const cleanIds: string[] = [];
+  const cleanIdsToDeactivate: string[] = [];
 
   for (const item of items) {
     const rawId = typeof item === "object" && item !== null ? item.id : String(item);
@@ -1224,12 +1351,22 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
 
     const nameKey = rawName ? normalizeName(rawName) : "";
 
-    if (cleanId) cleanIds.push(cleanId);
-    if (idKey) {
-      keysToAdd.push(idKey);
-      if (cleanId !== idKey) keysToAdd.push(cleanId);
+    const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
+      const dIdKey = normalizeId(d.id);
+      const dNameKey = normalizeName(d.name);
+      return (dIdKey === idKey || d.id === cleanId) && nameKey && dNameKey !== nameKey;
+    });
+
+    if (!otherDoctorsShareId) {
+      if (cleanId) {
+        keysToAdd.push(cleanId);
+        cleanIdsToDeactivate.push(cleanId);
+      }
+      if (idKey && idKey !== cleanId) keysToAdd.push(idKey);
     }
+
     if (idKey && nameKey) keysToAdd.push(`${idKey}_${nameKey}`);
+    if (cleanId && nameKey && `${cleanId}_${nameKey}` !== `${idKey}_${nameKey}`) keysToAdd.push(`${cleanId}_${nameKey}`);
     if (nameKey) keysToAdd.push(nameKey);
 
     parsedItems.push({ cleanId, idKey, nameKey, name: rawName });
@@ -1240,40 +1377,52 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   const updatedDeletedSet = new Set([...localDeleted, ...keysToAdd]);
   writeDeletedDoctorsLocal(Array.from(updatedDeletedSet));
 
-  // 2. Filter local custom doctors
-  const deletedIdKeys = new Set(parsedItems.map(p => p.idKey));
-  const deletedCleanIds = new Set(cleanIds);
+  // 2. Filter local custom doctors targeting specific records
   const localCustom = readCustomDoctorsLocal();
   const updatedCustom = localCustom.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dOrigKey = normalizeId(d.originalId || "");
-    if (deletedIdKeys.has(dIdKey) || deletedIdKeys.has(dOrigKey) || deletedCleanIds.has(d.id)) return false;
+    const dNameKey = normalizeName(d.name);
+    for (const p of parsedItems) {
+      if (p.nameKey) {
+        if ((dIdKey === p.idKey || dOrigKey === p.idKey || d.id === p.cleanId) && dNameKey === p.nameKey) return false;
+      } else {
+        if (dIdKey === p.idKey || dOrigKey === p.idKey || d.id === p.cleanId) return false;
+      }
+    }
     return true;
   });
   writeCustomDoctorsLocal(updatedCustom);
 
-  // 3. Filter phones & phone maps
+  // 3. Filter phones for non-shared IDs
   const localPhones = readCustomPhonesLocal();
   let phonesChanged = false;
-  for (const idKey of deletedIdKeys) {
-    mobileNumbersByCodeMap.delete(idKey);
-    if (localPhones[idKey]) {
-      delete localPhones[idKey];
-      phonesChanged = true;
-    }
-  }
-  for (const cleanId of deletedCleanIds) {
-    if (localPhones[cleanId]) {
-      delete localPhones[cleanId];
-      phonesChanged = true;
+  for (const p of parsedItems) {
+    const isShared = NORMALIZED_DOCTORS_DATABASE.some(d => {
+      const dIdKey = normalizeId(d.id);
+      const dNameKey = normalizeName(d.name);
+      return (dIdKey === p.idKey || d.id === p.cleanId) && p.nameKey && dNameKey !== p.nameKey;
+    });
+    if (!isShared) {
+      mobileNumbersByCodeMap.delete(p.idKey);
+      if (localPhones[p.idKey]) { delete localPhones[p.idKey]; phonesChanged = true; }
+      if (localPhones[p.cleanId]) { delete localPhones[p.cleanId]; phonesChanged = true; }
     }
   }
   if (phonesChanged) writeCustomPhonesLocal(localPhones);
 
-  // 4. Filter in-memory database
+  // 4. Filter in-memory database targeting specific records
   NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
     const dIdKey = normalizeId(d.id);
-    return !deletedIdKeys.has(dIdKey) && !deletedCleanIds.has(d.id);
+    const dNameKey = normalizeName(d.name);
+    for (const p of parsedItems) {
+      if (p.nameKey) {
+        if ((dIdKey === p.idKey || d.id === p.cleanId) && dNameKey === p.nameKey) return false;
+      } else {
+        if (dIdKey === p.idKey || d.id === p.cleanId) return false;
+      }
+    }
+    return true;
   });
 
   // 5. Batch update Supabase
@@ -1281,28 +1430,22 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   if (supabase) {
     try {
       const deletedEntries = keysToAdd.map(k => ({ id: k, deleted_at: new Date().toISOString() }));
-      const results = await Promise.all([
-        deletedEntries.length > 0
-          ? supabase.from("deleted_doctors").upsert(deletedEntries, { onConflict: "id" })
-          : Promise.resolve({ error: null }),
-        cleanIds.length > 0
-          ? supabase.from("custom_doctors").delete().in("id", cleanIds)
-          : Promise.resolve({ error: null }),
-        cleanIds.length > 0
-          ? supabase.from("custom_doctor_phones").delete().in("id", cleanIds)
-          : Promise.resolve({ error: null }),
-        cleanIds.length > 0
-          ? supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).in("id", cleanIds)
-          : Promise.resolve({ error: null }),
-        cleanIds.length > 0
-          ? supabase.from("checkins").delete().in("doctor_id", cleanIds)
-          : Promise.resolve({ error: null })
-      ]);
-      for (const res of results) {
-        if ((res as any)?.error) {
-          console.error("[Supabase batch delete error]:", (res as any).error.message);
+      const promises: any[] = [];
+      if (deletedEntries.length > 0) {
+        promises.push(supabase.from("deleted_doctors").upsert(deletedEntries, { onConflict: "id" }));
+      }
+      if (cleanIdsToDeactivate.length > 0) {
+        promises.push(supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).in("id", cleanIdsToDeactivate));
+        promises.push(supabase.from("custom_doctor_phones").delete().in("id", cleanIdsToDeactivate));
+      }
+      for (const p of parsedItems) {
+        if (p.name) {
+          promises.push(supabase.from("custom_doctors").delete().match({ id: p.cleanId, name: p.name }));
+        } else {
+          promises.push(supabase.from("custom_doctors").delete().eq("id", p.cleanId));
         }
       }
+      await Promise.all(promises);
     } catch (err) {
       console.error("[Supabase] deleteCustomDoctorsBatch failed:", err);
     }
@@ -1310,7 +1453,18 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
 
   // 6. Filter daily checkins
   const dailyCheckins = readCheckInsLocal();
-  const filteredDaily = dailyCheckins.filter(c => !deletedIdKeys.has(normalizeId(c.id)) && !deletedCleanIds.has(c.id));
+  const filteredDaily = dailyCheckins.filter(c => {
+    const cIdKey = normalizeId(c.id);
+    const cNameKey = normalizeName(c.doctorName);
+    for (const p of parsedItems) {
+      if (p.nameKey) {
+        if ((cIdKey === p.idKey || c.id === p.cleanId) && cNameKey === p.nameKey) return false;
+      } else {
+        if (cIdKey === p.idKey || c.id === p.cleanId) return false;
+      }
+    }
+    return true;
+  });
   if (filteredDaily.length !== dailyCheckins.length) {
     writeCheckInsLocal(filteredDaily);
   }
