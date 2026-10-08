@@ -486,6 +486,13 @@ export default function App() {
     error?: string;
   } | null>(null);
   const [copiedSqlSchema, setCopiedSqlSchema] = useState(false);
+  const [supabaseConfigForm, setSupabaseConfigForm] = useState({
+    url: "",
+    key: "",
+    serviceRoleKey: ""
+  });
+  const [isSavingSupabaseConfig, setIsSavingSupabaseConfig] = useState(false);
+  const [supabaseConfigMsg, setSupabaseConfigMsg] = useState("");
 
   const fetchSupabaseStatus = async () => {
     setIsCheckingSupabase(true);
@@ -493,11 +500,43 @@ export default function App() {
       const res = await fetch("/api/supabase/status");
       const data = await res.json();
       setSupabaseStatus(data);
+      if (data.url && !supabaseConfigForm.url) {
+        setSupabaseConfigForm(prev => ({ ...prev, url: data.url }));
+      }
     } catch (err) {
       console.error("Error checking Supabase status:", err);
       setSupabaseStatus({ configured: false, connected: false, message: "Network error connecting to API" });
     } finally {
       setIsCheckingSupabase(false);
+    }
+  };
+
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabaseConfigForm.url.trim() || !supabaseConfigForm.key.trim()) {
+      setSupabaseConfigMsg("Supabase URL and Key are required.");
+      return;
+    }
+    setIsSavingSupabaseConfig(true);
+    setSupabaseConfigMsg("");
+    try {
+      const res = await fetch("/api/supabase/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(supabaseConfigForm)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSupabaseConfigMsg(data.warning || "Supabase credentials saved and verified successfully!");
+        await fetchSupabaseStatus();
+        await fetchFullDoctorsDatabase(true);
+      } else {
+        setSupabaseConfigMsg(data.error || "Failed to save Supabase config.");
+      }
+    } catch (err: any) {
+      setSupabaseConfigMsg("Network error saving Supabase config.");
+    } finally {
+      setIsSavingSupabaseConfig(false);
     }
   };
 
@@ -652,12 +691,16 @@ export default function App() {
     try {
       if (deleteModalState.type === "single" && deleteModalState.idToDelete) {
         const id = deleteModalState.idToDelete;
-        const res = await fetch(`/api/doctors/delete/${encodeURIComponent(id)}`, {
+        const targetDoc = fullDoctorList.find((d) => d.id === id);
+        const nameParam = targetDoc?.name ? `?name=${encodeURIComponent(targetDoc.name)}` : "";
+        const res = await fetch(`/api/doctors/delete/${encodeURIComponent(id)}${nameParam}`, {
           method: "DELETE"
         });
         if (res.ok) {
+          // Immediately remove from UI with zero fallback delay
+          setFullDoctorList((prev) => prev.filter((item) => item.id !== id));
           setSelectedDbDoctorIds((prev) => prev.filter((item) => item !== id));
-          await fetchFullDoctorsDatabase();
+          await fetchFullDoctorsDatabase(true);
           setDeleteModalState({ isOpen: false, type: "single" });
         } else {
           const data = await res.json().catch(() => ({}));
@@ -667,14 +710,20 @@ export default function App() {
           }));
         }
       } else if (deleteModalState.type === "batch") {
+        const items = selectedDbDoctorIds.map((id) => {
+          const doc = fullDoctorList.find((d) => d.id === id);
+          return { id, name: doc?.name };
+        });
         const res = await fetch("/api/doctors/delete-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: selectedDbDoctorIds })
+          body: JSON.stringify({ ids: selectedDbDoctorIds, items })
         });
         if (res.ok) {
+          const idSet = new Set(selectedDbDoctorIds);
+          setFullDoctorList((prev) => prev.filter((item) => !idSet.has(item.id)));
           setSelectedDbDoctorIds([]);
-          await fetchFullDoctorsDatabase();
+          await fetchFullDoctorsDatabase(true);
           setDeleteModalState({ isOpen: false, type: "batch" });
         } else {
           const data = await res.json().catch(() => ({}));
@@ -697,8 +746,10 @@ export default function App() {
 
   const fetchFullDoctorsDatabase = async (forceRefresh = false) => {
     try {
-      const url = forceRefresh ? "/api/doctors?refresh=true" : "/api/doctors";
-      const res = await fetch(url);
+      const url = `/api/doctors?_t=${Date.now()}${forceRefresh ? "&refresh=true" : ""}`;
+      const res = await fetch(url, {
+        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" }
+      });
       if (res.ok) {
         const data = await res.json();
         const sorted = data.sort((a: Doctor, b: Doctor) => compareDoctorIds(a.id, b.id));
@@ -754,7 +805,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok && data.success) {
         setDoctorSaveMsg("Physician saved successfully!");
-        await fetchFullDoctorsDatabase();
+        await fetchFullDoctorsDatabase(true);
         setTimeout(() => {
           setIsDoctorModalOpen(false);
           setDoctorSaveMsg("");
@@ -970,7 +1021,7 @@ export default function App() {
             body: JSON.stringify({ items: docsToDelete.map((d) => ({ id: d.id, name: d.name })) })
           });
           if (res.ok) {
-            await fetchFullDoctorsDatabase();
+            await fetchFullDoctorsDatabase(true);
           } else {
             const data = await res.json().catch(() => ({}));
             alert(data.error || "Failed to delete duplicate records.");
@@ -997,7 +1048,8 @@ export default function App() {
             method: "DELETE"
           });
           if (res.ok) {
-            await fetchFullDoctorsDatabase();
+            setFullDoctorList((prev) => prev.filter((item) => !(item.id === doc.id && item.name === doc.name)));
+            await fetchFullDoctorsDatabase(true);
           } else {
             const data = await res.json().catch(() => ({}));
             alert(data.error || "Failed to delete doctor.");
@@ -1033,7 +1085,7 @@ export default function App() {
           });
           if (res.ok) {
             setSelectedDupItemKeys([]);
-            await fetchFullDoctorsDatabase();
+            await fetchFullDoctorsDatabase(true);
           } else {
             const data = await res.json().catch(() => ({}));
             alert(data.error || "Failed to delete selected duplicate records.");
@@ -3108,6 +3160,84 @@ export default function App() {
                         <span className="text-[9px] text-slate-400">Blacklisted</span>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Supabase Connection Configuration Box */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
+                    <div className="border-b border-slate-100 pb-3">
+                      <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                        <Database className="w-4 h-4 text-emerald-700" />
+                        <span>Supabase Credentials & Live Connection</span>
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Configure or update your Supabase project URL and API keys. Any doctor addition, edit, or deletion will immediately synchronize with Supabase with zero fallback to previous state.
+                      </p>
+                    </div>
+
+                    <form onSubmit={handleSaveSupabaseConfig} className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block">
+                            Supabase URL *
+                          </label>
+                          <input
+                            type="url"
+                            required
+                            placeholder="https://your-project.supabase.co"
+                            value={supabaseConfigForm.url}
+                            onChange={(e) => setSupabaseConfigForm({ ...supabaseConfigForm, url: e.target.value })}
+                            className="w-full px-3 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-xs font-mono focus:bg-white focus:border-[#063b30] outline-none"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block">
+                            Anon Key / Service Role Key *
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                            value={supabaseConfigForm.key}
+                            onChange={(e) => setSupabaseConfigForm({ ...supabaseConfigForm, key: e.target.value })}
+                            className="w-full px-3 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-xs font-mono focus:bg-white focus:border-[#063b30] outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {supabaseConfigMsg && (
+                        <p className={`text-xs font-bold p-2.5 rounded border ${
+                          supabaseConfigMsg.includes("successfully") || supabaseConfigMsg.includes("verified")
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                            : "bg-rose-50 text-rose-800 border-rose-200"
+                        }`}>
+                          {supabaseConfigMsg}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-[11px] text-slate-500">
+                          Credentials are saved securely to your server environment for permanent synchronization.
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={isSavingSupabaseConfig}
+                          className="px-5 py-2.5 bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs uppercase tracking-wider rounded-lg shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {isSavingSupabaseConfig ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Testing & Connecting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Save & Connect to Supabase</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
                   </div>
 
                   {/* Migration Trigger Card */}

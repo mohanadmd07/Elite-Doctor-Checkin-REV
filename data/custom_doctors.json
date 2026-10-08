@@ -81,15 +81,6 @@
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
   },
   {
-    "id": "2497",
-    "name": "Mohamed Saied Ahmed Mahmoud Zaghlol",
-    "arabicName": "محمد سعيد احمد محمود زغلول",
-    "department": "Orthopedic Surgery",
-    "mobileNumber": "01026022928",
-    "originalId": "1234",
-    "updatedAt": "2026-09-12T12:23:44.721218+00:00"
-  },
-  {
     "id": "2514",
     "name": "Hebatullah Osama",
     "arabicName": "هبة الله اسامة",
@@ -114,15 +105,6 @@
     "department": "Radiology",
     "mobileNumber": "",
     "originalId": "3800",
-    "updatedAt": "2026-09-12T12:29:36.633944+00:00"
-  },
-  {
-    "id": "277",
-    "name": "Mai Ahmed Mohamed El Sayed Mohamed",
-    "arabicName": "مي أحمد محمد السيد محمد",
-    "department": "Anesthesiology & Pain Therapy",
-    "mobileNumber": "",
-    "originalId": "",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
   },
   {
