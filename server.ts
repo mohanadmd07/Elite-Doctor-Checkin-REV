@@ -1874,10 +1874,34 @@ const clearWeeklyCheckIns = clearMonthlyCheckIns;
 
 // API Endpoints
 app.get("/header_bg.png", (req, res) => {
-  const localPath = path.join(process.cwd(), "header_bg.png");
-  if (fs.existsSync(localPath)) {
-    res.sendFile(localPath);
-    return;
+  // Support Node.js backend parameters: query parameters for responsive sizing (?w=600 or ?size=compact)
+  const widthParam = parseInt(String(req.query.w || req.query.width || ""), 10);
+  const sizeParam = String(req.query.size || "").toLowerCase();
+  const wantsCompact = (widthParam > 0 && widthParam <= 600) || sizeParam === "compact" || sizeParam === "mobile";
+
+  // Set high-performance HTTP cache headers to prevent bandwidth waste
+  res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+  res.setHeader("Content-Type", "image/png");
+
+  // Candidate paths in prioritized resolution order
+  const candidatePaths = wantsCompact
+    ? [
+        path.join(process.cwd(), "public", "header_bg_compact.png"),
+        path.join(process.cwd(), "public", "header_bg.png"),
+        path.join(process.cwd(), "header_bg.png"),
+        path.join(process.cwd(), "dist", "header_bg.png")
+      ]
+    : [
+        path.join(process.cwd(), "public", "header_bg.png"),
+        path.join(process.cwd(), "header_bg.png"),
+        path.join(process.cwd(), "dist", "header_bg.png")
+      ];
+
+  for (const filePath of candidatePaths) {
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath, { maxAge: "7d", etag: true, lastModified: true });
+      return;
+    }
   }
   
   // If no physical file, serve a beautiful, modern high-fidelity dark-emerald hospital OS theme banner as SVG
@@ -1939,6 +1963,604 @@ app.get("/header_bg.png", (req, res) => {
 
   res.setHeader("Content-Type", "image/svg+xml");
   res.send(svg);
+});
+
+// Endpoint serving the official Elite logo PNG with caching headers
+app.get("/elite_logo.png", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+  res.setHeader("Content-Type", "image/png");
+  const candidatePaths = [
+    path.join(process.cwd(), "public", "elite_logo.png"),
+    path.join(process.cwd(), "elite_logo.png"),
+    path.join(process.cwd(), "dist", "elite_logo.png")
+  ];
+  for (const filePath of candidatePaths) {
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath, { maxAge: "7d", etag: true, lastModified: true });
+      return;
+    }
+  }
+  res.status(404).send("Logo not found");
+});
+
+// Helper to escape XML characters for safe SVG text embedding
+function escapeXml(unsafe: string): string {
+  return String(unsafe || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// Memory cache for user-included header image to eliminate repeated disk I/O
+let cachedHeaderBgBase64: string | null = null;
+function getHeaderBgBase64(): string {
+  if (cachedHeaderBgBase64) return cachedHeaderBgBase64;
+  const candidatePaths = [
+    path.join(process.cwd(), "public", "header_bg.png"),
+    path.join(process.cwd(), "header_bg.png"),
+    path.join(process.cwd(), "dist", "header_bg.png")
+  ];
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      try {
+        cachedHeaderBgBase64 = fs.readFileSync(p).toString("base64");
+        return cachedHeaderBgBase64;
+      } catch (err) {
+        console.error("Error reading header_bg.png:", err);
+      }
+    }
+  }
+  return "";
+}
+
+// Memory cache for elite_logo.png transparent emblem
+let cachedEliteLogoBase64: string | null = null;
+function getEliteLogoBase64(): string {
+  if (cachedEliteLogoBase64) return cachedEliteLogoBase64;
+  const candidatePaths = [
+    path.join(process.cwd(), "public", "elite_logo.png"),
+    path.join(process.cwd(), "elite_logo.png"),
+    path.join(process.cwd(), "dist", "elite_logo.png")
+  ];
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      try {
+        cachedEliteLogoBase64 = fs.readFileSync(p).toString("base64");
+        return cachedEliteLogoBase64;
+      } catch (err) {
+        console.error("Error reading elite_logo.png:", err);
+      }
+    }
+  }
+  return "";
+}
+
+// Helper to get localized Egypt (Africa/Cairo) weekday and formatted date
+function getEgyptDateInfo(dateInput?: string | Date) {
+  let d: Date;
+  if (!dateInput) {
+    d = new Date();
+  } else if (typeof dateInput === "string") {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      d = new Date(trimmed + "T12:00:00+02:00");
+    } else {
+      d = new Date(trimmed);
+    }
+  } else {
+    d = dateInput;
+  }
+  if (isNaN(d.getTime())) d = new Date();
+
+  const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
+    weekday: "long",
+    timeZone: "Africa/Cairo"
+  }).format(d);
+
+  const englishWeekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "Africa/Cairo"
+  }).format(d);
+
+  const formattedDate = new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Africa/Cairo"
+  }).format(d);
+
+  const isoDate = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Africa/Cairo"
+  }).format(d);
+
+  return { arabicWeekday, englishWeekday, formattedDate, isoDate };
+}
+
+interface SheetHeaderOptions {
+  title?: string;
+  day?: string;
+  date?: string;
+  englishWeekday?: string;
+  subTitle?: string;
+  width?: number;
+  height?: number;
+}
+
+// Build header SVG integrating user-provided picture with words: "الأطباء المتواجدين عن يوم [اليوم] [التاريخ]"
+function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
+  const dateInfo = getEgyptDateInfo(options.date);
+  const arabicWeekday = options.day && options.day.trim() ? options.day.trim() : dateInfo.arabicWeekday;
+  const formattedDate = options.date && options.date.trim() ? options.date.trim() : dateInfo.formattedDate;
+  const englishWeekday = options.englishWeekday || dateInfo.englishWeekday;
+
+  const titlePrefix = options.title !== undefined ? options.title.trim() : "الأطباء المتواجدين عن يوم";
+  const fullArabicTitle = `${titlePrefix} ${arabicWeekday} ${formattedDate}`.trim();
+  const subTitle = options.subTitle || `Attending Physicians • ${englishWeekday}, ${formattedDate}`;
+
+  const width = Number(options.width) || 1200;
+  const height = Number(options.height) || 150;
+  const b64 = getHeaderBgBase64();
+
+  const imageElement = b64
+    ? `<image href="data:image/png;base64,${b64}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="xMidYMid slice" />`
+    : `<rect width="${width}" height="${height}" fill="#063b30" />`;
+
+  return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#021c17" stop-opacity="0.95" />
+      <stop offset="25%" stop-color="#063b30" stop-opacity="0.82" />
+      <stop offset="65%" stop-color="#0a4d3f" stop-opacity="0.75" />
+      <stop offset="100%" stop-color="#063b30" stop-opacity="0.92" />
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.5"/>
+    </filter>
+    <clipPath id="roundedClip">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="8" ry="8" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#roundedClip)">
+    ${imageElement}
+    <rect x="0" y="0" width="${width}" height="${height}" fill="url(#headerGrad)" opacity="0.82" />
+    <rect x="0" y="0" width="${width}" height="3" fill="#10b981" />
+    <rect x="0" y="${height - 2}" width="${width}" height="2" fill="#0f766e" />
+    <path d="M 0 ${height - 25} L 150 ${height - 25} L 165 ${height - 40} L 175 ${height - 10} L 185 ${height - 45} L 195 ${height - 20} L 205 ${height - 25} L ${width - 250} ${height - 25} L ${width - 235} ${height - 45} L ${width - 225} ${height - 15} L ${width - 215} ${height - 35} L ${width - 205} ${height - 25} L ${width} ${height - 25}" 
+          fill="none" stroke="#34d399" stroke-width="1.5" opacity="0.35" />
+
+    <!-- Left Brand Badge / Logo Pill -->
+    <g transform="translate(30, 25)">
+      <rect x="0" y="0" width="220" height="98" rx="8" fill="rgba(2, 28, 23, 0.75)" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" filter="url(#shadow)" />
+      <text x="110" y="38" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="20" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="3">ELITE</text>
+      <text x="110" y="58" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#34d399" text-anchor="middle" letter-spacing="2">HOSPITAL SYSTEM</text>
+      <line x1="30" y1="68" x2="190" y2="68" stroke="#10b981" stroke-width="0.8" opacity="0.4" />
+      <text x="110" y="84" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#a7f3d0" text-anchor="middle">PHYSICIAN ROSTER</text>
+    </g>
+
+    <!-- Center/Right Title Box (with words: الأطباء المتواجدين عن يوم and today's weekday and date) -->
+    <g transform="translate(${Math.round(width / 2 + 50)}, 42)">
+      <text x="0" y="24" font-family="'Cairo', 'Segoe UI', Tahoma, 'Traditional Arabic', Arial, sans-serif" font-size="28" font-weight="800" fill="#ffffff" text-anchor="middle" filter="url(#shadow)">
+        ${escapeXml(fullArabicTitle)}
+      </text>
+      <g transform="translate(0, 48)">
+        <text x="0" y="16" font-family="'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif" font-size="15" font-weight="700" fill="#6ee7b7" text-anchor="middle">
+          ${escapeXml(subTitle)}
+        </text>
+      </g>
+    </g>
+
+    <!-- Right-aligned Elite Hospital Logo (elite_logo.png) -->
+    <g transform="translate(${width - 150}, 16)">
+      <rect x="0" y="0" width="118" height="118" rx="14" fill="rgba(2, 28, 23, 0.70)" stroke="#10b981" stroke-width="1.2" stroke-opacity="0.45" filter="url(#shadow)" />
+      ${getEliteLogoBase64() ? `<image href="data:image/png;base64,${getEliteLogoBase64()}" x="12" y="12" width="94" height="94" preserveAspectRatio="xMidYMid meet" />` : ''}
+    </g>
+  </g>
+</svg>`;
+}
+
+// Endpoint supporting Node.js backend parameters (?date=..., ?day=..., ?title=..., ?w=..., ?h=..., ?format=...)
+app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req, res) => {
+  const widthParam = parseInt(String(req.query.w || req.query.width || "1200"), 10) || 1200;
+  const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
+  const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
+  const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : (typeof req.query.weekday === "string" ? req.query.weekday.trim() : undefined);
+  const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
+  const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
+  const formatParam = String(req.query.format || "").toLowerCase();
+
+  const svg = buildSheetHeaderSvg({
+    title: titleParam,
+    day: dayParam,
+    date: dateParam,
+    subTitle: subTitleParam,
+    width: widthParam,
+    height: heightParam
+  });
+
+  if (formatParam === "json") {
+    const dateInfo = getEgyptDateInfo(dateParam);
+    const day = dayParam || dateInfo.arabicWeekday;
+    const date = dateParam || dateInfo.formattedDate;
+    const title = titleParam || "الأطباء المتواجدين عن يوم";
+    res.json({
+      svg,
+      title,
+      day,
+      date,
+      fullTitle: `${title} ${day} ${date}`
+    });
+    return;
+  }
+
+  res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=43200");
+  res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+  res.send(svg);
+});
+
+// JSON / Metadata endpoint for sheet header parameters
+app.get("/api/sheet-header", (req, res) => {
+  const format = String(req.query.format || "").toLowerCase();
+  if (format === "svg") {
+    const queryStr = new URLSearchParams(req.query as any).toString();
+    res.redirect(`/api/sheet-header.svg?${queryStr}`);
+    return;
+  }
+
+  const widthParam = parseInt(String(req.query.w || req.query.width || "1200"), 10) || 1200;
+  const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
+  const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
+  const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : (typeof req.query.weekday === "string" ? req.query.weekday.trim() : undefined);
+  const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
+  const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
+
+  const dateInfo = getEgyptDateInfo(dateParam);
+  const arabicWeekday = dayParam || dateInfo.arabicWeekday;
+  const formattedDate = dateParam || dateInfo.formattedDate;
+  const title = titleParam || "الأطباء المتواجدين عن يوم";
+  const fullTitle = `${title} ${arabicWeekday} ${formattedDate}`;
+
+  const svg = buildSheetHeaderSvg({
+    title,
+    day: arabicWeekday,
+    date: formattedDate,
+    subTitle: subTitleParam,
+    width: widthParam,
+    height: heightParam
+  });
+
+  res.json({
+    svg,
+    title,
+    day: arabicWeekday,
+    date: formattedDate,
+    fullTitle
+  });
+});
+
+// Server-side daily sheet downloadable endpoint with Node.js backend parameters
+app.get(["/api/download/daily-sheet", "/download/daily-sheet"], async (req, res) => {
+  try {
+    const checkins = await readCheckIns();
+    const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
+    const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : undefined;
+    const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
+    
+    const dateInfo = getEgyptDateInfo(dateParam);
+    const arabicWeekday = dayParam || dateInfo.arabicWeekday;
+    const formattedDate = dateParam || dateInfo.formattedDate;
+    const fullTitle = `${titleParam} ${arabicWeekday} ${formattedDate}`;
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Roster Report", {
+      views: [{ showGridLines: true }]
+    });
+
+    worksheet.columns = [
+      { key: "id", width: 18 },
+      { key: "timestamp", width: 22 },
+      { key: "arabicName", width: 35 },
+      { key: "speciality", width: 25 },
+      { key: "shift", width: 22 },
+      { key: "mobileNumber", width: 22 }
+    ];
+
+    for (let r = 1; r <= 5; r++) {
+      worksheet.getRow(r).height = 25;
+    }
+
+    worksheet.mergeCells(2, 1, 4, 6);
+    const titleCell = worksheet.getCell("A2");
+    titleCell.value = fullTitle;
+    titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+
+    const headerImgB64 = getHeaderBgBase64();
+    if (headerImgB64) {
+      const imgId = workbook.addImage({
+        base64: headerImgB64,
+        extension: "png"
+      });
+      worksheet.addImage(imgId, "A1:F5");
+    }
+
+    worksheet.getRow(6).height = 10;
+
+    const headerRow = worksheet.getRow(7);
+    headerRow.height = 32;
+    headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
+    headerRow.eachCell((cell) => {
+      cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF34D399" } },
+        left: { style: "thin", color: { argb: "FF34D399" } },
+        bottom: { style: "thin", color: { argb: "FF34D399" } },
+        right: { style: "thin", color: { argb: "FF34D399" } }
+      };
+    });
+
+    // Group by specialty
+    const grouped: { [key: string]: CheckIn[] } = {};
+    checkins.forEach((c) => {
+      if (!grouped[c.department]) grouped[c.department] = [];
+      grouped[c.department].push(c);
+    });
+
+    let currentRowNum = 8;
+    Object.keys(grouped).forEach((dept) => {
+      const sepRow = worksheet.getRow(currentRowNum);
+      sepRow.height = 26;
+      worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
+      sepRow.getCell(1).value = `■ ${dept} ■`;
+      sepRow.eachCell((cell) => {
+        cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFA7F3D0" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF6EE7B7" } },
+          left: { style: "thin", color: { argb: "FF6EE7B7" } },
+          bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
+          right: { style: "thin", color: { argb: "FF6EE7B7" } }
+        };
+      });
+      currentRowNum++;
+
+      grouped[dept].forEach((c, idx) => {
+        const row = worksheet.getRow(currentRowNum);
+        row.height = 22;
+        row.values = [
+          c.id,
+          formatTimestampForDisplay(c.timestamp),
+          c.doctorArabicName,
+          c.department,
+          Array.isArray(c.shifts) ? c.shifts.join(" + ") : (c.shifts || ""),
+          c.mobileNumber || "N/A"
+        ];
+        const isEven = idx % 2 === 0;
+        const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
+        row.eachCell((cell, colNumber) => {
+          cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: colNumber !== 2, size: 10 };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowBgColor } };
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFCBDAD5" } },
+            left: { style: "thin", color: { argb: "FFCBDAD5" } },
+            bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
+            right: { style: "thin", color: { argb: "FFCBDAD5" } }
+          };
+        });
+        currentRowNum++;
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="Physician_Checkins_${dateInfo.isoDate}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (err: any) {
+    console.error("Error generating server daily sheet:", err);
+    res.status(500).json({ error: "Failed to generate daily sheet", message: err?.message });
+  }
+});
+
+// Helper for formatting timestamp in server
+function formatTimestampForDisplay(timestampStr: string): string {
+  try {
+    const d = new Date(timestampStr);
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const year = String(d.getFullYear()).slice(-2);
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    return `${month}/${day}/${year} ${hours}:${minutes}`;
+  } catch {
+    return timestampStr;
+  }
+}
+
+// Server-side monthly sheet downloadable endpoint with Node.js backend parameters
+app.get(["/api/download/monthly-sheet", "/download/monthly-sheet"], async (req, res) => {
+  try {
+    const monthlyData = await readMonthlyCheckIns();
+    const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
+    const workbook = new ExcelJS.Workbook();
+    const headerImgB64 = getHeaderBgBase64();
+
+    if (monthlyData.length === 0) {
+      const d = new Date();
+      const dateInfo = getEgyptDateInfo(d);
+      const sheetName = `${dateInfo.englishWeekday} ${dateInfo.isoDate}`;
+      const worksheet = workbook.addWorksheet(sheetName, { views: [{ showGridLines: true }] });
+      worksheet.columns = [
+        { key: "id", width: 18 },
+        { key: "timestamp", width: 22 },
+        { key: "arabicName", width: 35 },
+        { key: "speciality", width: 25 },
+        { key: "shift", width: 22 },
+        { key: "mobileNumber", width: 22 }
+      ];
+      for (let r = 1; r <= 5; r++) worksheet.getRow(r).height = 25;
+      worksheet.mergeCells(2, 1, 4, 6);
+      const titleCell = worksheet.getCell("A2");
+      titleCell.value = `${titleParam} ${dateInfo.arabicWeekday} ${dateInfo.formattedDate}`;
+      titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
+      titleCell.alignment = { horizontal: "center", vertical: "middle" };
+      if (headerImgB64) {
+        const imgId = workbook.addImage({ base64: headerImgB64, extension: "png" });
+        worksheet.addImage(imgId, "A1:F5");
+      }
+      worksheet.getRow(6).height = 10;
+      const headerRow = worksheet.getRow(7);
+      headerRow.height = 32;
+      headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
+      headerRow.eachCell((cell) => {
+        cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF34D399" } },
+          left: { style: "thin", color: { argb: "FF34D399" } },
+          bottom: { style: "thin", color: { argb: "FF34D399" } },
+          right: { style: "thin", color: { argb: "FF34D399" } }
+        };
+      });
+    } else {
+      // Group by date with 7 PM transition rule
+      const groupedByDate: { [key: string]: CheckIn[] } = {};
+      const dateMetaMap: { [key: string]: { date: Date; sheetName: string } } = {};
+      monthlyData.forEach((c) => {
+        const d = new Date(c.timestamp);
+        const hourStr = d.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+        const hour = parseInt(hourStr, 10) || 0;
+        const targetDate = new Date(d);
+        if (hour >= 19) targetDate.setDate(targetDate.getDate() + 1);
+        const meta = getEgyptDateInfo(targetDate);
+        const sheetName = `${meta.englishWeekday} ${meta.isoDate}`;
+        if (!groupedByDate[sheetName]) {
+          groupedByDate[sheetName] = [];
+          dateMetaMap[sheetName] = { date: targetDate, sheetName };
+        }
+        groupedByDate[sheetName].push(c);
+      });
+
+      const sortedSheetNames = Object.keys(groupedByDate).sort((a, b) => {
+        return (dateMetaMap[a]?.date.getTime() || 0) - (dateMetaMap[b]?.date.getTime() || 0);
+      });
+
+      sortedSheetNames.forEach((sheetName) => {
+        const dayCheckins = groupedByDate[sheetName];
+        const tabDateMeta = dateMetaMap[sheetName] ? getEgyptDateInfo(dateMetaMap[sheetName].date) : getEgyptDateInfo();
+        const tabTitle = `${titleParam} ${tabDateMeta.arabicWeekday} ${tabDateMeta.formattedDate}`;
+
+        const worksheet = workbook.addWorksheet(sheetName, { views: [{ showGridLines: true }] });
+        worksheet.columns = [
+          { key: "id", width: 18 },
+          { key: "timestamp", width: 22 },
+          { key: "arabicName", width: 35 },
+          { key: "speciality", width: 25 },
+          { key: "shift", width: 22 },
+          { key: "mobileNumber", width: 22 }
+        ];
+
+        for (let r = 1; r <= 5; r++) worksheet.getRow(r).height = 25;
+        worksheet.mergeCells(2, 1, 4, 6);
+        const titleCell = worksheet.getCell("A2");
+        titleCell.value = tabTitle;
+        titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
+        titleCell.alignment = { horizontal: "center", vertical: "middle" };
+
+        if (headerImgB64) {
+          const imgId = workbook.addImage({ base64: headerImgB64, extension: "png" });
+          worksheet.addImage(imgId, "A1:F5");
+        }
+
+        worksheet.getRow(6).height = 10;
+        const headerRow = worksheet.getRow(7);
+        headerRow.height = 32;
+        headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
+        headerRow.eachCell((cell) => {
+          cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FF34D399" } },
+            left: { style: "thin", color: { argb: "FF34D399" } },
+            bottom: { style: "thin", color: { argb: "FF34D399" } },
+            right: { style: "thin", color: { argb: "FF34D399" } }
+          };
+        });
+
+        const grouped: { [key: string]: CheckIn[] } = {};
+        dayCheckins.forEach((c) => {
+          if (!grouped[c.department]) grouped[c.department] = [];
+          grouped[c.department].push(c);
+        });
+
+        let currentRowNum = 8;
+        Object.keys(grouped).forEach((dept) => {
+          const sepRow = worksheet.getRow(currentRowNum);
+          sepRow.height = 26;
+          worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
+          sepRow.getCell(1).value = `■ ${dept} ■`;
+          sepRow.eachCell((cell) => {
+            cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFA7F3D0" } };
+            cell.alignment = { horizontal: "center", vertical: "middle" };
+            cell.border = {
+              top: { style: "thin", color: { argb: "FF6EE7B7" } },
+              left: { style: "thin", color: { argb: "FF6EE7B7" } },
+              bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
+              right: { style: "thin", color: { argb: "FF6EE7B7" } }
+            };
+          });
+          currentRowNum++;
+
+          grouped[dept].forEach((c, idx) => {
+            const row = worksheet.getRow(currentRowNum);
+            row.height = 22;
+            row.values = [
+              c.id,
+              formatTimestampForDisplay(c.timestamp),
+              c.doctorArabicName,
+              c.department,
+              Array.isArray(c.shifts) ? c.shifts.join(" + ") : (c.shifts || ""),
+              c.mobileNumber || "N/A"
+            ];
+            const isEven = idx % 2 === 0;
+            const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
+            row.eachCell((cell, colNumber) => {
+              cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: colNumber !== 2, size: 10 };
+              cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowBgColor } };
+              cell.alignment = { horizontal: "center", vertical: "middle" };
+              cell.border = {
+                top: { style: "thin", color: { argb: "FFCBDAD5" } },
+                left: { style: "thin", color: { argb: "FFCBDAD5" } },
+                bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
+                right: { style: "thin", color: { argb: "FFCBDAD5" } }
+              };
+            });
+            currentRowNum++;
+          });
+        });
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const todayInfo = getEgyptDateInfo();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="Monthly_Cumulative_Roster_${todayInfo.isoDate}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (err: any) {
+    console.error("Error generating server monthly sheet:", err);
+    res.status(500).json({ error: "Failed to generate monthly sheet", message: err?.message });
+  }
 });
 
 app.get(["/api/doctors", "/doctors"], async (req, res) => {

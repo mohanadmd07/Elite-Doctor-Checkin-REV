@@ -1526,6 +1526,129 @@ export default function App() {
   };
   const confirmClearWeeklyCheckins = confirmClearMonthlyCheckins;
 
+  // Helper to fetch SVG from Node.js backend using backend parameters and rasterize to PNG base64 for Excel embedding
+  const fetchHeaderImageBase64 = async (
+    dateStr?: string,
+    weekdayStr?: string,
+    titleStr?: string
+  ): Promise<string> => {
+    try {
+      const params = new URLSearchParams();
+      if (dateStr) params.set("date", dateStr);
+      if (weekdayStr) params.set("day", weekdayStr);
+      if (titleStr) params.set("title", titleStr);
+      params.set("w", "1200");
+      params.set("h", "150");
+
+      const endpoint = `/api/sheet-header.svg?${params.toString()}`;
+      const res = await fetch(endpoint);
+      if (!res.ok) throw new Error("Failed to fetch header SVG");
+      const svgText = await res.text();
+
+      return await new Promise<string>((resolve) => {
+        try {
+          const img = new Image();
+          const svgBlob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+          const url = URL.createObjectURL(svgBlob);
+          const timer = setTimeout(() => {
+            URL.revokeObjectURL(url);
+            resolve("");
+          }, 3500);
+
+          img.onload = () => {
+            clearTimeout(timer);
+            try {
+              const canvas = document.createElement("canvas");
+              // 2x scale for sharp retina render in Excel
+              canvas.width = 2400;
+              canvas.height = 300;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) {
+                URL.revokeObjectURL(url);
+                resolve("");
+                return;
+              }
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              URL.revokeObjectURL(url);
+              const dataUrl = canvas.toDataURL("image/png");
+              resolve(dataUrl.replace(/^data:image\/png;base64,/, ""));
+            } catch {
+              URL.revokeObjectURL(url);
+              resolve("");
+            }
+          };
+          img.onerror = () => {
+            clearTimeout(timer);
+            URL.revokeObjectURL(url);
+            resolve("");
+          };
+          img.src = url;
+        } catch {
+          resolve("");
+        }
+      });
+    } catch (err) {
+      console.warn("Could not generate header image from backend SVG:", err);
+      return "";
+    }
+  };
+
+  // Helper to apply header banner image, merged title, and table headers to any Excel worksheet
+  const applySheetHeaderToWorksheet = (
+    worksheet: any,
+    workbook: any,
+    headerBase64: string,
+    titleText: string
+  ) => {
+    worksheet.columns = [
+      { key: "id", width: 18 },
+      { key: "timestamp", width: 22 },
+      { key: "arabicName", width: 35 },
+      { key: "speciality", width: 25 },
+      { key: "shift", width: 22 },
+      { key: "mobileNumber", width: 22 }
+    ];
+
+    for (let r = 1; r <= 5; r++) {
+      worksheet.getRow(r).height = 25;
+    }
+
+    worksheet.mergeCells(2, 1, 4, 6);
+    const titleCell = worksheet.getCell("A2");
+    titleCell.value = titleText;
+    titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+
+    if (headerBase64) {
+      try {
+        const imgId = workbook.addImage({
+          base64: headerBase64,
+          extension: "png"
+        });
+        worksheet.addImage(imgId, "A1:F5");
+      } catch (err) {
+        console.warn("Error embedding header image into sheet:", err);
+      }
+    }
+
+    worksheet.getRow(6).height = 10;
+
+    const headerRow = worksheet.getRow(7);
+    headerRow.height = 32;
+    headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
+    headerRow.eachCell((cell: any) => {
+      cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF34D399" } },
+        left: { style: "thin", color: { argb: "FF34D399" } },
+        bottom: { style: "thin", color: { argb: "FF34D399" } },
+        right: { style: "thin", color: { argb: "FF34D399" } }
+      };
+    });
+  };
+
   // Download Cumulative Monthly Excel Sheet (30-day rolling attendance roster with sub-sheets per weekday date)
   const downloadMonthlyCSVReport = async () => {
     setIsDownloadingMonthly(true);
@@ -1542,31 +1665,15 @@ export default function App() {
         const d = new Date();
         const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
         const dateStr = d.toISOString().split("T")[0];
+        const arabicWeekday = new Intl.DateTimeFormat("ar-EG", { timeZone: "Africa/Cairo", weekday: "long" }).format(d);
+        const formattedDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
         const sheetName = `${weekday} ${dateStr}`;
         const worksheet = workbook.addWorksheet(sheetName, {
           views: [{ showGridLines: true }]
         });
-        worksheet.columns = [
-          { header: "ID", key: "id", width: 18 },
-          { header: "Timestamp", key: "timestamp", width: 22 },
-          { header: "Arabic name", key: "arabicName", width: 35 },
-          { header: "Speciality", key: "speciality", width: 25 },
-          { header: "shift", key: "shift", width: 22 },
-          { header: "Phone Number", key: "mobileNumber", width: 22 }
-        ];
-        const headerRow = worksheet.getRow(1);
-        headerRow.height = 32;
-        headerRow.eachCell((cell) => {
-          cell.font = { name: "Segoe UI", color: { argb: "FFFFFFFF" }, bold: true, size: 11 };
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF244053" } };
-          cell.alignment = { horizontal: "center", vertical: "middle" };
-          cell.border = {
-            top: { style: "thin", color: { argb: "FF1E2F3B" } },
-            left: { style: "thin", color: { argb: "FF1E2F3B" } },
-            bottom: { style: "thin", color: { argb: "FF1E2F3B" } },
-            right: { style: "thin", color: { argb: "FF1E2F3B" } }
-          };
-        });
+        const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday);
+        applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`);
+
         const buffer = await workbook.xlsx.writeBuffer();
         const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
         const url = URL.createObjectURL(blob);
@@ -1659,49 +1766,30 @@ export default function App() {
       const workbook = await createExcelWorkbook();
 
       // For every sheet/weekday date, construct following the day sheet template
-      sortedSheetNames.forEach((sheetName) => {
+      for (const sheetName of sortedSheetNames) {
         const dayCheckins = groupedByDate[sheetName];
 
         const worksheet = workbook.addWorksheet(sheetName, {
           views: [{ showGridLines: true }]
         });
 
-        // Column structures matching day sheet template (with Phone Number header)
-        worksheet.columns = [
-          { header: "ID", key: "id", width: 18 },
-          { header: "Timestamp", key: "timestamp", width: 22 },
-          { header: "Arabic name", key: "arabicName", width: 35 },
-          { header: "Speciality", key: "speciality", width: 25 },
-          { header: "shift", key: "shift", width: 22 },
-          { header: "Phone Number", key: "mobileNumber", width: 22 }
-        ];
+        // Determine specific Egypt date and weekday for this sub-sheet with 7 PM transition rule
+        const sampleTimestamp = dayCheckins[0]?.timestamp || "";
+        let tabTargetDate = new Date();
+        if (sampleTimestamp) {
+          const parsedD = new Date(sampleTimestamp);
+          const hourStr = parsedD.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+          const hour = parseInt(hourStr, 10) || 0;
+          tabTargetDate = new Date(parsedD);
+          if (hour >= 19) tabTargetDate.setDate(tabTargetDate.getDate() + 1);
+        }
+        const tabArabicWeekday = new Intl.DateTimeFormat("ar-EG", { timeZone: "Africa/Cairo", weekday: "long" }).format(tabTargetDate);
+        const tabFormattedDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(tabTargetDate);
+        const tabTitle = `الأطباء المتواجدين عن يوم ${tabArabicWeekday} ${tabFormattedDate}`;
 
-        // Style the header row (Row 1)
-        const headerRow = worksheet.getRow(1);
-        headerRow.height = 32;
-        headerRow.eachCell((cell) => {
-          cell.font = {
-            name: "Segoe UI",
-            color: { argb: "FFFFFFFF" },
-            bold: true,
-            size: 11
-          };
-          cell.fill = {
-            type: "pattern",
-            pattern: "solid",
-            fgColor: { argb: "FF244053" } // Deep Slate/Teal header background matching the daily template
-          };
-          cell.alignment = {
-            horizontal: "center",
-            vertical: "middle"
-          };
-          cell.border = {
-            top: { style: "thin", color: { argb: "FF1E2F3B" } },
-            left: { style: "thin", color: { argb: "FF1E2F3B" } },
-            bottom: { style: "thin", color: { argb: "FF1E2F3B" } },
-            right: { style: "thin", color: { argb: "FF1E2F3B" } }
-          };
-        });
+        // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
+        const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday);
+        applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, tabTitle);
 
         // Group check-ins under this day by department (Speciality)
         const groupedByDept: { [key: string]: CheckIn[] } = {};
@@ -1712,7 +1800,7 @@ export default function App() {
           groupedByDept[c.department].push(c);
         });
 
-        let currentRowNum = 2;
+        let currentRowNum = 8;
 
         Object.keys(groupedByDept).forEach((dept) => {
           // Add Specialty separator row
@@ -1725,13 +1813,13 @@ export default function App() {
           const firstCell = separatorRow.getCell(1);
           firstCell.value = `■ ${dept} ■`;
           
-          // Soft Teal/Blue separator background (#307C9A) to match the template's ICU separator
-          const separatorColor = "FF307C9A"; 
+          // Soft mint separator background (#A7F3D0) from the SVG header palette
+          const separatorColor = "FFA7F3D0"; 
           
           separatorRow.eachCell((cell) => {
             cell.font = {
               name: "Segoe UI",
-              color: { argb: "FFFFFFFF" },
+              color: { argb: "FF063B30" },
               bold: true,
               size: 11
             };
@@ -1745,10 +1833,10 @@ export default function App() {
               vertical: "middle"
             };
             cell.border = {
-              top: { style: "thin", color: { argb: "FFCBD5E1" } },
-              left: { style: "thin", color: { argb: "FFCBD5E1" } },
-              bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
-              right: { style: "thin", color: { argb: "FFCBD5E1" } }
+              top: { style: "thin", color: { argb: "FF6EE7B7" } },
+              left: { style: "thin", color: { argb: "FF6EE7B7" } },
+              bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
+              right: { style: "thin", color: { argb: "FF6EE7B7" } }
             };
           });
 
@@ -1771,15 +1859,15 @@ export default function App() {
               c.mobileNumber || "N/A"
             ];
 
-            // Zebra striping - alternating white and soft light-blue tint #F4F8FA matching the template
+            // Zebra striping - alternating white and soft light-mint tint #F0FDF9 from the SVG header
             const isEven = idx % 2 === 0;
-            const rowBgColor = isEven ? "FFFFFFFF" : "FFF4F8FA";
+            const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
 
             row.eachCell((cell, colNumber) => {
               cell.font = {
                 name: "Segoe UI",
-                color: { argb: "FF333333" },
-                bold: colNumber === 3, // Bold the Arabic name column (col 3)
+                color: { argb: "FF063B30" },
+                bold: colNumber !== 2, // All text bolded except dates (col 2 Timestamp)
                 size: 10
               };
               cell.fill = {
@@ -1792,17 +1880,17 @@ export default function App() {
                 vertical: "middle"
               };
               cell.border = {
-                top: { style: "thin", color: { argb: "FFCBD5E1" } },
-                left: { style: "thin", color: { argb: "FFCBD5E1" } },
-                bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
-                right: { style: "thin", color: { argb: "FFCBD5E1" } }
+                top: { style: "thin", color: { argb: "FFCBDAD5" } },
+                left: { style: "thin", color: { argb: "FFCBDAD5" } },
+                bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
+                right: { style: "thin", color: { argb: "FFCBDAD5" } }
               };
             });
 
             currentRowNum++;
           });
         });
-      });
+      }
 
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -1880,44 +1968,24 @@ export default function App() {
       views: [{ showGridLines: true }]
     });
 
-    // Define column structures (6 columns: ID, Timestamp, Arabic name, Speciality, shift, Phone Number)
-    worksheet.columns = [
-      { header: "ID", key: "id", width: 18 },
-      { header: "Timestamp", key: "timestamp", width: 22 },
-      { header: "Arabic name", key: "arabicName", width: 35 },
-      { header: "Speciality", key: "speciality", width: 25 },
-      { header: "shift", key: "shift", width: 22 },
-      { header: "Phone Number", key: "mobileNumber", width: 22 }
-    ];
+    const d = new Date();
+    const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
+      timeZone: "Africa/Cairo",
+      weekday: "long"
+    }).format(d);
+    const formattedDate = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
+    const dailyTitle = `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`;
 
-    // Style the header row (Row 1)
-    const headerRow = worksheet.getRow(1);
-    headerRow.height = 32;
-    headerRow.eachCell((cell) => {
-      cell.font = {
-        name: "Segoe UI",
-        color: { argb: "FFFFFFFF" },
-        bold: true,
-        size: 11
-      };
-      cell.fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FF244053" } // Deep Slate/Teal header background matching the template
-      };
-      cell.alignment = {
-        horizontal: "center",
-        vertical: "middle"
-      };
-      cell.border = {
-        top: { style: "thin", color: { argb: "FF1E2F3B" } },
-        left: { style: "thin", color: { argb: "FF1E2F3B" } },
-        bottom: { style: "thin", color: { argb: "FF1E2F3B" } },
-        right: { style: "thin", color: { argb: "FF1E2F3B" } }
-      };
-    });
+    // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
+    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday);
+    applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, dailyTitle);
 
-    let currentRowNum = 2;
+    let currentRowNum = 8;
 
     // Process each department
     Object.keys(grouped).forEach((dept) => {
@@ -1931,13 +1999,13 @@ export default function App() {
       const firstCell = separatorRow.getCell(1);
       firstCell.value = `■ ${dept} ■`;
       
-      // Soft Teal/Blue separator background (#307C9A) to match the template's ICU separator
-      const separatorColor = "FF307C9A"; 
+      // Soft mint separator background (#A7F3D0) from the SVG header palette
+      const separatorColor = "FFA7F3D0"; 
       
       separatorRow.eachCell((cell) => {
         cell.font = {
           name: "Segoe UI",
-          color: { argb: "FFFFFFFF" },
+          color: { argb: "FF063B30" },
           bold: true,
           size: 11
         };
@@ -1951,10 +2019,10 @@ export default function App() {
           vertical: "middle"
         };
         cell.border = {
-          top: { style: "thin", color: { argb: "FFCBD5E1" } },
-          left: { style: "thin", color: { argb: "FFCBD5E1" } },
-          bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
-          right: { style: "thin", color: { argb: "FFCBD5E1" } }
+          top: { style: "thin", color: { argb: "FF6EE7B7" } },
+          left: { style: "thin", color: { argb: "FF6EE7B7" } },
+          bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
+          right: { style: "thin", color: { argb: "FF6EE7B7" } }
         };
       });
 
@@ -1977,15 +2045,15 @@ export default function App() {
           c.mobileNumber || "N/A"
         ];
 
-        // Zebra striping - alternating white and soft light-blue tint #F4F8FA matching the template's soft background shades
+        // Zebra striping - alternating white and soft light-mint tint #F0FDF9 from the SVG header
         const isEven = idx % 2 === 0;
-        const rowBgColor = isEven ? "FFFFFFFF" : "FFF4F8FA";
+        const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
 
         row.eachCell((cell, colNumber) => {
           cell.font = {
             name: "Segoe UI",
-            color: { argb: "FF333333" },
-            bold: colNumber === 3, // Bold the Arabic name column (col 3)
+            color: { argb: "FF063B30" },
+            bold: colNumber !== 2, // All text bolded except dates (col 2 Timestamp)
             size: 10
           };
           cell.fill = {
@@ -1998,10 +2066,10 @@ export default function App() {
             vertical: "middle"
           };
           cell.border = {
-            top: { style: "thin", color: { argb: "FFCBD5E1" } },
-            left: { style: "thin", color: { argb: "FFCBD5E1" } },
-            bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
-            right: { style: "thin", color: { argb: "FFCBD5E1" } }
+            top: { style: "thin", color: { argb: "FFCBDAD5" } },
+            left: { style: "thin", color: { argb: "FFCBDAD5" } },
+            bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
+            right: { style: "thin", color: { argb: "FFCBDAD5" } }
           };
         });
 
@@ -2052,23 +2120,26 @@ export default function App() {
         style={{ 
           backgroundImage: "url('/header_bg.png')",
           backgroundSize: "cover",
-          backgroundPosition: "center",
+          backgroundPosition: "center 45%",
           backgroundRepeat: "no-repeat"
         }}
       >
-        {/* Soft elegant tint overlay to ensure maximum readability */}
-        <div className="absolute inset-0 bg-[#dae4e1]/75 backdrop-blur-[0.5px] pointer-events-none z-0"></div>
+        {/* Impeccable contrast scrim: solid medical sage on left for AAA typography readability, transparent center allowing the heartbeat ECG and hospital telemetry artwork to shine clearly, balanced soft tint on right for actions */}
+        <div className="absolute inset-0 bg-gradient-to-r from-[#dae4e1]/95 via-[#dae4e1]/30 to-[#dae4e1]/75 pointer-events-none z-0"></div>
+        {/* Subtle hospital tech accent line at top */}
+        <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-emerald-600/30 via-emerald-400/50 to-emerald-600/30 pointer-events-none z-0"></div>
         
         <div className="flex items-center gap-3 relative z-10">
-          <div className="w-11 h-11 bg-[#063b30] rounded-xl flex items-center justify-center shadow-md border border-emerald-800/10">
-            <Hospital className="w-6 h-6 text-white" />
+          <div className="w-11 h-11 bg-[#063b30] rounded-xl flex items-center justify-center shadow-md border border-emerald-800/10 overflow-hidden p-1">
+            <img src="/elite_logo.png" alt="Elite Hospital Logo" className="w-8 h-8 object-contain" />
           </div>
           <div className="leading-none">
             <h1 className="text-lg font-black tracking-tight text-[#063b30] uppercase drop-shadow-sm">Mohanad's Elite Doctors' Registry</h1>
             <p className="text-[10px] text-emerald-800 font-bold tracking-widest uppercase mt-0.5">All rights reserved to Dr. Mohanad El Ma'moun , MSC</p>
           </div>
         </div>
-        <div className="flex items-center gap-6 relative z-10">
+        <div className="flex items-center gap-4 sm:gap-6 relative z-10">
+          <img src="/elite_logo.png" alt="Elite Hospital Emblem" className="w-10 h-10 object-contain hidden md:block drop-shadow-sm opacity-90" />
           <div className="text-right hidden sm:block leading-none">
             <LiveClock />
           </div>
