@@ -1,0 +1,6 @@
+{
+  "name": "Elite Hospital Doctor Check-in",
+  "description": "A check-in and shift management system for elite hospital doctors to submit schedules and export department-grouped records.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,136 @@
+{
+  "entities": {
+    "CheckIn": {
+      "title": "CheckIn",
+      "description": "Doctor check-in attendance record",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the physician"
+        },
+        "doctorName": {
+          "type": "string",
+          "description": "Full name of the doctor in English"
+        },
+        "doctorArabicName": {
+          "type": "string",
+          "description": "Full name of the doctor in Arabic"
+        },
+        "department": {
+          "type": "string",
+          "description": "Clinical department or specialization"
+        },
+        "shifts": {
+          "type": "array",
+          "description": "Assigned shift names"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO timestamp of the check-in"
+        }
+      },
+      "required": [
+        "id",
+        "doctorName",
+        "doctorArabicName",
+        "department",
+        "shifts",
+        "timestamp"
+      ]
+    },
+    "CustomDoctorPhone": {
+      "title": "CustomDoctorPhone",
+      "description": "Custom phone number override for a physician in the persistent database",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Doctor ID or employee code"
+        },
+        "mobileNumber": {
+          "type": "string",
+          "description": "Persistent mobile number"
+        }
+      },
+      "required": [
+        "id",
+        "mobileNumber"
+      ]
+    },
+    "CustomDoctor": {
+      "title": "CustomDoctor",
+      "description": "Admin added or updated physician profile record",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Doctor ID or employee code"
+        },
+        "name": {
+          "type": "string",
+          "description": "Doctor English name"
+        },
+        "arabicName": {
+          "type": "string",
+          "description": "Doctor Arabic name"
+        },
+        "department": {
+          "type": "string",
+          "description": "Clinical department"
+        },
+        "mobileNumber": {
+          "type": "string",
+          "description": "Mobile phone number"
+        },
+        "originalId": {
+          "type": "string",
+          "description": "Original ID prior to edit"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp of update"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "arabicName",
+        "department"
+      ]
+    },
+    "DeletedDoctor": {
+      "title": "DeletedDoctor",
+      "description": "Key or composite ID of a physician marked as deleted",
+      "type": "object",
+      "properties": {
+        "deletedAt": {
+          "type": "string",
+          "description": "ISO timestamp when the doctor was deleted"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "checkins/{checkinId}": {
+      "schema": "CheckIn",
+      "description": "Collection of all active daily physician check-ins and roster logs"
+    },
+    "weekly_checkins/{checkinId}": {
+      "schema": "CheckIn",
+      "description": "Cumulative persistent weekly check-ins roster logs"
+    },
+    "custom_doctors_phones/{docId}": {
+      "schema": "CustomDoctorPhone",
+      "description": "Admin-defined persistent custom doctor phone overrides"
+    },
+    "custom_doctors/{docId}": {
+      "schema": "CustomDoctor",
+      "description": "Admin-defined persistent custom doctor directory records"
+    },
+    "deleted_doctors/{docId}": {
+      "schema": "DeletedDoctor",
+      "description": "Collection of doctor key identifiers marked as deleted from directory"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net: default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper to validate the CheckIn document structure and fields
+    function isValidCheckIn(data) {
+      return data.keys().hasAll(['id', 'doctorName', 'doctorArabicName', 'department', 'shifts', 'timestamp'])
+        && data.id is string
+        && data.id.size() > 0
+        && data.id.size() <= 128
+        && data.doctorName is string
+        && data.doctorName.size() > 0
+        && data.doctorName.size() <= 256
+        && data.doctorArabicName is string
+        && data.doctorArabicName.size() > 0
+        && data.doctorArabicName.size() <= 256
+        && data.department is string
+        && data.department.size() > 0
+        && data.department.size() <= 128
+        && data.shifts is list
+        && data.shifts.size() >= 0
+        && data.shifts.size() <= 10
+        && data.timestamp is string
+        && data.timestamp.size() > 0
+        && data.timestamp.size() <= 128;
+    }
+
+    // Checkins collection rules
+    match /checkins/{checkinId} {
+      // Since the backend server communicates with Firestore unauthenticated using the Web SDK,
+      // we allow reads and writes under strict validation of the incoming payloads.
+      allow read: if true;
+      allow create, update: if isValidCheckIn(request.resource.data);
+      allow delete: if true;
+    }
+
+    // Weekly Checkins collection rules
+    match /weekly_checkins/{checkinId} {
+      allow read: if true;
+      allow create, update: if isValidCheckIn(request.resource.data);
+      allow delete: if true;
+    }
+
+    // Custom Doctors Phones rules
+    match /custom_doctors_phones/{docId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['id', 'mobileNumber'])
+        && request.resource.data.id is string
+        && request.resource.data.mobileNumber is string;
+      allow delete: if true;
+    }
+
+    // Custom Doctors collection rules
+    match /custom_doctors/{docId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['id', 'name', 'arabicName', 'department'])
+        && request.resource.data.id is string
+        && request.resource.data.name is string
+        && request.resource.data.arabicName is string
+        && request.resource.data.department is string;
+      allow delete: if true;
+    }
+
+    // Deleted Doctors collection rules
+    match /deleted_doctors/{docId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+  }
+}

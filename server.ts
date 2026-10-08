@@ -1,0 +1,2016 @@
+import express from "express";
+import compression from "compression";
+import path from "path";
+import fs from "fs";
+import ExcelJS from "exceljs";
+import { DOCTORS_DATABASE } from "./src/data/doctors.js";
+import { COMPILED_DOCTORS } from "./src/data/compiledDoctors.js";
+import { PRECOMPILED_CODE_PHONES, PRECOMPILED_NAME_PHONES } from "./src/data/compiledPhones.js";
+import { getSupabase, getSupabaseConfig, fetchAllRowsFromSupabase } from "./src/db/supabase.js";
+
+// Global Mobile Numbers lookup Maps populated from the Excel sheet
+const mobileNumbersByCodeMap = new Map<string, string>();
+const mobileNumbersByNameMap = new Map<string, string>();
+
+// Fast indexed maps for O(1) doctor lookups and instant searching
+let DOCTORS_BY_ID_MAP = new Map<string, any>();
+let DOCTORS_BY_NAME_MAP = new Map<string, any>();
+let PREINDEXED_SEARCH_DATABASE: {
+  doc: any;
+  normId: string;
+  normName: string;
+  normAra: string;
+  normDept: string;
+  normMob: string;
+}[] = [];
+
+function normalizeId(id: string): string {
+  return (id || "").trim().toLowerCase().replace(/^emp\./, "").replace(/^emp/, "");
+}
+
+function normalizeName(name: string): string {
+  return (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeArabic(text: string): string {
+  if (!text) return "";
+  return text
+    .trim()
+    .toLowerCase()
+    // Strip diacritics / Tashkeel
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    // Normalize Alefs
+    .replace(/[أإآٱ]/g, "ا")
+    // Normalize Teh Marbuta
+    .replace(/ة/g, "ه")
+    // Normalize Alef Maksura
+    .replace(/ى/g, "ي")
+    // Normalize Hamzas
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ء/g, "")
+    // Replace multiple spaces
+    .replace(/\s+/g, " ");
+}
+
+function searchDoctors(query: string, maxResults = 20): any[] {
+  const cleanQuery = query.trim().toLowerCase();
+  if (!cleanQuery) return [];
+
+  const normQuery = normalizeArabic(cleanQuery);
+  const normIdQuery = normalizeId(cleanQuery);
+
+  // Exact ID match check first (O(1))
+  if (normIdQuery && DOCTORS_BY_ID_MAP.has(normIdQuery)) {
+    const exact = DOCTORS_BY_ID_MAP.get(normIdQuery);
+    const rest = PREINDEXED_SEARCH_DATABASE
+      .filter(item => item.doc !== exact && matchesItemTerms(item, normQuery))
+      .map(i => i.doc)
+      .slice(0, maxResults - 1);
+    return [exact, ...rest];
+  }
+
+  const terms = normQuery.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+
+  const scored: { doc: any; score: number }[] = [];
+
+  for (let i = 0; i < PREINDEXED_SEARCH_DATABASE.length; i++) {
+    const item = PREINDEXED_SEARCH_DATABASE[i];
+    let score = 0;
+
+    // Direct ID score
+    if (normIdQuery && item.normId === normIdQuery) {
+      score += 1000;
+    } else if (normIdQuery && item.normId.startsWith(normIdQuery)) {
+      score += 500;
+    } else if (normIdQuery && item.normId.includes(normIdQuery)) {
+      score += 200;
+    }
+
+    // Name score
+    if (item.normName === normQuery || item.normAra === normQuery) {
+      score += 400;
+    } else if (item.normName.startsWith(normQuery) || item.normAra.startsWith(normQuery)) {
+      score += 300;
+    }
+
+    // Check term matches
+    const matchesAllTerms = terms.every(term =>
+      item.normId.includes(term) ||
+      item.normName.includes(term) ||
+      item.normAra.includes(term) ||
+      item.normDept.includes(term) ||
+      item.normMob.includes(term)
+    );
+
+    if (matchesAllTerms) {
+      score += 100;
+      scored.push({ doc: item.doc, score });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map(s => s.doc).slice(0, maxResults);
+}
+
+function matchesItemTerms(item: any, normQuery: string): boolean {
+  const terms = normQuery.split(/\s+/).filter(Boolean);
+  return terms.every(term =>
+    item.normId.includes(term) ||
+    item.normName.includes(term) ||
+    item.normAra.includes(term) ||
+    item.normDept.includes(term) ||
+    item.normMob.includes(term)
+  );
+}
+
+function matchesDoctor(doctor: any, query: string): boolean {
+  const cleanQuery = query.trim().toLowerCase();
+  if (!cleanQuery) return false;
+
+  const normQuery = normalizeArabic(cleanQuery);
+  const normIdQuery = normalizeId(cleanQuery);
+  const terms = normQuery.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return false;
+
+  const normId = normalizeId(doctor.id).toLowerCase();
+  const normName = normalizeName(doctor.name).toLowerCase();
+  const normArabic = normalizeArabic(doctor.arabicName).toLowerCase();
+  const normDept = (doctor.department || "").trim().toLowerCase();
+  const normMob = (doctor.mobileNumber || "").trim().toLowerCase();
+
+  if (normIdQuery && normId === normIdQuery) return true;
+
+  return terms.every(term => {
+    return (
+      normId.includes(term) ||
+      normName.includes(term) ||
+      normArabic.includes(term) ||
+      normDept.includes(term) ||
+      normMob.includes(term)
+    );
+  });
+}
+
+function initPrecompiledPhones() {
+  for (const [code, phone] of Object.entries(PRECOMPILED_CODE_PHONES)) {
+    mobileNumbersByCodeMap.set(normalizeId(code), phone);
+  }
+  for (const [name, phone] of Object.entries(PRECOMPILED_NAME_PHONES)) {
+    mobileNumbersByNameMap.set(normalizeName(name), phone);
+  }
+  console.log(`[Elite Server] Instantly mapped ${mobileNumbersByCodeMap.size} physician mobile numbers from pre-compiled cache.`);
+}
+
+// Department mapping utility
+function normalizeDepartment(dept: string): string {
+  const trimmed = (dept || "").trim();
+  if (trimmed === "ICU طب الحالات الحرجة" || trimmed === "ICU.") {
+    return "ICU";
+  }
+  if (trimmed === "Orthopedic Surgery") {
+    return "Orthopedics";
+  }
+  if (trimmed === "General Surgery Clinic") {
+    return "General Surgery";
+  }
+  if (trimmed === "Internal Medicine Clinic" || trimmed === "Rheumatology Clinic") {
+    return "Internal Medicine";
+  }
+  if (trimmed === "Cardiology Clinic") {
+    return "Cardiology";
+  }
+  if (trimmed === "Adult Nutrition Clinic") {
+    return "Nutrition";
+  }
+  if (trimmed === "Physiotherpy (Physical Medicine)") {
+    return "Physical Medicine";
+  }
+  if (trimmed === "Intervential Radiology") {
+    return "Radiology";
+  }
+  if (
+    trimmed === "Pediatric surgery Clinic" ||
+    trimmed.toUpperCase() === "PEDIATRICS CLINIC" ||
+    trimmed.toUpperCase() === "PEDIATRIC CLINIC" ||
+    trimmed.toUpperCase() === "PEDIATRIC GIT CLINIC" ||
+    trimmed.toUpperCase() === "PEDIATRIC GIT"
+  ) {
+    return "Pediatrics";
+  }
+  if (
+    trimmed.toUpperCase() === "NEPHROLOGY CLINIC" ||
+    trimmed.toUpperCase() === "NEPHROLOGY"
+  ) {
+    return "Nephrology";
+  }
+  if (
+    trimmed.toUpperCase() === "EMERGENCY" ||
+    trimmed.toUpperCase() === "EMERGENCY MEDICINE"
+  ) {
+    return "Emergency Medicine";
+  }
+  if (
+    trimmed.toUpperCase() === "ANESTHESIA AND PAIN THERAPY CLINIC" ||
+    trimmed.toUpperCase() === "ANESTHESIA AND PAIN THERAPY"
+  ) {
+    return "Anesthesia and pain therapy";
+  }
+  return trimmed;
+}
+
+let NORMALIZED_DOCTORS_DATABASE: any[] = [];
+
+// Clean department utility from our check-in analysis
+function cleanDepartment(dept: string): string {
+  let cleaned = (dept || "").trim();
+  cleaned = cleaned.replace(/^Job\./, "").replace(/\.Elite$/, "");
+  if (cleaned.includes(".")) {
+    cleaned = cleaned.split(".")[0];
+  }
+  cleaned = cleaned.replace(/\s+Clinic$/i, "");
+  return cleaned;
+}
+
+function compareDoctorIds(idA: string, idB: string): number {
+  const cleanA = (idA || "").trim().replace(/^(emp\.|emp)/i, "");
+  const cleanB = (idB || "").trim().replace(/^(emp\.|emp)/i, "");
+  const numA = Number(cleanA);
+  const numB = Number(cleanB);
+
+  if (!isNaN(numA) && !isNaN(numB)) {
+    return numA - numB;
+  }
+  if (!isNaN(numA)) return -1;
+  if (!isNaN(numB)) return 1;
+  return cleanA.localeCompare(cleanB, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function indexDoctorsList(doctors: any[]) {
+  DOCTORS_BY_ID_MAP.clear();
+  DOCTORS_BY_NAME_MAP.clear();
+  PREINDEXED_SEARCH_DATABASE = [];
+
+  NORMALIZED_DOCTORS_DATABASE = doctors.sort((a, b) => compareDoctorIds(a.id, b.id));
+
+  for (let i = 0; i < NORMALIZED_DOCTORS_DATABASE.length; i++) {
+    const d = NORMALIZED_DOCTORS_DATABASE[i];
+    const normId = normalizeId(d.id);
+    const normName = normalizeName(d.name);
+    const normAra = normalizeArabic(d.arabicName || "");
+    const normDept = (d.department || "").trim().toLowerCase();
+    const normMob = (d.mobileNumber || "").trim();
+
+    if (normId) {
+      DOCTORS_BY_ID_MAP.set(normId, d);
+      DOCTORS_BY_ID_MAP.set(d.id.trim().toLowerCase(), d);
+    }
+    if (normName) DOCTORS_BY_NAME_MAP.set(normName, d);
+    if (normAra) DOCTORS_BY_NAME_MAP.set(normAra, d);
+
+    PREINDEXED_SEARCH_DATABASE.push({
+      doc: d,
+      normId,
+      normName,
+      normAra,
+      normDept,
+      normMob
+    });
+  }
+}
+
+// Immediately initialize the in-memory database with pre-compiled records (0ms startup)
+initPrecompiledPhones();
+indexDoctorsList(COMPILED_DOCTORS);
+console.log(`[Elite Server] Instantly initialized ${NORMALIZED_DOCTORS_DATABASE.length} doctors into memory on boot.`);
+
+let doctorsRefreshPromise: Promise<void> | null = null;
+let lastDoctorsRefreshTime = Date.now();
+const DOCTORS_REFRESH_TTL = 60 * 1000; // 60-second in-memory TTL
+
+async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && NORMALIZED_DOCTORS_DATABASE.length > 0 && (now - lastDoctorsRefreshTime < DOCTORS_REFRESH_TTL)) {
+    return;
+  }
+  if (doctorsRefreshPromise) {
+    return doctorsRefreshPromise;
+  }
+
+  doctorsRefreshPromise = (async () => {
+    try {
+      // Parallel delta fetch from Supabase (only small delta tables: custom doctors, phones, deletions)
+      const [deletedKeys, customPhones, customDocs] = await Promise.all([
+        loadDeletedDoctorsKeys(),
+        loadCustomDoctorsPhones(),
+        loadCustomDoctors(),
+      ]);
+
+      const isDeleted = (cleanId: string, name: string, araName?: string) => {
+        const idKey = normalizeId(cleanId);
+        const nameKey = normalizeName(name);
+        const araKey = araName ? normalizeName(araName) : "";
+        if (idKey && nameKey && deletedKeys.has(`${idKey}_${nameKey}`)) return true;
+        if (idKey && araKey && deletedKeys.has(`${idKey}_${araKey}`)) return true;
+        if (nameKey && deletedKeys.has(nameKey)) return true;
+        if (araKey && deletedKeys.has(araKey)) return true;
+        if (idKey && !nameKey && !araKey && deletedKeys.has(idKey)) return true;
+        return false;
+      };
+
+      const doctorMap = new Map<string, any>();
+
+      // 1. Seed with base compiled doctors
+      COMPILED_DOCTORS.forEach(doc => {
+        const cleanId = doc.id.trim().replace(/^(emp\.|emp)/i, "");
+        if (isDeleted(cleanId, doc.name, doc.arabicName)) return;
+        const idKey = normalizeId(cleanId);
+        const nameKey = normalizeName(doc.name);
+        const mob = customPhones[idKey] || doc.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+        doctorMap.set(idKey || nameKey, {
+          ...doc,
+          id: cleanId,
+          mobileNumber: mob,
+        });
+      });
+
+      // 2. Apply custom doctors overrides
+      customDocs.forEach(cDoc => {
+        const cleanId = cDoc.id.trim().replace(/^(emp\.|emp)/i, "");
+        if (isDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
+        const idKey = normalizeId(cleanId);
+        const nameKey = normalizeName(cDoc.name);
+        const mob = cDoc.mobileNumber || customPhones[idKey] || mobileNumbersByCodeMap.get(idKey) || "";
+        doctorMap.set(idKey || nameKey, {
+          id: cleanId,
+          name: cDoc.name,
+          arabicName: cDoc.arabicName || cDoc.name,
+          department: normalizeDepartment(cleanDepartment(cDoc.department || "General")),
+          mobileNumber: mob,
+        });
+      });
+
+      // 3. Update global indexes in memory
+      const updatedList = Array.from(doctorMap.values());
+      indexDoctorsList(updatedList);
+      lastDoctorsRefreshTime = Date.now();
+      console.log(`[Elite Server] Delta-synced unified doctors database (${NORMALIZED_DOCTORS_DATABASE.length} physicians).`);
+    } catch (err) {
+      console.error("[Elite Server] Error in loadEnrichedDoctorsDatabase delta sync:", err);
+    } finally {
+      doctorsRefreshPromise = null;
+    }
+  })();
+
+  return doctorsRefreshPromise;
+}
+
+// Interface definitions
+interface CheckIn {
+  id: string;
+  doctorName: string;
+  doctorArabicName: string;
+  department: string;
+  shifts: string[];
+  timestamp: string;
+  mobileNumber?: string;
+}
+
+const app = express();
+const PORT = 3000;
+
+app.use(compression());
+app.use(express.json());
+
+// Ensure local fallback data structure is intact
+const DATA_DIR = process.env.VERCEL
+  ? path.join("/tmp", "data")
+  : path.join(process.cwd(), "data");
+const CHECKINS_FILE = path.join(DATA_DIR, "checkins.json");
+
+function ensureLocalData() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(CHECKINS_FILE)) {
+    fs.writeFileSync(CHECKINS_FILE, JSON.stringify([], null, 2), "utf-8");
+  }
+}
+
+function readCheckInsLocal(): CheckIn[] {
+  try {
+    ensureLocalData();
+    if (fs.existsSync(CHECKINS_FILE)) {
+      const data = fs.readFileSync(CHECKINS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading local checkins file:", error);
+  }
+  return [];
+}
+
+function writeCheckInsLocal(checkins: CheckIn[]) {
+  try {
+    ensureLocalData();
+    fs.writeFileSync(CHECKINS_FILE, JSON.stringify(checkins, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local checkins file:", error);
+  }
+}
+
+function getEgyptParts(timestampStr: string) {
+  const d = new Date(timestampStr);
+  if (isNaN(d.getTime())) {
+    throw new Error("Invalid date");
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false
+  });
+  const parts = formatter.formatToParts(d);
+  const year = parseInt(parts.find(p => p.type === "year")?.value || "0", 10);
+  const month = parseInt(parts.find(p => p.type === "month")?.value || "0", 10);
+  const day = parseInt(parts.find(p => p.type === "day")?.value || "0", 10);
+  const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+  const minute = parseInt(parts.find(p => p.type === "minute")?.value || "0", 10);
+  const second = parseInt(parts.find(p => p.type === "second")?.value || "0", 10);
+  return { year, month, day, hour, minute, second };
+}
+
+function getEgyptDateStr(timestampStr: string): string {
+  try {
+    const parts = getEgyptParts(timestampStr);
+    let utcTime = Date.UTC(parts.year, parts.month - 1, parts.day);
+    // Inputs added after 7 PM are considered next day's input
+    if (parts.hour >= 19) {
+      utcTime += 24 * 60 * 60 * 1000;
+    }
+    const targetDate = new Date(utcTime);
+    const y = targetDate.getUTCFullYear();
+    const m = String(targetDate.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(targetDate.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  } catch (err) {
+    try {
+      return new Date(timestampStr).toISOString().split('T')[0];
+    } catch (e) {
+      return new Date().toISOString().split('T')[0];
+    }
+  }
+}
+
+function getEgyptResetTime(timestampStr: string): Date {
+  try {
+    const targetDateStr = getEgyptDateStr(timestampStr);
+    const [yearStr, monthStr, dayStr] = targetDateStr.split("-");
+    const utcYear = parseInt(yearStr, 10);
+    const utcMonth = parseInt(monthStr, 10) - 1;
+    const utcDay = parseInt(dayStr, 10);
+
+    const checkinDate = new Date(timestampStr);
+    const tzString = checkinDate.toLocaleString("en-US", { timeZone: "Africa/Cairo", timeZoneName: "longOffset" });
+    const offsetMatch = tzString.match(/GMT([+-])(\d+)(?::(\d+))?/);
+    let offsetMinutes = 120; // fallback to UTC+2
+    if (offsetMatch) {
+      const sign = offsetMatch[1] === "+" ? 1 : -1;
+      const hours = parseInt(offsetMatch[2], 10);
+      const mins = offsetMatch[3] ? parseInt(offsetMatch[3], 10) : 0;
+      offsetMinutes = sign * (hours * 60 + mins);
+    }
+
+    // Reset daily sheets at 6:30 PM (18:30:00) of the target day
+    const localResetUTC = Date.UTC(utcYear, utcMonth, utcDay, 18, 30, 0);
+    return new Date(localResetUTC - (offsetMinutes * 60 * 1000));
+  } catch (err) {
+    console.error("Error in getEgyptResetTime, falling back:", err);
+    const d = new Date();
+    d.setUTCHours(18, 30, 0, 0);
+    return d;
+  }
+}
+
+async function cleanupExpiredCheckIns(): Promise<void> {
+  try {
+    const list = await readCheckInsRaw();
+    const now = new Date();
+    const expiredCheckins: CheckIn[] = [];
+    
+    for (const c of list) {
+      const resetTime = getEgyptResetTime(c.timestamp);
+      if (now >= resetTime) {
+        expiredCheckins.push(c);
+      }
+    }
+    
+    if (expiredCheckins.length > 0) {
+      console.log(`[Elite Server] Auto-resetting ${expiredCheckins.length} expired daily check-ins at 6:30 PM Egypt Time:`, expiredCheckins.map(c => c.id));
+      for (const c of expiredCheckins) {
+        try {
+          // Make sure it is included in the weekly sheet before deleting
+          await addWeeklyCheckIn(c);
+          await deleteCheckIn(c.id);
+        } catch (err) {
+          console.error(`[Elite Server] Failed to archive and clear expired check-in ${c.id}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error in cleanupExpiredCheckIns:", err);
+  }
+}
+
+let checkinsCache: CheckIn[] | null = null;
+let lastCheckinsFetchTime = 0;
+const CHECKINS_CACHE_TTL = 2500; // 2.5 seconds cache
+
+function invalidateCheckinsCache() {
+  checkinsCache = null;
+  lastCheckinsFetchTime = 0;
+}
+
+// Low-level read check-ins helper that queries Supabase directly first, with local backup sync
+async function readCheckInsRaw(): Promise<CheckIn[]> {
+  const now = Date.now();
+  if (checkinsCache && (now - lastCheckinsFetchTime < CHECKINS_CACHE_TTL)) {
+    return checkinsCache;
+  }
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      // Direct single query with limit 200 (sub-100ms response vs pagination)
+      const { data, error } = await supabase
+        .from("checkins")
+        .select("*")
+        .order("checkin_timestamp", { ascending: false })
+        .limit(200);
+
+      if (!error && data && data.length > 0) {
+        const mapped: CheckIn[] = data.map((row: any) => ({
+          id: row.doctor_id,
+          doctorName: row.doctor_name,
+          doctorArabicName: row.doctor_arabic_name || row.doctor_name,
+          department: row.department,
+          shifts: Array.isArray(row.shifts) ? row.shifts : [],
+          timestamp: row.checkin_timestamp,
+          mobileNumber: row.mobile_number || "",
+        }));
+        writeCheckInsLocal(mapped);
+        checkinsCache = mapped;
+        lastCheckinsFetchTime = Date.now();
+        return mapped;
+      }
+    } catch (err: any) {
+      console.error("[Supabase] readCheckInsRaw failed, falling back to local:", err);
+    }
+  }
+  const local = readCheckInsLocal();
+  checkinsCache = local;
+  lastCheckinsFetchTime = Date.now();
+  return local;
+}
+
+// Fetch all checkins (asynchronous cloud/local) with auto-reset filter for 6:30 PM Egypt Time
+async function readCheckIns(): Promise<CheckIn[]> {
+  const list = await readCheckInsRaw();
+  const now = new Date();
+
+  // Filter out any expired check-ins based on 6:30 PM Egypt Time reset rule
+  const validList = list.filter(c => {
+    try {
+      const resetTime = getEgyptResetTime(c.timestamp);
+      return now < resetTime;
+    } catch (e) {
+      return true; // Keep if there's an error parsing
+    }
+  });
+
+  // If there are expired ones, clean them up in the background
+  if (validList.length < list.length) {
+    const expiredList = list.filter(c => {
+      try {
+        const resetTime = getEgyptResetTime(c.timestamp);
+        return now >= resetTime;
+      } catch (e) {
+        return false;
+      }
+    });
+    // Trigger async deletion
+    Promise.all(expiredList.map(c => deleteCheckIn(c.id))).catch(err => {
+      console.error("Async delete expired check-ins failed:", err);
+    });
+  }
+
+  // Always return normalized department names and map details for the canonical physicians
+  return validList
+    .map(c => {
+      let id = c.id.replace(/^(emp\.|emp)/i, "");
+      let dept = c.department;
+      
+      if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
+        id = "201";
+        dept = "Physical Medicine";
+      } else if (c.doctorName === "Beshoy Nagy Farag Gerges" || id === "2310") {
+        dept = "Physical Medicine";
+      } else if (c.doctorName === "Omar Ahmed Osama Ebrahim" || id === "2120") {
+        dept = "Internal Medicine";
+      } else if (c.doctorName === "Abdelrahman Mahmoud Bassyoni Mohamed" || id === "2956") {
+        dept = "Radiology";
+      } else if (c.doctorName === "kareem Mohamed Abdelkader Mohamed" || id === "347") {
+        dept = "Radiology";
+      } else if (c.doctorName === "Moustafa Mohamed Mahmoud AbdelMagid" || id === "3365") {
+        dept = "Pediatrics";
+      } else if (c.doctorName === "Amany Mansour Elsayed Mohamed" || id === "724") {
+        dept = "Nephrology";
+      }
+
+      const idKey = normalizeId(id);
+      const nameKey = normalizeName(c.doctorName);
+      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+
+      return {
+        ...c,
+        id,
+        department: normalizeDepartment(dept),
+        mobileNumber
+      };
+    })
+    .filter(c => c.id.toLowerCase().trim() !== "emp");
+}
+
+// Custom Doctors Phones local storage and Supabase persistence helpers
+const CUSTOM_DOCTORS_PHONES_FILE = path.join(DATA_DIR, "custom_doctors_phones.json");
+
+function ensureCustomPhonesLocal() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(CUSTOM_DOCTORS_PHONES_FILE)) {
+    fs.writeFileSync(CUSTOM_DOCTORS_PHONES_FILE, JSON.stringify({}, null, 2), "utf-8");
+  }
+}
+
+function readCustomPhonesLocal(): Record<string, string> {
+  try {
+    ensureCustomPhonesLocal();
+    if (fs.existsSync(CUSTOM_DOCTORS_PHONES_FILE)) {
+      const data = fs.readFileSync(CUSTOM_DOCTORS_PHONES_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading local custom phones file:", error);
+  }
+  return {};
+}
+
+function writeCustomPhonesLocal(phones: Record<string, string>) {
+  try {
+    ensureCustomPhonesLocal();
+    fs.writeFileSync(CUSTOM_DOCTORS_PHONES_FILE, JSON.stringify(phones, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local custom phones file:", error);
+  }
+}
+
+async function loadCustomDoctorsPhones(): Promise<Record<string, string>> {
+  const phones = readCustomPhonesLocal();
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const data = await fetchAllRowsFromSupabase("custom_doctor_phones");
+      if (data && data.length > 0) {
+        data.forEach((row: any) => {
+          if (row.id && row.mobile_number) {
+            phones[normalizeId(row.id)] = row.mobile_number;
+          }
+        });
+        writeCustomPhonesLocal(phones);
+      }
+    } catch (err: any) {
+      console.error("[Supabase] loadCustomDoctorsPhones failed, using local fallback:", err);
+    }
+  }
+  return phones;
+}
+
+async function saveCustomDoctorPhone(id: string, mobileNumber: string): Promise<void> {
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(cleanId);
+  
+  // Update global lookup maps
+  mobileNumbersByCodeMap.set(idKey, mobileNumber);
+  
+  // Update NORMALIZED_DOCTORS_DATABASE in memory
+  const docInDb = NORMALIZED_DOCTORS_DATABASE.find(d => normalizeId(d.id) === idKey || normalizeName(d.name) === nameKey);
+  if (docInDb) {
+    docInDb.mobileNumber = mobileNumber;
+  }
+
+  // Update local file
+  const localPhones = readCustomPhonesLocal();
+  localPhones[idKey] = mobileNumber;
+  writeCustomPhonesLocal(localPhones);
+
+  // Update Supabase
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("custom_doctor_phones").upsert({
+        id: cleanId,
+        mobile_number: mobileNumber,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+
+      await supabase.from("doctors").update({ mobile_number: mobileNumber, updated_at: new Date().toISOString() }).eq("id", cleanId);
+    } catch (err) {
+      console.error("[Supabase] saveCustomDoctorPhone failed:", err);
+    }
+  }
+
+  // Re-synchronize the unified doctors database
+  await loadEnrichedDoctorsDatabase();
+}
+
+// Custom Doctors persistent store helpers
+const CUSTOM_DOCTORS_FILE = path.join(DATA_DIR, "custom_doctors.json");
+const DELETED_DOCTORS_FILE = path.join(DATA_DIR, "deleted_doctors.json");
+
+interface CustomDoctorRecord {
+  id: string;
+  name: string;
+  arabicName: string;
+  department: string;
+  mobileNumber: string;
+  originalId?: string;
+  updatedAt?: string;
+}
+
+function ensureCustomDoctorsLocal() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(CUSTOM_DOCTORS_FILE)) {
+    fs.writeFileSync(CUSTOM_DOCTORS_FILE, JSON.stringify([], null, 2), "utf-8");
+  }
+}
+
+function ensureDeletedDoctorsLocal() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(DELETED_DOCTORS_FILE)) {
+    fs.writeFileSync(DELETED_DOCTORS_FILE, JSON.stringify([], null, 2), "utf-8");
+  }
+}
+
+function readCustomDoctorsLocal(): CustomDoctorRecord[] {
+  try {
+    ensureCustomDoctorsLocal();
+    if (fs.existsSync(CUSTOM_DOCTORS_FILE)) {
+      const data = fs.readFileSync(CUSTOM_DOCTORS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading local custom doctors file:", error);
+  }
+  return [];
+}
+
+function writeCustomDoctorsLocal(doctors: CustomDoctorRecord[]) {
+  try {
+    ensureCustomDoctorsLocal();
+    fs.writeFileSync(CUSTOM_DOCTORS_FILE, JSON.stringify(doctors, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local custom doctors file:", error);
+  }
+}
+
+function readDeletedDoctorsLocal(): string[] {
+  try {
+    ensureDeletedDoctorsLocal();
+    if (fs.existsSync(DELETED_DOCTORS_FILE)) {
+      const data = fs.readFileSync(DELETED_DOCTORS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading local deleted doctors file:", error);
+  }
+  return [];
+}
+
+function writeDeletedDoctorsLocal(list: string[]) {
+  try {
+    ensureDeletedDoctorsLocal();
+    fs.writeFileSync(DELETED_DOCTORS_FILE, JSON.stringify(list, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local deleted doctors file:", error);
+  }
+}
+
+async function loadDeletedDoctorsKeys(): Promise<Set<string>> {
+  const keysSet = new Set<string>();
+  const localList = readDeletedDoctorsLocal();
+  localList.forEach((k) => keysSet.add(k));
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const data = await fetchAllRowsFromSupabase("deleted_doctors");
+      if (data && data.length > 0) {
+        data.forEach((row: any) => {
+          if (row.id) keysSet.add(row.id);
+        });
+        writeDeletedDoctorsLocal(Array.from(keysSet));
+      }
+    } catch (err: any) {
+      console.error("[Supabase] loadDeletedDoctorsKeys failed:", err);
+    }
+  }
+  return keysSet;
+}
+
+async function markDoctorAsDeleted(id: string, name?: string) {
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = name ? normalizeName(name) : "";
+
+  const keysToAdd: string[] = [];
+  if (idKey && nameKey) {
+    keysToAdd.push(`${idKey}_${nameKey}`);
+  } else if (idKey) {
+    keysToAdd.push(idKey);
+  } else if (nameKey) {
+    keysToAdd.push(nameKey);
+  }
+
+  const localList = readDeletedDoctorsLocal();
+  const updatedSet = new Set([...localList, ...keysToAdd]);
+  writeDeletedDoctorsLocal(Array.from(updatedSet));
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      for (const key of keysToAdd) {
+        await supabase.from("deleted_doctors").upsert({ id: key, deleted_at: new Date().toISOString() }, { onConflict: "id" });
+      }
+      if (cleanId) {
+        await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId);
+      }
+    } catch (err) {
+      console.error("[Supabase] markDoctorAsDeleted failed:", err);
+    }
+  }
+}
+
+async function unmarkDoctorAsDeleted(id: string, name?: string) {
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = name ? normalizeName(name) : "";
+
+  const keysToRemove: string[] = [];
+  if (idKey && nameKey) keysToRemove.push(`${idKey}_${nameKey}`);
+  if (idKey) keysToRemove.push(idKey);
+  if (nameKey) keysToRemove.push(nameKey);
+
+  const localList = readDeletedDoctorsLocal();
+  const updatedList = localList.filter((k) => !keysToRemove.includes(k));
+  writeDeletedDoctorsLocal(updatedList);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      for (const key of keysToRemove) {
+        await supabase.from("deleted_doctors").delete().eq("id", key);
+      }
+      if (cleanId) {
+        await supabase.from("doctors").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", cleanId);
+      }
+    } catch (err) {
+      console.error("[Supabase] unmarkDoctorAsDeleted failed:", err);
+    }
+  }
+}
+
+async function loadCustomDoctors(): Promise<CustomDoctorRecord[]> {
+  const doctorsMap = new Map<string, CustomDoctorRecord>();
+  const localList = readCustomDoctorsLocal();
+  localList.forEach((d) => {
+    const key = normalizeId(d.id) || normalizeName(d.name);
+    if (key) doctorsMap.set(key, d);
+  });
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const data = await fetchAllRowsFromSupabase("custom_doctors");
+      if (data && data.length > 0) {
+        data.forEach((row: any) => {
+          const docRec: CustomDoctorRecord = {
+            id: row.id,
+            name: row.name,
+            arabicName: row.arabic_name || row.name,
+            department: row.department || "General",
+            mobileNumber: row.mobile_number || "",
+            originalId: row.original_id || "",
+            updatedAt: row.updated_at || new Date().toISOString(),
+          };
+          const key = normalizeId(docRec.id) || normalizeName(docRec.name);
+          if (key) doctorsMap.set(key, docRec);
+        });
+        writeCustomDoctorsLocal(Array.from(doctorsMap.values()));
+      }
+    } catch (err: any) {
+      console.error("[Supabase] loadCustomDoctors failed, using local fallback:", err);
+    }
+  }
+  return Array.from(doctorsMap.values());
+}
+
+async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<void> {
+  const cleanId = docRecord.id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(docRecord.name);
+  const origKey = docRecord.originalId ? normalizeId(docRecord.originalId.trim().replace(/^(emp\.|emp)/i, "")) : "";
+
+  // Unmark any previous deletion tombstones for this doctor or ID
+  await unmarkDoctorAsDeleted(cleanId, docRecord.name);
+  if (docRecord.originalId) {
+    await unmarkDoctorAsDeleted(docRecord.originalId, docRecord.name);
+  }
+
+  const recordToSave: CustomDoctorRecord = {
+    id: cleanId,
+    name: docRecord.name.trim(),
+    arabicName: docRecord.arabicName.trim() || docRecord.name.trim(),
+    department: normalizeDepartment(cleanDepartment(docRecord.department)),
+    mobileNumber: docRecord.mobileNumber ? docRecord.mobileNumber.trim() : "",
+    originalId: docRecord.originalId || "",
+    updatedAt: new Date().toISOString()
+  };
+
+  let existingIndex = NORMALIZED_DOCTORS_DATABASE.findIndex(
+    d => (origKey && normalizeId(d.id) === origKey && normalizeName(d.name) === nameKey) ||
+         (origKey && normalizeId(d.id) === origKey) ||
+         (idKey && normalizeId(d.id) === idKey && normalizeName(d.name) === nameKey) ||
+         (normalizeName(d.name) === nameKey)
+  );
+
+  if (existingIndex !== -1) {
+    NORMALIZED_DOCTORS_DATABASE[existingIndex] = {
+      ...NORMALIZED_DOCTORS_DATABASE[existingIndex],
+      id: cleanId,
+      name: recordToSave.name,
+      arabicName: recordToSave.arabicName,
+      department: recordToSave.department,
+      mobileNumber: recordToSave.mobileNumber
+    };
+  } else {
+    NORMALIZED_DOCTORS_DATABASE.push({
+      id: cleanId,
+      name: recordToSave.name,
+      arabicName: recordToSave.arabicName,
+      department: recordToSave.department,
+      mobileNumber: recordToSave.mobileNumber
+    });
+  }
+
+  if (idKey) mobileNumbersByCodeMap.set(idKey, recordToSave.mobileNumber);
+  if (nameKey) mobileNumbersByNameMap.set(nameKey, recordToSave.mobileNumber);
+
+  const localList = readCustomDoctorsLocal();
+  const existingLocalIdx = localList.findIndex(
+    d => (origKey && normalizeId(d.id) === origKey && normalizeName(d.name) === nameKey) ||
+         (origKey && normalizeId(d.id) === origKey) ||
+         (idKey && normalizeId(d.id) === idKey && normalizeName(d.name) === nameKey) ||
+         (normalizeName(d.name) === nameKey)
+  );
+
+  if (existingLocalIdx !== -1) {
+    localList[existingLocalIdx] = recordToSave;
+  } else {
+    localList.push(recordToSave);
+  }
+  writeCustomDoctorsLocal(localList);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      if (origKey && origKey !== idKey) {
+        await supabase.from("custom_doctors").delete().eq("id", docRecord.originalId);
+      }
+      await supabase.from("custom_doctors").upsert({
+        id: recordToSave.id,
+        name: recordToSave.name,
+        arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+        original_id: recordToSave.originalId || "",
+        updated_at: recordToSave.updatedAt || new Date().toISOString(),
+      }, { onConflict: "id" });
+
+      await supabase.from("doctors").upsert({
+        id: recordToSave.id,
+        name: recordToSave.name,
+        arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+    } catch (err) {
+      console.error("[Supabase] saveCustomDoctorRecord failed:", err);
+    }
+  }
+
+  // Re-synchronize the unified doctors database
+  await loadEnrichedDoctorsDatabase();
+}
+
+async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void> {
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = name ? normalizeName(name) : "";
+
+  await markDoctorAsDeleted(id, name);
+
+  NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    if (nameKey) {
+      return !(dIdKey === idKey && dNameKey === nameKey);
+    }
+    return dIdKey !== idKey;
+  });
+
+  const localList = readCustomDoctorsLocal();
+  const updatedList = localList.filter(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    if (nameKey) {
+      return !(dIdKey === idKey && dNameKey === nameKey);
+    }
+    return dIdKey !== idKey;
+  });
+  writeCustomDoctorsLocal(updatedList);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("custom_doctors").delete().eq("id", cleanId);
+      await supabase.from("deleted_doctors").upsert({ id: cleanId, deleted_at: new Date().toISOString() }, { onConflict: "id" });
+      await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId);
+    } catch (err) {
+      console.error("[Supabase] deleteCustomDoctorRecord failed:", err);
+    }
+  }
+
+  // Re-synchronize the unified doctors database
+  await loadEnrichedDoctorsDatabase();
+}
+
+// Weekly Check-Ins local storage and Supabase persistence helpers
+const WEEKLY_CHECKINS_FILE = path.join(DATA_DIR, "weekly_checkins.json");
+
+function ensureLocalWeeklyData() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(WEEKLY_CHECKINS_FILE)) {
+    fs.writeFileSync(WEEKLY_CHECKINS_FILE, JSON.stringify([], null, 2), "utf-8");
+  }
+}
+
+function readWeeklyCheckInsLocal(): CheckIn[] {
+  try {
+    ensureLocalWeeklyData();
+    if (fs.existsSync(WEEKLY_CHECKINS_FILE)) {
+      const data = fs.readFileSync(WEEKLY_CHECKINS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading local weekly checkins file:", error);
+  }
+  return [];
+}
+
+function writeWeeklyCheckInsLocal(checkins: CheckIn[]) {
+  try {
+    ensureLocalWeeklyData();
+    fs.writeFileSync(WEEKLY_CHECKINS_FILE, JSON.stringify(checkins, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing local weekly checkins file:", error);
+  }
+}
+
+let weeklyCheckinsCache: CheckIn[] | null = null;
+let lastWeeklyFetchTime = 0;
+const WEEKLY_CACHE_TTL = 30000; // 30 seconds cache
+
+function invalidateWeeklyCache() {
+  weeklyCheckinsCache = null;
+  lastWeeklyFetchTime = 0;
+}
+
+// Fetch all weekly checkins (asynchronous cloud/local)
+async function readWeeklyCheckIns(): Promise<CheckIn[]> {
+  const now = Date.now();
+  if (weeklyCheckinsCache && (now - lastWeeklyFetchTime < WEEKLY_CACHE_TTL)) {
+    return weeklyCheckinsCache;
+  }
+
+  let list: CheckIn[] = [];
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const data = await fetchAllRowsFromSupabase("weekly_checkins", (q) =>
+        q.order("checkin_timestamp", { ascending: false })
+      );
+      
+      if (data && data.length > 0) {
+        list = data.map((row: any) => ({
+          id: row.doctor_id,
+          doctorName: row.doctor_name,
+          doctorArabicName: row.doctor_arabic_name || row.doctor_name,
+          department: row.department,
+          shifts: Array.isArray(row.shifts) ? row.shifts : [],
+          timestamp: row.checkin_timestamp,
+          mobileNumber: row.mobile_number || "",
+        }));
+        writeWeeklyCheckInsLocal(list);
+      } else {
+        list = readWeeklyCheckInsLocal();
+      }
+    } catch (err: any) {
+      console.error("[Supabase] readWeeklyCheckIns failed, falling back to local:", err);
+      list = readWeeklyCheckInsLocal();
+    }
+  } else {
+    list = readWeeklyCheckInsLocal();
+  }
+
+  // Normalize details
+  const result = list
+    .map(c => {
+      let id = c.id.replace(/^(emp\.|emp)/i, "");
+      let dept = c.department;
+      
+      if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
+        id = "201";
+        dept = "Physical Medicine";
+      } else if (c.doctorName === "Beshoy Nagy Farag Gerges" || id === "2310") {
+        dept = "Physical Medicine";
+      } else if (c.doctorName === "Omar Ahmed Osama Ebrahim" || id === "2120") {
+        dept = "Internal Medicine";
+      } else if (c.doctorName === "Abdelrahman Mahmoud Bassyoni Mohamed" || id === "2956") {
+        dept = "Radiology";
+      } else if (c.doctorName === "kareem Mohamed Abdelkader Mohamed" || id === "347") {
+        dept = "Radiology";
+      } else if (c.doctorName === "Moustafa Mohamed Mahmoud AbdelMagid" || id === "3365") {
+        dept = "Pediatrics";
+      } else if (c.doctorName === "Amany Mansour Elsayed Mohamed" || id === "724") {
+        dept = "Nephrology";
+      }
+
+      const idKey = normalizeId(id);
+      const nameKey = normalizeName(c.doctorName);
+      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+
+      return {
+        ...c,
+        id,
+        department: normalizeDepartment(dept),
+        mobileNumber
+      };
+    })
+    .filter(c => c.id.toLowerCase().trim() !== "emp");
+
+  weeklyCheckinsCache = result;
+  lastWeeklyFetchTime = Date.now();
+  return result;
+}
+
+// Add or update check-in
+async function addCheckIn(checkin: CheckIn): Promise<void> {
+  invalidateCheckinsCache();
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      // Remove any existing active daily check-in for this physician to avoid duplicate active daily rows
+      await supabase.from("checkins").delete().eq("doctor_id", checkin.id);
+      await supabase.from("checkins").insert({
+        doctor_id: checkin.id,
+        doctor_name: checkin.doctorName,
+        doctor_arabic_name: checkin.doctorArabicName || checkin.doctorName,
+        department: checkin.department,
+        shifts: checkin.shifts,
+        mobile_number: checkin.mobileNumber || "",
+        checkin_timestamp: checkin.timestamp,
+        checkin_date: getEgyptDateStr(checkin.timestamp),
+      });
+    } catch (err) {
+      console.error("[Supabase] addCheckIn failed:", err);
+    }
+  }
+
+  const list = readCheckInsLocal();
+  const filtered = list.filter(c => c.id.toLowerCase() !== checkin.id.toLowerCase());
+  filtered.push(checkin);
+  writeCheckInsLocal(filtered);
+}
+
+// Add or update weekly check-in (cumulative, one row per doctor per day)
+async function addWeeklyCheckIn(checkin: CheckIn): Promise<void> {
+  invalidateWeeklyCache();
+  const dateStr = getEgyptDateStr(checkin.timestamp);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("weekly_checkins").insert({
+        doctor_id: checkin.id,
+        doctor_name: checkin.doctorName,
+        doctor_arabic_name: checkin.doctorArabicName || checkin.doctorName,
+        department: checkin.department,
+        shifts: checkin.shifts,
+        mobile_number: checkin.mobileNumber || "",
+        checkin_timestamp: checkin.timestamp,
+      });
+    } catch (err) {
+      console.error("[Supabase] addWeeklyCheckIn failed:", err);
+    }
+  }
+
+  const list = readWeeklyCheckInsLocal();
+  const filtered = list.filter(c => {
+    const cDate = getEgyptDateStr(c.timestamp);
+    return !(c.id.toLowerCase() === checkin.id.toLowerCase() && cDate === dateStr);
+  });
+  filtered.push(checkin);
+  writeWeeklyCheckInsLocal(filtered);
+}
+
+// Delete a single check-in
+async function deleteCheckIn(id: string): Promise<boolean> {
+  invalidateCheckinsCache();
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("checkins").delete().eq("doctor_id", id);
+    } catch (err) {
+      console.error("[Supabase] deleteCheckIn failed:", err);
+    }
+  }
+
+  const list = readCheckInsLocal();
+  const filtered = list.filter(c => c.id !== id);
+  if (filtered.length === list.length) {
+    return false;
+  }
+  writeCheckInsLocal(filtered);
+  return true;
+}
+
+// Delete a weekly check-in matching doctor ID and date of the check-in
+async function deleteWeeklyCheckIn(id: string, timestamp: string): Promise<void> {
+  invalidateWeeklyCache();
+  const dateStr = getEgyptDateStr(timestamp);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("weekly_checkins").delete().eq("doctor_id", id);
+    } catch (err) {
+      console.error("[Supabase] deleteWeeklyCheckIn failed:", err);
+    }
+  }
+
+  const list = readWeeklyCheckInsLocal();
+  const filtered = list.filter(c => {
+    const cDate = getEgyptDateStr(c.timestamp);
+    return !(c.id.toLowerCase() === id.toLowerCase() && cDate === dateStr);
+  });
+  writeWeeklyCheckInsLocal(filtered);
+}
+
+// Clear all daily check-ins
+async function clearAllCheckIns(): Promise<void> {
+  invalidateCheckinsCache();
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    } catch (err) {
+      console.error("[Supabase] clearAllCheckIns failed:", err);
+    }
+  }
+
+  writeCheckInsLocal([]);
+}
+
+// Clear all weekly check-ins
+async function clearWeeklyCheckIns(): Promise<void> {
+  invalidateWeeklyCache();
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("weekly_checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    } catch (err) {
+      console.error("[Supabase] clearWeeklyCheckIns failed:", err);
+    }
+  }
+
+  writeWeeklyCheckInsLocal([]);
+}
+
+// API Endpoints
+app.get("/header_bg.png", (req, res) => {
+  const localPath = path.join(process.cwd(), "header_bg.png");
+  if (fs.existsSync(localPath)) {
+    res.sendFile(localPath);
+    return;
+  }
+  
+  // If no physical file, serve a beautiful, modern high-fidelity dark-emerald hospital OS theme banner as SVG
+  const svg = `<svg width="1920" height="120" viewBox="0 0 1920 120" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <!-- Background Linear Gradient -->
+      <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#021c17" />
+        <stop offset="50%" stop-color="#063b30" />
+        <stop offset="100%" stop-color="#041f1a" />
+      </linearGradient>
+      
+      <!-- Tech Grid Pattern -->
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#10b981" stroke-width="0.5" opacity="0.08" />
+      </pattern>
+      
+      <!-- Subtle diagonal lines -->
+      <pattern id="diagonal" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <line x1="0" y1="0" x2="0" y2="10" stroke="#10b981" stroke-width="0.5" opacity="0.04" />
+      </pattern>
+
+      <!-- Glow Filters -->
+      <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="30" result="blur" />
+        <feComposite in="SourceGraphic" in2="blur" operator="over" />
+      </filter>
+    </defs>
+
+    <!-- Base Gradient Rect -->
+    <rect width="1920" height="120" fill="url(#bgGrad)" />
+
+    <!-- Patterns -->
+    <rect width="1920" height="120" fill="url(#grid)" />
+    <rect width="1920" height="120" fill="url(#diagonal)" />
+
+    <!-- Abstract Medical/Pulse Waves (Dynamic Bezier curves) -->
+    <!-- Wave 1 (Teal/Emerald pulse) -->
+    <path d="M 0 80 Q 250 120, 500 60 T 1000 70 T 1500 50 T 1920 80 L 1920 120 L 0 120 Z" fill="#10b981" opacity="0.04" />
+    <path d="M 0 60 Q 300 20, 600 80 T 1200 40 T 1800 90 T 1920 50" fill="none" stroke="#10b981" stroke-width="1.5" stroke-dasharray="1 5" opacity="0.15" />
+    
+    <!-- Heartbeat pulse wave (glowing line) -->
+    <path d="M -50 60 L 300 60 L 330 60 L 340 30 L 350 90 L 360 10 L 370 70 L 380 60 L 410 60 L 800 60 L 820 60 L 830 20 L 840 100 L 850 0 L 860 75 L 870 60 L 900 60 L 1400 60 L 1420 60 L 1430 40 L 1440 90 L 1450 20 L 1460 70 L 1470 60 L 1970 60" 
+          fill="none" stroke="#34d399" stroke-width="2" opacity="0.25" filter="url(#glow)" />
+
+    <!-- Tech HUD Elements in top corners -->
+    <circle cx="100" cy="30" r="4" fill="#34d399" opacity="0.4" />
+    <circle cx="100" cy="30" r="12" fill="none" stroke="#34d399" stroke-width="1" opacity="0.2" />
+    <line x1="120" y1="30" x2="220" y2="30" stroke="#34d399" stroke-width="1" opacity="0.15" />
+    
+    <circle cx="1820" cy="30" r="3" fill="#34d399" opacity="0.4" />
+    <circle cx="1820" cy="30" r="8" fill="none" stroke="#34d399" stroke-width="1" opacity="0.2" />
+    <line x1="1700" y1="30" x2="1800" y2="30" stroke="#34d399" stroke-width="1" opacity="0.15" />
+
+    <!-- Ambient glowing light spots -->
+    <circle cx="300" cy="60" r="150" fill="#10b981" opacity="0.1" filter="url(#glow)" />
+    <circle cx="1500" cy="40" r="180" fill="#047857" opacity="0.12" filter="url(#glow)" />
+  </svg>`;
+
+  res.setHeader("Content-Type", "image/svg+xml");
+  res.send(svg);
+});
+
+app.get(["/api/doctors", "/doctors"], async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
+  if (req.query.refresh === "true" || NORMALIZED_DOCTORS_DATABASE.length === 0) {
+    try {
+      await loadEnrichedDoctorsDatabase(req.query.refresh === "true");
+    } catch (err) {
+      console.error("Error refreshing doctors database on GET:", err);
+    }
+  }
+  const enriched = NORMALIZED_DOCTORS_DATABASE.map(doc => {
+    const idKey = normalizeId(doc.id);
+    const nameKey = normalizeName(doc.name);
+    const mobileNumber = doc.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+    return { ...doc, mobileNumber };
+  });
+  res.json(enriched);
+});
+
+// Search doctors by English name, Arabic name, or ID
+app.get("/api/doctors/search", (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, stale-while-revalidate=120");
+  const query = String(req.query.q || "").trim();
+  if (!query) {
+    return res.json([]);
+  }
+
+  const results = searchDoctors(query, 20);
+  res.json(results);
+});
+
+// Get a single doctor by ID, English name, or Arabic name fallback
+app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=120");
+  const { id } = req.params;
+  const lookupId = id.trim();
+  const normLook = normalizeId(lookupId);
+  const normName = normalizeName(lookupId);
+  const normAra = normalizeArabic(lookupId);
+  
+  // 1. O(1) exact ID lookup
+  let doctor = DOCTORS_BY_ID_MAP.get(normLook) || DOCTORS_BY_ID_MAP.get(lookupId.toLowerCase());
+
+  // 2. O(1) exact Name / Arabic lookup
+  if (!doctor && normName) {
+    doctor = DOCTORS_BY_NAME_MAP.get(normName);
+  }
+  if (!doctor && normAra) {
+    doctor = DOCTORS_BY_NAME_MAP.get(normAra);
+  }
+
+  // 3. Fallback to ranked search
+  if (!doctor) {
+    const searchResults = searchDoctors(lookupId, 1);
+    if (searchResults.length > 0) {
+      doctor = searchResults[0];
+    }
+  }
+
+  if (doctor) {
+    const idKey = normalizeId(doctor.id);
+    const nameKey = normalizeName(doctor.name);
+    const mobileNumber = doctor.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+    res.json({ 
+      found: true, 
+      doctor: {
+        ...doctor,
+        mobileNumber
+      } 
+    });
+  } else {
+    res.json({ found: false });
+  }
+});
+
+// Get current check-ins
+app.get(["/api/checkins", "/checkins"], async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=1, s-maxage=2, stale-while-revalidate=4");
+  try {
+    const list = await readCheckIns();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to read check-ins." });
+  }
+});
+
+// Get cumulative weekly check-ins with active daily check-ins merged in
+app.get(["/api/weekly-checkins", "/weekly-checkins"], async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, stale-while-revalidate=120");
+  try {
+    const weeklyList = await readWeeklyCheckIns();
+    const dailyList = await readCheckIns();
+
+    const mergedMap = new Map<string, CheckIn>();
+
+    // First populate with weekly check-ins
+    weeklyList.forEach(c => {
+      const dateStr = getEgyptDateStr(c.timestamp);
+      const key = `${c.id.toLowerCase()}_${dateStr}`;
+      mergedMap.set(key, c);
+    });
+
+    // Then overwrite or add with daily check-ins (ensuring latest data for today)
+    dailyList.forEach(c => {
+      const dateStr = getEgyptDateStr(c.timestamp);
+      const key = `${c.id.toLowerCase()}_${dateStr}`;
+      mergedMap.set(key, c);
+    });
+
+    res.json(Array.from(mergedMap.values()));
+  } catch (err) {
+    console.error("Error fetching merged weekly check-ins:", err);
+    res.status(500).json({ error: "Failed to read weekly check-ins." });
+  }
+});
+
+// Submit a check-in
+app.post(["/api/checkins", "/checkins"], async (req, res) => {
+  const { id, doctorName, doctorArabicName, department, shifts } = req.body;
+
+  if (!id || !doctorName || !doctorArabicName || !department) {
+    return res.status(400).json({ error: "Missing required fields: ID, names, or department." });
+  }
+
+  if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
+    return res.status(400).json({ error: "Please select at least one shift." });
+  }
+
+  let finalShifts = [...shifts];
+  
+  // If the doctor chooses all 3 shifts, save the output as "24 shift"
+  if (finalShifts.length === 3 && 
+      finalShifts.includes("Morning shift") && 
+      finalShifts.includes("Evening shift") && 
+      finalShifts.includes("Night shift")) {
+    finalShifts = ["24 shift"];
+  }
+
+  if (finalShifts.length > 3) {
+    return res.status(400).json({ error: "You can select a maximum of 3 shifts." });
+  }
+
+  // Validate shift values
+  const validShifts = ["Morning shift", "Long shift", "Evening shift", "Night shift", "24 shift"];
+  const invalidShifts = finalShifts.filter(s => !validShifts.includes(s));
+  if (invalidShifts.length > 0) {
+    return res.status(400).json({ error: `Invalid shift selected: ${invalidShifts.join(", ")}` });
+  }
+
+  // Create new check-in with normalized department and look up mobile number
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(doctorName);
+  const mobileNumber = mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+
+  const newCheckIn: CheckIn = {
+    id: cleanId,
+    doctorName: doctorName.trim(),
+    doctorArabicName: doctorArabicName.trim(),
+    department: normalizeDepartment(department),
+    shifts: finalShifts,
+    timestamp: new Date().toISOString(),
+    mobileNumber
+  };
+
+  try {
+    // Add to daily AND weekly cumulative check-ins
+    await addCheckIn(newCheckIn);
+    await addWeeklyCheckIn(newCheckIn);
+    res.status(201).json({ success: true, checkIn: newCheckIn });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to register check-in." });
+  }
+});
+
+// Remove a check-in
+app.delete(["/api/checkins/:id", "/checkins/:id"], async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Find the daily check-in first to get its timestamp for matching weekly record deletion
+    const dailyCheckIns = await readCheckIns();
+    const targetCheckIn = dailyCheckIns.find(c => c.id.toLowerCase() === id.toLowerCase());
+
+    const deleted = await deleteCheckIn(id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Check-in not found." });
+    }
+
+    if (targetCheckIn) {
+      await deleteWeeklyCheckIn(targetCheckIn.id, targetCheckIn.timestamp);
+    }
+
+    res.json({ success: true, message: "Check-in deleted from daily and weekly sheets." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete check-in." });
+  }
+});
+
+// Clear all active daily check-ins (leaves weekly check-ins intact!)
+app.post(["/api/checkins/clear", "/checkins/clear"], async (req, res) => {
+  try {
+    await clearAllCheckIns();
+    res.json({ success: true, message: "All daily check-ins cleared." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear check-ins." });
+  }
+});
+
+// Clear all weekly check-ins
+app.post(["/api/checkins/clear-weekly", "/checkins/clear-weekly"], async (req, res) => {
+  try {
+    await clearWeeklyCheckIns();
+    res.json({ success: true, message: "All cumulative weekly check-ins cleared." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to clear weekly check-ins." });
+  }
+});
+
+// Add/Update doctor phone number in persistent database
+app.post("/api/doctors/phone", async (req, res) => {
+  const { id, mobileNumber } = req.body;
+  if (!id) {
+    return res.status(400).json({ error: "Doctor ID is required." });
+  }
+  try {
+    await saveCustomDoctorPhone(id, mobileNumber || "");
+    res.json({ success: true, message: "Doctor phone number updated in persistent database." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update doctor phone number." });
+  }
+});
+
+// Edit check-in doctor's phone number (and update persistent database)
+app.put("/api/checkins/:id/phone", async (req, res) => {
+  const { id } = req.params;
+  const { mobileNumber } = req.body;
+  try {
+    // Find the daily check-in
+    const dailyCheckIns = await readCheckIns();
+    const targetCheckIn = dailyCheckIns.find(c => c.id.toLowerCase() === id.toLowerCase());
+    if (!targetCheckIn) {
+      return res.status(404).json({ error: "Active check-in not found." });
+    }
+
+    // Update check-in mobile number
+    const updatedCheckIn = {
+      ...targetCheckIn,
+      mobileNumber: mobileNumber || ""
+    };
+
+    // Update daily AND weekly check-in records!
+    await addCheckIn(updatedCheckIn);
+    await addWeeklyCheckIn(updatedCheckIn);
+
+    // Also save to the persistent doctors database so future check-ins reuse it
+    await saveCustomDoctorPhone(id, mobileNumber || "");
+
+    res.json({ success: true, message: "Checked-in doctor phone number updated successfully." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update checked-in doctor phone number." });
+  }
+});
+
+// Save or update doctor in persistent database (IDs, names, department, phone)
+app.post("/api/doctors/upsert", async (req, res) => {
+  const { originalId, id, name, arabicName, department, mobileNumber } = req.body;
+  if (!id || !name) {
+    return res.status(400).json({ error: "ID and English Name are required." });
+  }
+  try {
+    await saveCustomDoctorRecord({
+      originalId: originalId || "",
+      id,
+      name,
+      arabicName: arabicName || name,
+      department: department || "General",
+      mobileNumber: mobileNumber || ""
+    });
+    res.json({ success: true, message: "Doctor record saved successfully in persistent database." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save doctor record." });
+  }
+});
+
+// Delete doctor from persistent database
+app.delete("/api/doctors/delete/:id", async (req, res) => {
+  const { id } = req.params;
+  const name = typeof req.query.name === "string" ? req.query.name : undefined;
+  if (!id) {
+    return res.status(400).json({ error: "Doctor ID is required." });
+  }
+  try {
+    await deleteCustomDoctorRecord(id, name);
+    res.json({ success: true, message: "Doctor removed from persistent database." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete doctor record." });
+  }
+});
+
+// Batch Delete doctors from persistent database
+app.post("/api/doctors/delete-batch", async (req, res) => {
+  const { ids, items } = req.body;
+  const listToDelete = items || ids;
+  if (!listToDelete || !Array.isArray(listToDelete) || listToDelete.length === 0) {
+    return res.status(400).json({ error: "An array of Doctor IDs or items is required." });
+  }
+  try {
+    for (const item of listToDelete) {
+      if (typeof item === "object" && item !== null && item.id) {
+        await deleteCustomDoctorRecord(item.id, item.name);
+      } else if (typeof item === "string") {
+        await deleteCustomDoctorRecord(item);
+      }
+    }
+    res.json({ success: true, message: `${listToDelete.length} physician(s) removed from database successfully.` });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete selected doctor records." });
+  }
+});
+
+// Supabase Connection Status and Table Counts
+app.get("/api/supabase/status", async (req, res) => {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured) {
+    return res.json({
+      configured: false,
+      message: "Supabase credentials not configured in environment variables (SUPABASE_URL and SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY).",
+      counts: null,
+    });
+  }
+
+  const supabase = getSupabase();
+  if (!supabase) {
+    return res.json({
+      configured: false,
+      message: "Failed to initialize Supabase client.",
+      counts: null,
+    });
+  }
+
+  try {
+    const [
+      doctorsRes,
+      checkinsRes,
+      weeklyRes,
+      customDocsRes,
+      customPhonesRes,
+      deletedDocsRes,
+    ] = await Promise.all([
+      supabase.from("doctors").select("*", { count: "exact", head: true }),
+      supabase.from("checkins").select("*", { count: "exact", head: true }),
+      supabase.from("weekly_checkins").select("*", { count: "exact", head: true }),
+      supabase.from("custom_doctors").select("*", { count: "exact", head: true }),
+      supabase.from("custom_doctor_phones").select("*", { count: "exact", head: true }),
+      supabase.from("deleted_doctors").select("*", { count: "exact", head: true }),
+    ]);
+
+    const hasError =
+      doctorsRes.error ||
+      checkinsRes.error ||
+      weeklyRes.error ||
+      customDocsRes.error ||
+      customPhonesRes.error ||
+      deletedDocsRes.error;
+
+    return res.json({
+      configured: true,
+      url: config.url,
+      connected: !hasError,
+      errors: hasError
+        ? {
+            doctors: doctorsRes.error?.message,
+            checkins: checkinsRes.error?.message,
+            weekly_checkins: weeklyRes.error?.message,
+            custom_doctors: customDocsRes.error?.message,
+            custom_doctor_phones: customPhonesRes.error?.message,
+            deleted_doctors: deletedDocsRes.error?.message,
+          }
+        : null,
+      counts: {
+        doctors: doctorsRes.count ?? 0,
+        checkins: checkinsRes.count ?? 0,
+        weekly_checkins: weeklyRes.count ?? 0,
+        custom_doctors: customDocsRes.count ?? 0,
+        custom_doctor_phones: customPhonesRes.count ?? 0,
+        deleted_doctors: deletedDocsRes.count ?? 0,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      configured: true,
+      url: config.url,
+      connected: false,
+      error: err.message || "Failed to query Supabase status",
+    });
+  }
+});
+
+// Trigger Full Database Migration to Supabase
+app.post("/api/supabase/migrate", async (req, res) => {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured) {
+    return res.status(400).json({
+      success: false,
+      error: "Supabase environment variables (SUPABASE_URL and SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY) are not configured.",
+    });
+  }
+
+  const supabase = getSupabase();
+  if (!supabase) {
+    return res.status(500).json({
+      success: false,
+      error: "Supabase client failed to initialize.",
+    });
+  }
+
+  try {
+    const results: any = {};
+
+    // 1. Doctors Database - Deduplicate by unique primary key ID to guarantee no duplicate IDs in any batch
+    const uniqueDoctorMap = new Map<string, any>();
+    for (const d of NORMALIZED_DOCTORS_DATABASE) {
+      const cleanId = String(d.id || "").trim();
+      if (!cleanId) continue;
+      uniqueDoctorMap.set(cleanId, {
+        id: cleanId,
+        name: d.name ? String(d.name).trim() : "",
+        arabic_name: d.arabicName ? String(d.arabicName).trim() : (d.name ? String(d.name).trim() : ""),
+        department: d.department ? String(d.department).trim() : "General",
+        mobile_number: d.mobileNumber ? String(d.mobileNumber).trim() : "",
+        is_active: true,
+      });
+    }
+
+    const doctorRecords = Array.from(uniqueDoctorMap.values());
+    const BATCH_SIZE = 100;
+    let insertedDoctors = 0;
+    for (let i = 0; i < doctorRecords.length; i += BATCH_SIZE) {
+      const batch = doctorRecords.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase.from("doctors").upsert(batch, { onConflict: "id" });
+      if (error) {
+        if (error.message && error.message.toLowerCase().includes("permission denied")) {
+          throw new Error(`Permission denied for table 'doctors'. Please run the updated SQL Schema from the 'Supabase Migration' tab in your Supabase SQL Editor (to grant table access to anon and authenticated roles) or provide the SUPABASE_SERVICE_ROLE_KEY.`);
+        }
+        throw new Error(`Failed to upsert doctors table in Supabase: ${error.message}`);
+      }
+      insertedDoctors += batch.length;
+    }
+    results.doctors = insertedDoctors;
+
+    // 2. Custom Doctors - Deduplicate by ID
+    const customDocs = await loadCustomDoctors();
+    if (customDocs.length > 0) {
+      const uniqueCustomMap = new Map<string, any>();
+      for (const c of customDocs) {
+        const cleanId = String(c.id || "").trim();
+        if (!cleanId) continue;
+        uniqueCustomMap.set(cleanId, {
+          id: cleanId,
+          name: c.name ? String(c.name).trim() : "",
+          arabic_name: c.arabicName ? String(c.arabicName).trim() : (c.name ? String(c.name).trim() : ""),
+          department: c.department ? String(c.department).trim() : "General",
+          mobile_number: c.mobileNumber ? String(c.mobileNumber).trim() : "",
+          original_id: c.originalId ? String(c.originalId).trim() : "",
+          updated_at: c.updatedAt || new Date().toISOString(),
+        });
+      }
+      const formattedCustom = Array.from(uniqueCustomMap.values());
+      const { error } = await supabase.from("custom_doctors").upsert(formattedCustom, { onConflict: "id" });
+      if (error) throw new Error(`Failed to upsert custom_doctors in Supabase: ${error.message}`);
+      results.custom_doctors = formattedCustom.length;
+    } else {
+      results.custom_doctors = 0;
+    }
+
+    // 3. Custom Doctor Phones - Deduplicate by ID
+    const customPhones = await loadCustomDoctorsPhones();
+    const uniquePhonesMap = new Map<string, any>();
+    for (const [id, mobileNumber] of Object.entries(customPhones)) {
+      const cleanId = String(id || "").trim();
+      if (!cleanId) continue;
+      uniquePhonesMap.set(cleanId, {
+        id: cleanId,
+        mobile_number: String(mobileNumber || "").trim(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+    const phoneEntries = Array.from(uniquePhonesMap.values());
+    if (phoneEntries.length > 0) {
+      const { error } = await supabase.from("custom_doctor_phones").upsert(phoneEntries, { onConflict: "id" });
+      if (error) throw new Error(`Failed to upsert custom_doctor_phones in Supabase: ${error.message}`);
+      results.custom_doctor_phones = phoneEntries.length;
+    } else {
+      results.custom_doctor_phones = 0;
+    }
+
+    // 4. Deleted Doctors - Deduplicate by ID
+    const deletedKeysSet = await loadDeletedDoctorsKeys();
+    const uniqueDeletedMap = new Map<string, any>();
+    for (const id of deletedKeysSet) {
+      const cleanId = String(id || "").trim();
+      if (!cleanId) continue;
+      uniqueDeletedMap.set(cleanId, {
+        id: cleanId,
+        deleted_at: new Date().toISOString(),
+      });
+    }
+    const deletedList = Array.from(uniqueDeletedMap.values());
+    if (deletedList.length > 0) {
+      const { error } = await supabase.from("deleted_doctors").upsert(deletedList, { onConflict: "id" });
+      if (error) throw new Error(`Failed to upsert deleted_doctors in Supabase: ${error.message}`);
+      results.deleted_doctors = deletedList.length;
+    } else {
+      results.deleted_doctors = 0;
+    }
+
+    // 5. Daily Check-ins
+    const dailyCheckins = readCheckInsLocal();
+    if (dailyCheckins.length > 0) {
+      await supabase.from("checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const formattedDaily = dailyCheckins.map((c) => ({
+        doctor_id: c.id || "",
+        doctor_name: c.doctorName || "",
+        doctor_arabic_name: c.doctorArabicName || c.doctorName || "",
+        department: c.department || "General",
+        shifts: Array.isArray(c.shifts) ? c.shifts : [],
+        mobile_number: c.mobileNumber || "",
+        checkin_timestamp: c.timestamp || new Date().toISOString(),
+        checkin_date: getEgyptDateStr(c.timestamp),
+      }));
+      const { error } = await supabase.from("checkins").insert(formattedDaily);
+      if (error) throw new Error(`Failed to insert checkins in Supabase: ${error.message}`);
+      results.checkins = formattedDaily.length;
+    } else {
+      results.checkins = 0;
+    }
+
+    // 6. Weekly Check-ins
+    const weeklyCheckins = readWeeklyCheckInsLocal();
+    if (weeklyCheckins.length > 0) {
+      await supabase.from("weekly_checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const formattedWeekly = weeklyCheckins.map((w) => ({
+        doctor_id: w.id || "",
+        doctor_name: w.doctorName || "",
+        doctor_arabic_name: w.doctorArabicName || w.doctorName || "",
+        department: w.department || "General",
+        shifts: Array.isArray(w.shifts) ? w.shifts : [],
+        mobile_number: w.mobileNumber || "",
+        checkin_timestamp: w.timestamp || new Date().toISOString(),
+      }));
+      for (let i = 0; i < formattedWeekly.length; i += 100) {
+        const batch = formattedWeekly.slice(i, i + 100);
+        const { error } = await supabase.from("weekly_checkins").insert(batch);
+        if (error) throw new Error(`Failed to insert weekly_checkins in Supabase: ${error.message}`);
+      }
+      results.weekly_checkins = formattedWeekly.length;
+    } else {
+      results.weekly_checkins = 0;
+    }
+
+    res.json({
+      success: true,
+      message: "Database migration to Supabase completed successfully!",
+      results,
+    });
+  } catch (err: any) {
+    console.error("[Supabase Migration Error]:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || "Database migration failed.",
+    });
+  }
+});
+
+
+// Serve Frontend using Vite or static assets
+async function startServer() {
+  // Non-blocking background delta sync with Supabase
+  loadEnrichedDoctorsDatabase().catch(err => {
+    console.warn("[Elite Server] Background doctors delta sync:", err);
+  });
+
+  // Periodically check and clean up expired check-ins every 30 seconds
+  setInterval(() => {
+    cleanupExpiredCheckIns().catch(err => {
+      console.error("[Elite Server] Background cleanup check-ins failed:", err);
+    });
+  }, 30000);
+
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa"
+    });
+    app.use(vite.middlewares);
+  } else if (!process.env.VERCEL) {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  // Only bind to app port if we are not deployed on Vercel as a serverless function
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Elite Server] Hospital Check-In running on http://0.0.0.0:${PORT}`);
+    });
+  }
+}
+
+startServer();
+
+export default app;
