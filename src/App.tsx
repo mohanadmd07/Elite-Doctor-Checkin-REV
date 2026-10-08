@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import ExcelJS from "exceljs";
 import {
   Hospital,
   User,
@@ -42,6 +41,7 @@ import {
   Terminal,
   Server
 } from "lucide-react";
+import { CANONICAL_SPECIALTIES } from "./data/specialties.js";
 
 export const SUPABASE_SQL_SCHEMA_TEXT = `-- ==============================================================================
 -- ELITE HOSPITAL ATTENDANCE & PHYSICIAN SYSTEM - SUPABASE DATABASE MIGRATION
@@ -74,7 +74,24 @@ CREATE TABLE IF NOT EXISTS public.checkins (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- 3. Weekly Cumulative Check-ins (Cumulative logs for weekly reporting)
+-- 3. Monthly Cumulative Check-ins (Rolling 30-day attendance roster with FIFO sliding window)
+CREATE TABLE IF NOT EXISTS public.monthly_checkins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doctor_id TEXT NOT NULL,
+    doctor_name TEXT NOT NULL,
+    doctor_arabic_name TEXT,
+    department TEXT NOT NULL,
+    shifts TEXT[] NOT NULL DEFAULT '{}',
+    mobile_number TEXT,
+    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- Ensure checkin_date exists on monthly_checkins
+ALTER TABLE public.monthly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
+
+-- Backward compatibility for weekly_checkins table
 CREATE TABLE IF NOT EXISTS public.weekly_checkins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doctor_id TEXT NOT NULL,
@@ -84,8 +101,10 @@ CREATE TABLE IF NOT EXISTS public.weekly_checkins (
     shifts TEXT[] NOT NULL DEFAULT '{}',
     mobile_number TEXT,
     checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+ALTER TABLE public.weekly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
 
 -- 4. Custom Doctor Overrides (Persisted custom added or edited physicians)
 CREATE TABLE IF NOT EXISTS public.custom_doctors (
@@ -113,19 +132,51 @@ CREATE TABLE IF NOT EXISTS public.deleted_doctors (
     deleted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- Indexes for fast querying and filtering
+-- Indexes for fast querying, deduplication, and atomic operations
 CREATE INDEX IF NOT EXISTS idx_doctors_name ON public.doctors (name);
-CREATE INDEX IF NOT EXISTS idx_doctors_dept ON public.doctors (department);
 CREATE INDEX IF NOT EXISTS idx_doctors_active ON public.doctors (is_active);
+CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_fast ON public.doctors (department) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (department, name) WHERE is_active = true;
+
+-- Enforce canonical medical specialties on active records
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_active_canonical_dept') THEN
+    ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
+    CHECK (
+      is_active = false OR department IN (
+        'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
+        'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
+      )
+    );
+  END IF;
+END $$;
+
+-- Daily checkins: unique index on doctor_id ensures 1 active check-in per physician and enables atomic upserts
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_doctor_id_unique ON public.checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_date ON public.checkins (checkin_date);
-CREATE INDEX IF NOT EXISTS idx_checkins_doctor_id ON public.checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_timestamp ON public.checkins (checkin_timestamp);
+
+-- Monthly checkins: 30-day rolling window indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_date ON public.monthly_checkins (doctor_id, checkin_date);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_id ON public.monthly_checkins (doctor_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date ON public.monthly_checkins (checkin_date ASC);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date_ts ON public.monthly_checkins (checkin_date, checkin_timestamp DESC);
+
+-- Weekly checkins: backward-compatible indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_date ON public.weekly_checkins (doctor_id, checkin_date);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_id ON public.weekly_checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_timestamp ON public.weekly_checkins (checkin_timestamp);
+CREATE INDEX IF NOT EXISTS idx_weekly_checkins_date_ts ON public.weekly_checkins (checkin_date, checkin_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_custom_doctors_name ON public.custom_doctors (name);
 
 -- Enable Row Level Security (RLS) on all tables
 ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.checkins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.monthly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.weekly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctor_phones ENABLE ROW LEVEL SECURITY;
@@ -149,6 +200,9 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to checkins' AND tablename = 'checkins') THEN
     CREATE POLICY "Public access to checkins" ON public.checkins FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to monthly_checkins' AND tablename = 'monthly_checkins') THEN
+    CREATE POLICY "Public access to monthly_checkins" ON public.monthly_checkins FOR ALL USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to weekly_checkins' AND tablename = 'weekly_checkins') THEN
     CREATE POLICY "Public access to weekly_checkins" ON public.weekly_checkins FOR ALL USING (true) WITH CHECK (true);
@@ -288,24 +342,17 @@ interface CheckIn {
   mobileNumber?: string;
 }
 
-const COMMON_DEPARTMENTS = [
-  "Nutrition",
-  "Anesthesia and pain therapy",
-  "4D Clinic",
-  "Emergency Medicine",
-  "Cardiology",
-  "Pediatrics",
-  "Internal Medicine",
-  "ICU",
-  "Orthopedics",
-  "General Surgery",
-  "Physical Medicine",
-  "Radiology",
-  "Nephrology"
-];
+const COMMON_DEPARTMENTS: readonly string[] = CANONICAL_SPECIALTIES;
 
-export default function App() {
-  // Live clock state
+// Dynamic ExcelJS workbook creator (lazy imports ExcelJS to prevent bundle bloat)
+const createExcelWorkbook = async () => {
+  const excelModule = await import("exceljs");
+  const ExcelClass = (excelModule as any).default || excelModule;
+  return new ExcelClass.Workbook();
+};
+
+// Isolated Live Clock component to prevent root-level full tree re-renders every 1s
+function LiveClock() {
   const [liveTime, setLiveTime] = useState(new Date());
 
   useEffect(() => {
@@ -315,20 +362,26 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const formatLiveTime = (date: Date) => {
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12; // the hour '0' should be '12'
-    const hoursStr = String(hours).padStart(2, '0');
-    return `${day}/${month}/${year} | ${hoursStr}:${minutes}:${seconds} ${ampm}`;
-  };
+  const day = String(liveTime.getDate()).padStart(2, '0');
+  const month = String(liveTime.getMonth() + 1).padStart(2, '0');
+  const year = liveTime.getFullYear();
+  let hours = liveTime.getHours();
+  const minutes = String(liveTime.getMinutes()).padStart(2, '0');
+  const seconds = String(liveTime.getSeconds()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const hoursStr = String(hours).padStart(2, '0');
+  const formatted = `${day}/${month}/${year} | ${hoursStr}:${minutes}:${seconds} ${ampm}`;
 
+  return (
+    <p className="text-[10px] text-emerald-800 font-bold font-mono bg-white/75 px-3 py-1 rounded border border-[#cbdad5]/50 shadow-inner inline-block backdrop-blur-xs">
+      {formatted}
+    </p>
+  );
+}
+
+export default function App() {
   // Navigation & Screen states
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [adminPasscode, setAdminPasscode] = useState("");
@@ -362,11 +415,15 @@ export default function App() {
   const [adminDeptFilter, setAdminDeptFilter] = useState("All");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showWeeklyResetConfirm, setShowWeeklyResetConfirm] = useState(false);
+  const [showMonthlyResetConfirm, setShowMonthlyResetConfirm] = useState(false);
+  const showWeeklyResetConfirm = showMonthlyResetConfirm;
+  const setShowWeeklyResetConfirm = setShowMonthlyResetConfirm;
   const [suggestions, setSuggestions] = useState<Doctor[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isDownloadingDaily, setIsDownloadingDaily] = useState(false);
-  const [isDownloadingWeekly, setIsDownloadingWeekly] = useState(false);
+  const [isDownloadingMonthly, setIsDownloadingMonthly] = useState(false);
+  const isDownloadingWeekly = isDownloadingMonthly;
+  const setIsDownloadingWeekly = setIsDownloadingMonthly;
 
   // Editing active checked-in doctor phone number
   const [editingCheckedInDoctorId, setEditingCheckedInDoctorId] = useState<string | null>(null);
@@ -481,6 +538,43 @@ export default function App() {
   const [isSavingDoctor, setIsSavingDoctor] = useState(false);
   const [doctorSaveMsg, setDoctorSaveMsg] = useState("");
   const [isDownloadingDatabase, setIsDownloadingDatabase] = useState(false);
+
+  // Global Escape key listener to close any active modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showAdminLogin) {
+          setShowAdminLogin(false);
+          setAdminPasscode("");
+          setAdminError("");
+        }
+        if (deleteConfirmId) setDeleteConfirmId(null);
+        if (showResetConfirm) setShowResetConfirm(false);
+        if (showWeeklyResetConfirm) setShowWeeklyResetConfirm(false);
+        if (editingCheckedInDoctorId) setEditingCheckedInDoctorId(null);
+        if (isDoctorModalOpen) setIsDoctorModalOpen(false);
+        if (deleteModalState.isOpen && !isDeletingDoctor) {
+          setDeleteModalState(prev => ({ ...prev, isOpen: false }));
+        }
+        if (confirmModalState.isOpen && !isConfirmingAction) {
+          setConfirmModalState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    showAdminLogin,
+    deleteConfirmId,
+    showResetConfirm,
+    showWeeklyResetConfirm,
+    editingCheckedInDoctorId,
+    isDoctorModalOpen,
+    deleteModalState.isOpen,
+    isDeletingDoctor,
+    confirmModalState.isOpen,
+    isConfirmingAction
+  ]);
 
   const handleToggleSelectDoctor = (id: string) => {
     setSelectedDbDoctorIds((prev) =>
@@ -650,7 +744,7 @@ export default function App() {
       }
       const doctors = [...rawDoctors].sort((a, b) => compareDoctorIds(a.id, b.id));
 
-      const workbook = new ExcelJS.Workbook();
+      const workbook = await createExcelWorkbook();
       const worksheet = workbook.addWorksheet("Physician Database", {
         views: [{ showGridLines: true }]
       });
@@ -1312,39 +1406,41 @@ export default function App() {
     }
   };
 
-  // Clear weekly cumulative check-ins database
-  const handleClearWeeklyCheckins = () => {
-    setShowWeeklyResetConfirm(true);
+  // Clear monthly cumulative check-ins database
+  const handleClearMonthlyCheckins = () => {
+    setShowMonthlyResetConfirm(true);
   };
+  const handleClearWeeklyCheckins = handleClearMonthlyCheckins;
 
-  const confirmClearWeeklyCheckins = async () => {
+  const confirmClearMonthlyCheckins = async () => {
     try {
-      const res = await fetch("/api/checkins/clear-weekly", {
+      const res = await fetch("/api/checkins/clear-monthly", {
         method: "POST"
       });
       if (res.ok) {
-        alert("Cumulative weekly check-ins database cleared successfully.");
+        alert("Cumulative 30-day monthly check-ins database cleared successfully.");
       }
     } catch (err) {
-      console.error("Error clearing weekly checkins:", err);
+      console.error("Error clearing monthly checkins:", err);
     } finally {
-      setShowWeeklyResetConfirm(false);
+      setShowMonthlyResetConfirm(false);
     }
   };
+  const confirmClearWeeklyCheckins = confirmClearMonthlyCheckins;
 
-  // Download Cumulative Weekly Excel Sheet with sub-sheets per weekday date
-  const downloadWeeklyCSVReport = async () => {
-    setIsDownloadingWeekly(true);
+  // Download Cumulative Monthly Excel Sheet (30-day rolling attendance roster with sub-sheets per weekday date)
+  const downloadMonthlyCSVReport = async () => {
+    setIsDownloadingMonthly(true);
     try {
-      const res = await fetch("/api/weekly-checkins");
+      const res = await fetch("/api/monthly-checkins");
       if (!res.ok) {
-        alert("Failed to fetch cumulative weekly data.");
+        alert("Failed to fetch cumulative monthly data.");
         return;
       }
-      const weeklyData: CheckIn[] = await res.json();
-      if (weeklyData.length === 0) {
+      const monthlyData: CheckIn[] = await res.json();
+      if (monthlyData.length === 0) {
         // Create an empty template sheet so it's always ready to download at any time!
-        const workbook = new ExcelJS.Workbook();
+        const workbook = await createExcelWorkbook();
         const d = new Date();
         const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
         const dateStr = d.toISOString().split("T")[0];
@@ -1378,7 +1474,7 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `Weekly_Cumulative_Roster_${dateStr}.xlsx`;
+        link.download = `Monthly_Cumulative_Roster_${dateStr}.xlsx`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -1445,9 +1541,9 @@ export default function App() {
         }
       };
 
-      // Group weekly data by weekday date (tab name)
+      // Group monthly data by weekday date (tab name)
       const groupedByDate: { [key: string]: CheckIn[] } = {};
-      weeklyData.forEach((c) => {
+      monthlyData.forEach((c) => {
         const sheetName = getSheetName(c.timestamp);
         if (!groupedByDate[sheetName]) {
           groupedByDate[sheetName] = [];
@@ -1462,7 +1558,7 @@ export default function App() {
         return new Date(dateA).getTime() - new Date(dateB).getTime();
       });
 
-      const workbook = new ExcelJS.Workbook();
+      const workbook = await createExcelWorkbook();
 
       // For every sheet/weekday date, construct following the day sheet template
       sortedSheetNames.forEach((sheetName) => {
@@ -1525,8 +1621,8 @@ export default function App() {
           const separatorRow = worksheet.getRow(currentRowNum);
           separatorRow.height = 26;
           
-        // Merge columns 1 to 6
-        worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
+          // Merge columns 1 to 6
+          worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
           
           const firstCell = separatorRow.getCell(1);
           firstCell.value = `■ ${dept} ■`;
@@ -1615,18 +1711,19 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `Weekly_Cumulative_Roster_${new Date().toISOString().split('T')[0]}.xlsx`;
+      link.download = `Monthly_Cumulative_Roster_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Error exporting weekly excel:", err);
-      alert("Failed to export styled weekly Excel sheet.");
+      console.error("Error exporting monthly excel:", err);
+      alert("Failed to export styled monthly Excel sheet.");
     } finally {
-      setIsDownloadingWeekly(false);
+      setIsDownloadingMonthly(false);
     }
   };
+  const downloadWeeklyCSVReport = downloadMonthlyCSVReport;
 
   // Admin & Coordinator login handler
   const handleAdminLogin = (e: React.FormEvent) => {
@@ -1680,7 +1777,7 @@ export default function App() {
       return `${month}/${day}/${year} ${hours}:${minutes}`;
     };
 
-    const workbook = new ExcelJS.Workbook();
+    const workbook = await createExcelWorkbook();
     const worksheet = workbook.addWorksheet("Roster Report", {
       views: [{ showGridLines: true }]
     });
@@ -1875,7 +1972,7 @@ export default function App() {
         </div>
         <div className="flex items-center gap-6 relative z-10">
           <div className="text-right hidden sm:block leading-none">
-            <p className="text-[10px] text-emerald-800 font-bold font-mono bg-white/75 px-3 py-1 rounded border border-[#cbdad5]/50 shadow-inner inline-block backdrop-blur-xs">{formatLiveTime(liveTime)}</p>
+            <LiveClock />
           </div>
           {isAdminAuthenticated ? (
             <div className="flex items-center gap-2">
@@ -1983,10 +2080,10 @@ export default function App() {
                   {/* STEP 1: Enter ID / Code */}
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
-                      <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      <label htmlFor="physician-id-input" className="text-xs font-extrabold text-slate-700 uppercase tracking-wider block cursor-pointer">
                         Enter Employee ID or Name
                       </label>
-                      <span className="text-slate-400 font-bold text-xs font-mono">البحث بالاسم أو الرمز الوظيفي</span>
+                      <span className="text-slate-600 font-bold text-xs font-mono">البحث بالاسم أو الرمز الوظيفي</span>
                     </div>
 
                     <form onSubmit={handleSearchDoctor} className="flex gap-2">
@@ -2005,7 +2102,7 @@ export default function App() {
                            disabled={submitting || !!submitSuccess}
                            className="w-full h-14 px-4 bg-[#fbfdfc] border-2 border-[#cbdad5] rounded-lg text-lg font-sans focus:border-[#063b30] focus:bg-white outline-none transition-all"
                         />
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
                           <Search className="w-5 h-5" />
                         </div>
 
@@ -2034,7 +2131,7 @@ export default function App() {
                                   <span className="text-[10px] font-black bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full uppercase">
                                     {doc.department}
                                   </span>
-                                  <div className="text-[10px] text-slate-400 font-mono mt-1">ID: {doc.id}</div>
+                                  <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {doc.id}</div>
                                 </div>
                               </button>
                             ))}
@@ -2046,7 +2143,7 @@ export default function App() {
                         id="search-doctor-btn"
                         type="submit"
                         disabled={!inputId.trim() || submitting || !!submitSuccess}
-                        className="h-14 px-6 bg-[#7ea198] hover:bg-[#6b8e86] text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-sm"
+                        className="h-14 px-6 bg-[#063b30] hover:bg-[#042d24] text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-sm cursor-pointer"
                       >
                         Find Profile
                       </button>
@@ -2091,8 +2188,9 @@ export default function App() {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">English Name</label>
+                                <label htmlFor="manual-doctor-name" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">English Name</label>
                                 <input
+                                  id="manual-doctor-name"
                                   type="text"
                                   placeholder="Dr. First Last"
                                   value={manualName}
@@ -2101,8 +2199,9 @@ export default function App() {
                                 />
                               </div>
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block text-right">اسم الطبيب (بالعربية)</label>
+                                <label htmlFor="manual-doctor-arabic-name" className="text-xs font-bold text-slate-700 uppercase tracking-wider block text-right">اسم الطبيب (بالعربية)</label>
                                 <input
+                                  id="manual-doctor-arabic-name"
                                   type="text"
                                   dir="rtl"
                                   placeholder="د. الاسم الكامل"
@@ -2114,8 +2213,9 @@ export default function App() {
                             </div>
 
                             <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Department / Specialty</label>
+                              <label htmlFor="manual-doctor-dept" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Department / Specialty</label>
                               <select
+                                id="manual-doctor-dept"
                                 value={manualDept}
                                 onChange={(e) => setManualDept(e.target.value)}
                                 className="w-full px-4 py-2.5 bg-white border border-[#cbdad5] rounded-lg text-sm text-slate-800 focus:border-[#063b30] outline-none"
@@ -2136,7 +2236,7 @@ export default function App() {
                   {/* STEP 3: Shift Selection */}
                   <div className="space-y-3 transition-all duration-200">
                     <div className="flex justify-between items-end">
-                      <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                         Shift Assignment (Select Shifts)
                       </label>
                       <span className="text-xs text-emerald-900 bg-emerald-100 px-2.5 py-0.5 rounded font-bold font-mono">
@@ -2153,11 +2253,12 @@ export default function App() {
                             id={`shift-card-${shift.id.replace(/\s+/g, "-")}`}
                             key={`shift-${shift.id}-${idx}`}
                             type="button"
+                            aria-pressed={isSelected}
                             onClick={() => handleToggleShift(shift.id)}
                             className={`flex items-center p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 text-left justify-between ${
                               isSelected
                                 ? "border-[#063b30] bg-[#e6f2ee]/30 ring-4 ring-[#063b30]/10 text-[#063b30] font-bold"
-                                : "border-[#cbdad5] bg-[#fbfdfc] hover:border-emerald-300 text-slate-500"
+                                : "border-[#cbdad5] bg-[#fbfdfc] hover:border-emerald-300 text-slate-600"
                             }`}
                           >
                             <div className="flex items-center">
@@ -2167,7 +2268,7 @@ export default function App() {
                               </div>
                               <div className="leading-tight">
                                 <span className={`text-sm font-bold block ${isSelected ? "text-[#063b30]" : "text-slate-800"}`}>{shift.labelEn}</span>
-                                <span className="text-[10px] text-slate-400 block font-medium mt-0.5">{shift.descriptionEn}</span>
+                                <span className="text-[10px] text-slate-500 block font-medium mt-0.5">{shift.descriptionEn}</span>
                               </div>
                             </div>
                             <span className="font-bold text-xs arabic-font shrink-0 ml-1">{shift.labelAr}</span>
@@ -2179,7 +2280,7 @@ export default function App() {
 
                   {/* Errors / Warnings */}
                   {errorMessage && (
-                    <div className="bg-red-50 text-red-800 px-4 py-3 rounded-lg border border-red-100 flex items-start gap-2 text-xs font-semibold">
+                    <div role="alert" aria-live="assertive" className="bg-red-50 text-red-800 px-4 py-3 rounded-lg border border-red-200 flex items-start gap-2 text-xs font-semibold">
                       <AlertCircle className="w-4.5 h-4.5 shrink-0 text-red-600" />
                       <span>{errorMessage}</span>
                     </div>
@@ -2470,6 +2571,7 @@ export default function App() {
                                 onChange={handleSelectAllFilteredDoctors}
                                 className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
                                 title="Select / Deselect all visible doctors"
+                                aria-label="Select or deselect all visible physicians"
                               />
                             </th>
                             <th className="py-3.5 px-4">Emp ID</th>
@@ -2503,6 +2605,7 @@ export default function App() {
                                       checked={isSelected}
                                       onChange={() => handleToggleSelectDoctor(doc.id)}
                                       className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                                      aria-label={`Select Dr. ${doc.name}`}
                                     />
                                   </td>
                                   <td className="py-3 px-4 font-mono font-bold text-[#063b30]">
@@ -2526,17 +2629,19 @@ export default function App() {
                                         </span>
                                         <button
                                           onClick={() => handleOpenEditDoctor(doc)}
-                                          className="p-1 text-slate-400 hover:text-[#063b30] hover:bg-slate-100 rounded transition-colors"
+                                          className="p-2 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-[#063b30] hover:bg-slate-100 rounded transition-colors cursor-pointer"
                                           title="Edit phone number"
+                                          aria-label={`Edit phone number for Dr. ${doc.name}`}
                                         >
-                                          <Edit className="w-3 h-3" />
+                                          <Edit className="w-3.5 h-3.5" />
                                         </button>
                                       </div>
                                     ) : (
                                       <button
                                         onClick={() => handleOpenEditDoctor(doc)}
-                                        className="text-xs font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded border border-emerald-200 flex items-center gap-1 transition-colors cursor-pointer"
+                                        className="text-xs font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 min-h-[32px] rounded border border-emerald-200 flex items-center gap-1 transition-colors cursor-pointer"
                                         title="Add phone number for this physician"
+                                        aria-label={`Add phone number for Dr. ${doc.name}`}
                                       >
                                         <Phone className="w-3 h-3 text-emerald-600" />
                                         <span>+ Add Phone</span>
@@ -2547,16 +2652,18 @@ export default function App() {
                                     <div className="flex items-center justify-center gap-2">
                                       <button
                                         onClick={() => handleOpenEditDoctor(doc)}
-                                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-[11px] border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
+                                        className="px-2.5 py-1.5 min-h-[32px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-[11px] border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
                                         title="Edit physician details (ID, Names, Specialty, Phone)"
+                                        aria-label={`Edit physician details for Dr. ${doc.name}`}
                                       >
                                         <Edit className="w-3 h-3 text-slate-600" />
                                         <span>Edit</span>
                                       </button>
                                       <button
                                         onClick={() => handleOpenSingleDeleteModal(doc.id)}
-                                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                        className="p-2 min-w-[32px] min-h-[32px] flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded transition-colors cursor-pointer"
                                         title="Delete physician from database"
+                                        aria-label={`Delete physician Dr. ${doc.name} from database`}
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
                                       </button>
@@ -2935,11 +3042,11 @@ export default function App() {
                       </div>
 
                       <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">weekly</span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">monthly</span>
                         <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.weekly_checkins : "—"}
+                          {supabaseStatus?.counts ? (supabaseStatus.counts.monthly_checkins ?? supabaseStatus.counts.weekly_checkins ?? "—") : "—"}
                         </span>
-                        <span className="text-[9px] text-slate-400">Cumulative</span>
+                        <span className="text-[9px] text-slate-400">30-Day Rolling</span>
                       </div>
 
                       <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
@@ -2977,7 +3084,7 @@ export default function App() {
                           <span>One-Click Full Database Migration</span>
                         </h4>
                         <p className="text-xs text-emerald-100 leading-relaxed">
-                          Pushes all physician records ({fullDoctorList.length} total), custom physician modifications, phone overrides, active daily check-ins, and cumulative weekly check-ins to Supabase with automatic deduplication.
+                          Pushes all physician records ({fullDoctorList.length} total), custom physician modifications, phone overrides, active daily check-ins, and 30-day rolling monthly check-ins to Supabase with automatic deduplication.
                         </p>
                       </div>
 
@@ -3028,8 +3135,8 @@ export default function App() {
                               <span className="text-white font-bold">{supabaseMigrateResult.results.checkins}</span>
                             </div>
                             <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Weekly:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.weekly_checkins}</span>
+                              <span className="text-slate-400 block text-[9px]">Monthly:</span>
+                              <span className="text-white font-bold">{supabaseMigrateResult.results.monthly_checkins ?? supabaseMigrateResult.results.weekly_checkins ?? 0}</span>
                             </div>
                             <div className="bg-black/30 p-2 rounded">
                               <span className="text-slate-400 block text-[9px]">Custom:</span>
@@ -3281,14 +3388,14 @@ export default function App() {
                     {/* Daily Operations */}
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2 border-b md:border-b-0 md:border-r border-slate-200 pb-4 md:pb-0 pr-0 md:pr-4">
                       <div className="flex items-center gap-1.5 min-w-[55px]">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Daily:</span>
+                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider">Daily:</span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           id="download-report-btn"
                           onClick={downloadCSVReport}
                           disabled={checkins.length === 0 || isDownloadingDaily}
-                          className="bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          className="bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                           title="Download today's spreadsheet"
                         >
                           {isDownloadingDaily ? (
@@ -3303,7 +3410,7 @@ export default function App() {
                           id="clear-all-records-btn"
                           onClick={handleClearAllCheckins}
                           disabled={isDownloadingDaily}
-                          className="bg-red-50 hover:bg-red-100 text-red-700 font-bold text-[11px] py-2 px-3 rounded border border-red-200 transition-colors disabled:opacity-50"
+                          className="bg-red-50 hover:bg-red-100 text-red-700 font-bold text-[11px] py-2 px-3 rounded border border-red-200 transition-colors disabled:opacity-50 cursor-pointer"
                           title="Clear All Submissions for today only"
                         >
                           RESET TODAY
@@ -3311,35 +3418,35 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Weekly Operations */}
+                    {/* Monthly Operations (30-Day Rolling Window) */}
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                       <div className="flex items-center gap-1.5 min-w-[55px]">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Weekly:</span>
+                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider">Monthly:</span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
-                          id="download-weekly-report-btn"
-                          onClick={downloadWeeklyCSVReport}
-                          disabled={isDownloadingWeekly}
+                          id="download-monthly-report-btn"
+                          onClick={downloadMonthlyCSVReport}
+                          disabled={isDownloadingMonthly}
                           className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                          title="Download weekly cumulative sheet"
+                          title="Download monthly cumulative sheet (30-day rolling roster)"
                         >
-                          {isDownloadingWeekly ? (
+                          {isDownloadingMonthly ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <FileSpreadsheet className="w-3.5 h-3.5" />
                           )}
-                          <span>{isDownloadingWeekly ? "DOWNLOADING..." : "DOWNLOAD WEEKLY XLS"}</span>
+                          <span>{isDownloadingMonthly ? "DOWNLOADING..." : "DOWNLOAD MONTHLY XLS (30 DAYS)"}</span>
                         </button>
                         
                         <button
-                          id="clear-weekly-records-btn"
-                          onClick={handleClearWeeklyCheckins}
-                          disabled={isDownloadingWeekly}
+                          id="clear-monthly-records-btn"
+                          onClick={handleClearMonthlyCheckins}
+                          disabled={isDownloadingMonthly}
                           className="bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[11px] py-2 px-3 rounded border border-amber-200 transition-colors disabled:opacity-50"
-                          title="Reset weekly cumulative sheet database"
+                          title="Reset monthly cumulative sheet database"
                         >
-                          RESET WEEKLY
+                          RESET MONTHLY
                         </button>
                       </div>
                     </div>
@@ -3372,7 +3479,7 @@ export default function App() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Left Column: Search & Select Doctor */}
                   <div className="space-y-3">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    <label htmlFor="directory-search-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                       Search Persistent Physician Database (ID or Name)
                     </label>
                     <div className="relative">
@@ -3384,7 +3491,7 @@ export default function App() {
                         onChange={(e) => setDirectorySearch(e.target.value)}
                         className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm text-slate-800 focus:bg-white focus:border-[#063b30] outline-none transition-all"
                       />
-                      <Search className="w-4.5 h-4.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <Search className="w-4.5 h-4.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     </div>
 
                     {/* Suggestions list for Directory Search */}
@@ -3434,7 +3541,7 @@ export default function App() {
                         </div>
 
                         <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          <label htmlFor="directory-phone-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                             Set Persistent Phone Number
                           </label>
                           <div className="flex gap-2">
@@ -3507,7 +3614,7 @@ export default function App() {
                         <div key={`grp-${dept}-${idx}`} className="space-y-3">
                           <div className="flex items-center gap-2">
                             <div className="h-[1px] flex-1 bg-slate-200"></div>
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{dept}</span>
+                            <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">{dept}</span>
                             <div className="h-[1px] flex-1 bg-slate-200"></div>
                           </div>
                           
@@ -3519,9 +3626,9 @@ export default function App() {
                                     <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-slate-200 text-[10px] shrink-0">{c.id}</span>
                                     <span className="font-semibold text-slate-800 truncate">{c.doctorName}</span>
                                   </div>
-                                  <div className="flex items-center gap-3 text-[10px] text-slate-450 font-mono pl-0.5 flex-wrap">
+                                  <div className="flex items-center gap-3 text-[10px] text-slate-600 font-mono pl-0.5 flex-wrap">
                                     <div className="flex items-center gap-1">
-                                      <Clock className="w-3 h-3 text-[#063b30] opacity-55" />
+                                      <Clock className="w-3 h-3 text-[#063b30] opacity-75" />
                                       <span>{formatTimestamp(c.timestamp)}</span>
                                     </div>
                                     <div className="flex items-center gap-1.5">
@@ -3531,14 +3638,15 @@ export default function App() {
                                           <span>{c.mobileNumber}</span>
                                         </div>
                                       ) : (
-                                        <span className="text-[9px] text-slate-400 italic bg-slate-100 px-1.5 py-0.5 rounded">No phone</span>
+                                        <span className="text-[9px] text-slate-500 italic bg-slate-100 px-1.5 py-0.5 rounded">No phone</span>
                                       )}
                                       <button
                                         onClick={() => handleEditCheckedInPhone(c.id, c.mobileNumber || "")}
-                                        className="p-1 text-slate-400 hover:text-[#063b30] hover:bg-slate-200/60 rounded transition-colors"
+                                        className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-[#063b30] hover:bg-slate-200/60 rounded transition-colors cursor-pointer"
                                         title="Edit physician phone number"
+                                        aria-label={`Edit phone number for Dr. ${c.doctorName}`}
                                       >
-                                        <Phone className="w-3 h-3 text-slate-500 hover:text-[#063b30]" />
+                                        <Phone className="w-3.5 h-3.5" />
                                       </button>
                                     </div>
                                   </div>
@@ -3550,8 +3658,9 @@ export default function App() {
                                   </span>
                                   <button
                                     onClick={() => handleDeleteCheckin(c.id)}
-                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                                     title="Delete physician check-in"
+                                    aria-label={`Delete check-in for Dr. ${c.doctorName}`}
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -3583,6 +3692,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-auth-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95 }}
@@ -3593,15 +3705,17 @@ export default function App() {
               <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2">
                   <Lock className="w-4.5 h-4.5 text-[#063b30]" />
-                  <span className="font-extrabold text-slate-900 text-sm uppercase">AUTHENTICATION REQUIRED</span>
+                  <span id="admin-auth-modal-title" className="font-extrabold text-slate-900 text-sm uppercase">AUTHENTICATION REQUIRED</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => {
                     setShowAdminLogin(false);
                     setAdminPasscode("");
                     setAdminError("");
                   }}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-200/50"
+                  className="text-slate-400 hover:text-slate-600 p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-slate-200/50 cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3609,7 +3723,7 @@ export default function App() {
 
               <form onSubmit={handleAdminLogin} className="p-5 space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Admin / Coordinator Passcode</label>
+                  <label htmlFor="admin-passcode-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Admin / Coordinator Passcode</label>
                   <input
                     id="admin-passcode-input"
                     type="password"
@@ -3622,7 +3736,7 @@ export default function App() {
                 </div>
 
                 {adminError && (
-                  <p className="text-red-600 font-semibold text-xs flex items-center gap-1">
+                  <p role="alert" aria-live="assertive" className="text-red-600 font-semibold text-xs flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                     <span>{adminError}</span>
                   </p>
@@ -3650,6 +3764,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-attendance-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95 }}
@@ -3660,11 +3777,13 @@ export default function App() {
               <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2 text-red-700">
                   <Trash2 className="w-4.5 h-4.5" />
-                  <span className="font-extrabold text-slate-900 text-sm uppercase">Delete Attendance Record</span>
+                  <span id="delete-attendance-modal-title" className="font-extrabold text-slate-900 text-sm uppercase">Delete Attendance Record</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setDeleteConfirmId(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-200/50"
+                  className="text-slate-400 hover:text-slate-600 p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-slate-200/50 cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3677,14 +3796,16 @@ export default function App() {
                 
                 <div className="flex gap-3 pt-2">
                   <button
+                    type="button"
                     onClick={() => setDeleteConfirmId(null)}
-                    className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs uppercase border border-slate-200 transition-all"
+                    className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs uppercase border border-slate-200 transition-all cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
+                    type="button"
                     onClick={confirmDeleteCheckin}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm"
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer"
                   >
                     Delete Record
                   </button>
@@ -3703,6 +3824,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="reset-today-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95 }}
@@ -3713,11 +3837,13 @@ export default function App() {
               <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2 text-amber-600">
                   <AlertCircle className="w-4.5 h-4.5" />
-                  <span className="font-extrabold text-slate-900 text-sm uppercase">Reset Daily Roster</span>
+                  <span id="reset-today-modal-title" className="font-extrabold text-slate-900 text-sm uppercase">Reset Daily Roster</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setShowResetConfirm(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-200/50"
+                  className="text-slate-400 hover:text-slate-600 p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-slate-200/50 cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3733,14 +3859,16 @@ export default function App() {
                 
                 <div className="flex gap-3 pt-2">
                   <button
+                    type="button"
                     onClick={() => setShowResetConfirm(false)}
-                    className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs uppercase border border-slate-200 transition-all"
+                    className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs uppercase border border-slate-200 transition-all cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
+                    type="button"
                     onClick={confirmClearAllCheckins}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm"
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer"
                   >
                     Yes, Reset All
                   </button>
@@ -3752,13 +3880,17 @@ export default function App() {
       </AnimatePresence>
 
       {/* Reset Weekly Confirmation Modal */}
+      {/* Reset Monthly Confirmation Modal */}
       <AnimatePresence>
-        {showWeeklyResetConfirm && (
+        {showMonthlyResetConfirm && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="reset-monthly-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95 }}
@@ -3769,11 +3901,13 @@ export default function App() {
               <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2 text-red-600">
                   <AlertCircle className="w-4.5 h-4.5" />
-                  <span className="font-extrabold text-slate-900 text-sm uppercase">Reset Weekly Roster</span>
+                  <span id="reset-monthly-modal-title" className="font-extrabold text-slate-900 text-sm uppercase">Reset Monthly Roster (30 Days)</span>
                 </div>
                 <button
-                  onClick={() => setShowWeeklyResetConfirm(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-200/50"
+                  type="button"
+                  onClick={() => setShowMonthlyResetConfirm(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-slate-200/50 cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3781,24 +3915,24 @@ export default function App() {
 
               <div className="p-5 space-y-4">
                 <div className="bg-red-50 text-red-900 px-3.5 py-3 rounded-lg border border-red-100 text-xs font-semibold leading-relaxed">
-                  ⚠️ WARNING: This will permanently delete the cumulative weekly check-in sheet database. This action cannot be undone.
+                  ⚠️ WARNING: This will permanently delete the 30-day cumulative monthly check-in sheet database. This action cannot be undone.
                 </div>
                 <p className="text-sm text-slate-600 leading-relaxed">
-                  Are you absolutely sure you want to proceed and clear the weekly check-ins database?
+                  Are you absolutely sure you want to proceed and clear the monthly check-ins database?
                 </p>
                 
                 <div className="flex gap-3 pt-2">
                   <button
-                    onClick={() => setShowWeeklyResetConfirm(false)}
+                    onClick={() => setShowMonthlyResetConfirm(false)}
                     className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded text-xs uppercase border border-slate-200 transition-all"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={confirmClearWeeklyCheckins}
+                    onClick={confirmClearMonthlyCheckins}
                     className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm"
                   >
-                    Yes, Reset Weekly
+                    Yes, Reset Monthly
                   </button>
                 </div>
               </div>
@@ -3815,6 +3949,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-phone-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95 }}
@@ -3825,11 +3962,13 @@ export default function App() {
               <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div className="flex items-center gap-2 text-[#063b30]">
                   <Phone className="w-4.5 h-4.5" />
-                  <span className="font-extrabold text-slate-900 text-sm uppercase">Edit Doctor Phone Number</span>
+                  <span id="edit-phone-modal-title" className="font-extrabold text-slate-900 text-sm uppercase">Edit Doctor Phone Number</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setEditingCheckedInDoctorId(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-200/50"
+                  className="text-slate-400 hover:text-slate-600 p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-slate-200/50 cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3841,7 +3980,7 @@ export default function App() {
                 </p>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Mobile Phone Number</label>
+                  <label htmlFor="checkedin-phone-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Mobile Phone Number</label>
                   <input
                     id="checkedin-phone-input"
                     type="text"
@@ -3881,6 +4020,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="doctor-edit-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95, y: 10 }}
@@ -3890,14 +4032,15 @@ export default function App() {
             >
               {/* Modal Header */}
               <div className="bg-[#063b30] text-white px-6 py-4 flex items-center justify-between">
-                <h3 className="font-extrabold text-base flex items-center gap-2">
+                <h3 id="doctor-edit-modal-title" className="font-extrabold text-base flex items-center gap-2">
                   <UserPlus className="w-5 h-5 text-emerald-400" />
                   <span>{doctorModalMode === "add" ? "Add New Physician to Database" : "Edit Saved Physician"}</span>
                 </h3>
                 <button
                   type="button"
                   onClick={() => setIsDoctorModalOpen(false)}
-                  className="text-white/70 hover:text-white p-1 rounded transition-colors"
+                  className="text-white/70 hover:text-white p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded transition-colors cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -3908,10 +4051,11 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* ID */}
                   <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                    <label htmlFor="doctor-form-id" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                       Employee ID / Code *
                     </label>
                     <input
+                      id="doctor-form-id"
                       type="text"
                       required
                       placeholder="e.g. 1498"
@@ -3923,10 +4067,11 @@ export default function App() {
 
                   {/* Phone */}
                   <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                    <label htmlFor="doctor-form-phone" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                       Phone Number (رقم الهاتف)
                     </label>
                     <input
+                      id="doctor-form-phone"
                       type="text"
                       placeholder="e.g. 01012345678"
                       value={doctorFormData.mobileNumber}
@@ -3938,10 +4083,11 @@ export default function App() {
 
                 {/* English Name */}
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  <label htmlFor="doctor-form-name" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                     English Name *
                   </label>
                   <input
+                    id="doctor-form-name"
                     type="text"
                     required
                     placeholder="e.g. Dr. John Doe"
@@ -3953,10 +4099,11 @@ export default function App() {
 
                 {/* Arabic Name */}
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block text-right" dir="rtl">
+                  <label htmlFor="doctor-form-arabic-name" className="text-xs font-bold text-slate-700 uppercase tracking-wider block text-right" dir="rtl">
                     الاسم باللغة العربية
                   </label>
                   <input
+                    id="doctor-form-arabic-name"
                     type="text"
                     dir="rtl"
                     placeholder="مثال: د. جون دو"
@@ -3968,10 +4115,11 @@ export default function App() {
 
                 {/* Department */}
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  <label htmlFor="doctor-form-dept" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                     Specialty / Department
                   </label>
                   <input
+                    id="doctor-form-dept"
                     type="text"
                     list="dept-options-list"
                     placeholder="Select or type department..."
@@ -4037,6 +4185,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-physicians-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95, y: 10 }}
@@ -4046,7 +4197,7 @@ export default function App() {
             >
               {/* Header */}
               <div className="bg-rose-700 text-white px-6 py-4 flex items-center justify-between">
-                <h3 className="font-extrabold text-base flex items-center gap-2">
+                <h3 id="delete-physicians-modal-title" className="font-extrabold text-base flex items-center gap-2">
                   <Trash2 className="w-5 h-5 text-rose-200" />
                   <span>
                     {deleteModalState.type === "single"
@@ -4058,7 +4209,8 @@ export default function App() {
                   type="button"
                   onClick={() => setDeleteModalState({ ...deleteModalState, isOpen: false })}
                   disabled={isDeletingDoctor}
-                  className="text-white/70 hover:text-white p-1 rounded transition-colors cursor-pointer"
+                  className="text-white/70 hover:text-white p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded transition-colors cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -4143,6 +4295,9 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="universal-confirm-modal-title"
           >
             <motion.div
               initial={{ scale: 0.95, y: 10 }}
@@ -4151,7 +4306,7 @@ export default function App() {
               className="bg-white rounded-xl border border-amber-200 shadow-2xl max-w-md w-full overflow-hidden"
             >
               <div className="bg-[#063b30] text-white px-6 py-4 flex items-center justify-between">
-                <h3 className="font-extrabold text-base flex items-center gap-2">
+                <h3 id="universal-confirm-modal-title" className="font-extrabold text-base flex items-center gap-2">
                   <AlertCircle className="w-5 h-5 text-amber-300" />
                   <span>{confirmModalState.title}</span>
                 </h3>
@@ -4159,7 +4314,8 @@ export default function App() {
                   type="button"
                   onClick={() => setConfirmModalState({ ...confirmModalState, isOpen: false })}
                   disabled={isConfirmingAction || isDeletingDoctor}
-                  className="text-white/70 hover:text-white p-1 rounded transition-colors cursor-pointer"
+                  className="text-white/70 hover:text-white p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded transition-colors cursor-pointer"
+                  aria-label="Close dialog"
                 >
                   <X className="w-5 h-5" />
                 </button>

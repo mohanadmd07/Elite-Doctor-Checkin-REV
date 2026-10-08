@@ -29,7 +29,24 @@ CREATE TABLE IF NOT EXISTS public.checkins (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- 3. Weekly Cumulative Check-ins (Cumulative logs for weekly reporting)
+-- 3. Monthly Cumulative Check-ins (Rolling 30-day attendance roster with FIFO sliding window)
+CREATE TABLE IF NOT EXISTS public.monthly_checkins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doctor_id TEXT NOT NULL,
+    doctor_name TEXT NOT NULL,
+    doctor_arabic_name TEXT,
+    department TEXT NOT NULL,
+    shifts TEXT[] NOT NULL DEFAULT '{}',
+    mobile_number TEXT,
+    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- Ensure checkin_date exists on monthly_checkins
+ALTER TABLE public.monthly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
+
+-- Backward compatibility for weekly_checkins table
 CREATE TABLE IF NOT EXISTS public.weekly_checkins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doctor_id TEXT NOT NULL,
@@ -39,8 +56,10 @@ CREATE TABLE IF NOT EXISTS public.weekly_checkins (
     shifts TEXT[] NOT NULL DEFAULT '{}',
     mobile_number TEXT,
     checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+ALTER TABLE public.weekly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
 
 -- 4. Custom Doctor Overrides (Persisted custom added or edited physicians)
 CREATE TABLE IF NOT EXISTS public.custom_doctors (
@@ -68,19 +87,51 @@ CREATE TABLE IF NOT EXISTS public.deleted_doctors (
     deleted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- Indexes for fast querying and filtering
+-- Indexes for fast querying, deduplication, and atomic operations
 CREATE INDEX IF NOT EXISTS idx_doctors_name ON public.doctors (name);
-CREATE INDEX IF NOT EXISTS idx_doctors_dept ON public.doctors (department);
 CREATE INDEX IF NOT EXISTS idx_doctors_active ON public.doctors (is_active);
+CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_fast ON public.doctors (department) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (department, name) WHERE is_active = true;
+
+-- Enforce canonical medical specialties on active records
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_active_canonical_dept') THEN
+    ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
+    CHECK (
+      is_active = false OR department IN (
+        'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
+        'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
+      )
+    );
+  END IF;
+END $$;
+
+-- Daily checkins: unique index on doctor_id ensures 1 active check-in per physician and enables atomic upserts
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_doctor_id_unique ON public.checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_date ON public.checkins (checkin_date);
-CREATE INDEX IF NOT EXISTS idx_checkins_doctor_id ON public.checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_timestamp ON public.checkins (checkin_timestamp);
+
+-- Monthly checkins: 30-day rolling window indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_date ON public.monthly_checkins (doctor_id, checkin_date);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_id ON public.monthly_checkins (doctor_id);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date ON public.monthly_checkins (checkin_date ASC);
+CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date_ts ON public.monthly_checkins (checkin_date, checkin_timestamp DESC);
+
+-- Weekly checkins: backward-compatible indexes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_date ON public.weekly_checkins (doctor_id, checkin_date);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_id ON public.weekly_checkins (doctor_id);
 CREATE INDEX IF NOT EXISTS idx_weekly_checkins_timestamp ON public.weekly_checkins (checkin_timestamp);
+CREATE INDEX IF NOT EXISTS idx_weekly_checkins_date_ts ON public.weekly_checkins (checkin_date, checkin_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_custom_doctors_name ON public.custom_doctors (name);
 
 -- Enable Row Level Security (RLS) on all tables
 ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.checkins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.monthly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.weekly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctor_phones ENABLE ROW LEVEL SECURITY;
@@ -104,6 +155,9 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to checkins' AND tablename = 'checkins') THEN
     CREATE POLICY "Public access to checkins" ON public.checkins FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to monthly_checkins' AND tablename = 'monthly_checkins') THEN
+    CREATE POLICY "Public access to monthly_checkins" ON public.monthly_checkins FOR ALL USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to weekly_checkins' AND tablename = 'weekly_checkins') THEN
     CREATE POLICY "Public access to weekly_checkins" ON public.weekly_checkins FOR ALL USING (true) WITH CHECK (true);

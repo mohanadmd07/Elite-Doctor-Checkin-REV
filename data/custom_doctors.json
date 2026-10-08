@@ -3,7 +3,7 @@
     "id": "3800",
     "name": "Noha Mansour Mohamed Lotfy",
     "arabicName": "نهى منصور محمد لطفي",
-    "department": "General",
+    "department": "General Surgery",
     "mobileNumber": "",
     "originalId": "",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -12,7 +12,7 @@
     "id": "091024.02.43.56",
     "name": "Maha Mohamed Kheiry El Kommy",
     "arabicName": "مها محمد خيري الكومي",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01009993173",
     "originalId": "091024.02.43.56",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -21,7 +21,7 @@
     "id": "101122.04.33.37",
     "name": "Sara Mourad Nabil Mourad",
     "arabicName": "ساره حسن نبيل مراد",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01032692001",
     "originalId": "101122.04.33.37",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -30,7 +30,7 @@
     "id": "1177",
     "name": "Mohamed Said Abd-Elhamid Abd-Elaaty",
     "arabicName": "محمد سعيد عبد الحميد عبد العاطى",
-    "department": "Nephrology",
+    "department": "Internal Medicine",
     "mobileNumber": "01208217446",
     "originalId": "1177",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -39,7 +39,7 @@
     "id": "1234",
     "name": "Mohamed Zaghlol",
     "arabicName": "محمد زغلول",
-    "department": "Orthopedics",
+    "department": "Orthopedic Surgery",
     "mobileNumber": "01026022928",
     "originalId": "",
     "updatedAt": "2026-09-12T12:23:44.721218+00:00"
@@ -48,7 +48,7 @@
     "id": "1498",
     "name": "Sara hussein Abdelaziz Mohamed",
     "arabicName": "ساره حسين عبدالعزيز محمد",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01098320246",
     "originalId": "1498",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -57,7 +57,7 @@
     "id": "190223.11.46.50",
     "name": "Omneya El-Sharkawy",
     "arabicName": "امنية الشرقاوي",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01001773177",
     "originalId": "190223.11.46.50",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -84,7 +84,7 @@
     "id": "2497",
     "name": "Mohamed Saied Ahmed Mahmoud Zaghlol",
     "arabicName": "محمد سعيد احمد محمود زغلول",
-    "department": "Orthopedics",
+    "department": "Orthopedic Surgery",
     "mobileNumber": "01026022928",
     "originalId": "1234",
     "updatedAt": "2026-09-12T12:23:44.721218+00:00"
@@ -102,7 +102,7 @@
     "id": "2542",
     "name": "Andrew Amgad Melad Metry",
     "arabicName": "اندرو امجد ميلاد متري",
-    "department": "Nephrology",
+    "department": "Internal Medicine",
     "mobileNumber": "01271557015",
     "originalId": "2542",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -120,7 +120,7 @@
     "id": "277",
     "name": "Mai Ahmed Mohamed El Sayed Mohamed",
     "arabicName": "مي أحمد محمد السيد محمد",
-    "department": "Anesthesia and pain therapy",
+    "department": "Anesthesiology & Pain Therapy",
     "mobileNumber": "",
     "originalId": "",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -129,7 +129,7 @@
     "id": "3154",
     "name": "Shimaa Mohamed Mohamed Shabaan",
     "arabicName": "شيماء محمد محمد شعبان",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01200796523",
     "originalId": "3154",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -237,7 +237,7 @@
     "id": "3794",
     "name": "Ahmed Mohamed abd rabou",
     "arabicName": "احمد محمد عبد ربه",
-    "department": "Orthopedics",
+    "department": "Orthopedic Surgery",
     "mobileNumber": "",
     "originalId": "",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -264,7 +264,7 @@
     "id": "3836",
     "name": "Mohamed El Sayed El Sayed El Ben",
     "arabicName": "محمد السيد السيد البن",
-    "department": "Anesthesia and pain therapy",
+    "department": "Anesthesiology & Pain Therapy",
     "mobileNumber": "",
     "originalId": "",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -273,7 +273,7 @@
     "id": "456",
     "name": "Nourhan Ahmed Abdelrahim Hassanien",
     "arabicName": "نورهان احمد عبد الرحيم حسنين",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01066427334",
     "originalId": "456",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -282,7 +282,7 @@
     "id": "518",
     "name": "Omar Abdelrahman Zakria Abdellatif",
     "arabicName": "عمر عبدالرحمن زكريا عبداللطيف",
-    "department": "Nutrition",
+    "department": "Internal Medicine",
     "mobileNumber": "01144247703",
     "originalId": "518",
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
@@ -291,7 +291,7 @@
     "id": "test2",
     "name": "test2",
     "arabicName": "test2",
-    "department": "General",
+    "department": "General Surgery",
     "mobileNumber": "",
     "originalId": "",
     "updatedAt": "2026-09-12T12:41:34.481+00:00"
@@ -300,7 +300,7 @@
     "id": "12345",
     "name": "test",
     "arabicName": "test",
-    "department": "General",
+    "department": "General Surgery",
     "mobileNumber": "test",
     "originalId": "",
     "updatedAt": "2026-09-12T13:06:29.09+00:00"

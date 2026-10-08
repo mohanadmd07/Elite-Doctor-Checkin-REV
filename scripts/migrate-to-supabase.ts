@@ -1,7 +1,35 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
 import { DOCTORS_DATABASE } from "../src/data/doctors.js";
+
+function getEgyptDateStr(timestampStr: string): string {
+  try {
+    const d = new Date(timestampStr);
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(d);
+    const year = parseInt(parts.find(p => p.type === "year")?.value || "0", 10);
+    const month = parseInt(parts.find(p => p.type === "month")?.value || "0", 10);
+    const day = parseInt(parts.find(p => p.type === "day")?.value || "0", 10);
+    const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+    let utcTime = Date.UTC(year, month - 1, day);
+    if (hour >= 19) utcTime += 86400000;
+    const target = new Date(utcTime);
+    return `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(target.getUTCDate()).padStart(2, "0")}`;
+  } catch {
+    return (timestampStr || new Date().toISOString()).split("T")[0];
+  }
+}
 
 async function runMigration() {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -30,7 +58,7 @@ async function runMigration() {
       arabic_name: d.arabicName ? String(d.arabicName).trim() : (d.name ? String(d.name).trim() : ""),
       department: d.department ? String(d.department).trim() : "General",
       mobile_number: d.mobileNumber ? String(d.mobileNumber).trim() : "",
-      is_active: true,
+      is_active: d.isActive !== false,
     });
   }
 
@@ -143,18 +171,26 @@ async function runMigration() {
       const checkins = JSON.parse(fs.readFileSync(checkinsPath, "utf-8"));
       if (Array.isArray(checkins) && checkins.length > 0) {
         console.log(`📦 [5/6] Migrating ${checkins.length} daily check-ins...`);
-        const entries = checkins.map(c => ({
-          doctor_id: c.id || "",
-          doctor_name: c.doctorName || "",
-          doctor_arabic_name: c.doctorArabicName || c.doctorName || "",
-          department: c.department || "General",
-          shifts: Array.isArray(c.shifts) ? c.shifts : [],
-          mobile_number: c.mobileNumber || "",
-          checkin_timestamp: c.timestamp || new Date().toISOString(),
-          checkin_date: (c.timestamp || new Date().toISOString()).split("T")[0],
-        }));
-        const { error } = await supabase.from("checkins").insert(entries);
-        if (error) console.error("⚠️ Error inserting checkins:", error.message);
+        const uniqueDaily = new Map<string, any>();
+        for (const c of checkins) {
+          const docId = String(c.id || "").trim();
+          if (!docId) continue;
+          uniqueDaily.set(docId.toLowerCase(), {
+            doctor_id: docId,
+            doctor_name: c.doctorName || "",
+            doctor_arabic_name: c.doctorArabicName || c.doctorName || "",
+            department: c.department || "General",
+            shifts: Array.isArray(c.shifts) ? c.shifts : [],
+            mobile_number: c.mobileNumber || "",
+            checkin_timestamp: c.timestamp || new Date().toISOString(),
+            checkin_date: getEgyptDateStr(c.timestamp || new Date().toISOString()),
+          });
+        }
+        const entries = Array.from(uniqueDaily.values());
+        // Clean delete existing daily checkins to ensure fresh sync without orphaned IDs
+        await supabase.from("checkins").delete().neq("doctor_id", "__none__");
+        const { error } = await supabase.from("checkins").upsert(entries, { onConflict: "doctor_id" });
+        if (error) console.error("⚠️ Error upserting checkins:", error.message);
         else console.log(`✅ Completed checkins: ${entries.length} records.`);
       }
     } catch (e) {
@@ -162,28 +198,72 @@ async function runMigration() {
     }
   }
 
-  // 6. Migrate Weekly Cumulative Check-ins
+  // 6. Migrate Monthly Cumulative Check-ins (30-day FIFO sliding window)
+  const monthlyPath = path.join(process.cwd(), "data", "monthly_checkins.json");
   const weeklyPath = path.join(process.cwd(), "data", "weekly_checkins.json");
-  if (fs.existsSync(weeklyPath)) {
+  const sourcePath = fs.existsSync(monthlyPath) ? monthlyPath : weeklyPath;
+  if (fs.existsSync(sourcePath)) {
     try {
-      const weekly = JSON.parse(fs.readFileSync(weeklyPath, "utf-8"));
-      if (Array.isArray(weekly) && weekly.length > 0) {
-        console.log(`📦 [6/6] Migrating ${weekly.length} weekly cumulative check-ins...`);
-        const entries = weekly.map(w => ({
-          doctor_id: w.id || "",
-          doctor_name: w.doctorName || "",
-          doctor_arabic_name: w.doctorArabicName || w.doctorName || "",
-          department: w.department || "General",
-          shifts: Array.isArray(w.shifts) ? w.shifts : [],
-          mobile_number: w.mobileNumber || "",
-          checkin_timestamp: w.timestamp || new Date().toISOString(),
-        }));
-        const { error } = await supabase.from("weekly_checkins").insert(entries);
-        if (error) console.error("⚠️ Error inserting weekly_checkins:", error.message);
-        else console.log(`✅ Completed weekly_checkins: ${entries.length} records.`);
+      const records = JSON.parse(fs.readFileSync(sourcePath, "utf-8"));
+      if (Array.isArray(records) && records.length > 0) {
+        console.log(`📦 [6/6] Migrating ${records.length} check-in records to monthly 30-day rolling roster...`);
+        
+        // 30-day window enforcement:
+        const dateMap = new Map<string, any[]>();
+        for (const r of records) {
+          const ts = r.timestamp || new Date().toISOString();
+          const d = getEgyptDateStr(ts);
+          if (!dateMap.has(d)) dateMap.set(d, []);
+          dateMap.get(d)!.push(r);
+        }
+        const sortedDates = Array.from(dateMap.keys()).sort();
+        let recordsToMigrate = records;
+        if (sortedDates.length > 30) {
+          const keepDates = new Set(sortedDates.slice(sortedDates.length - 30));
+          console.log(`   Pruning ${sortedDates.length - 30} oldest days to maintain 30-day sliding window.`);
+          recordsToMigrate = records.filter(r => keepDates.has(getEgyptDateStr(r.timestamp || new Date().toISOString())));
+        }
+
+        const uniqueMonthly = new Map<string, any>();
+        for (const w of recordsToMigrate) {
+          const docId = String(w.id || "").trim();
+          if (!docId) continue;
+          const ts = w.timestamp || new Date().toISOString();
+          const dateStr = getEgyptDateStr(ts);
+          const key = `${docId.toLowerCase()}_${dateStr}`;
+          uniqueMonthly.set(key, {
+            doctor_id: docId,
+            doctor_name: w.doctorName || "",
+            doctor_arabic_name: w.doctorArabicName || w.doctorName || "",
+            department: w.department || "General",
+            shifts: Array.isArray(w.shifts) ? w.shifts : [],
+            mobile_number: w.mobileNumber || "",
+            checkin_timestamp: ts,
+            checkin_date: dateStr,
+          });
+        }
+        const entries = Array.from(uniqueMonthly.values());
+        const BATCH_SIZE = 100;
+        let insertedMonthly = 0;
+        for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+          const batch = entries.slice(i, i + BATCH_SIZE);
+          const { error: monErr } = await supabase.from("monthly_checkins").upsert(batch, { onConflict: "doctor_id,checkin_date" });
+          if (monErr) {
+            const { error: insertErr } = await supabase.from("monthly_checkins").insert(batch);
+            if (insertErr) console.error("⚠️ Error inserting monthly_checkins batch:", insertErr.message);
+            else insertedMonthly += batch.length;
+          } else {
+            insertedMonthly += batch.length;
+          }
+          // Also sync to weekly_checkins for backward compatibility
+          try {
+            await supabase.from("weekly_checkins").upsert(batch, { onConflict: "doctor_id,checkin_date" });
+          } catch {}
+        }
+        console.log(`✅ Completed monthly_checkins (30-day window): ${insertedMonthly} records.`);
       }
     } catch (e) {
-      console.error("Error reading weekly_checkins.json:", e);
+      console.error("Error reading check-ins file for migration:", e);
     }
   }
 

@@ -4,9 +4,58 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Elite Hospital Semantic Design Tokens */
+  --color-brand-primary: #063b30;
+  --color-brand-dark: #042d24;
+  --color-brand-light: #e6f2ee;
+  --color-brand-border: #cbdad5;
+  --color-brand-accent: #084c3e;
+  --color-brand-surface: #fbfdfc;
 }
 
 .arabic-font {
   font-family: "Tajawal", "Inter", sans-serif;
 }
 
+/* Browser Surfaces (Craft Floor) */
+::selection {
+  background-color: #063b30;
+  color: #ffffff;
+}
+
+:focus-visible {
+  outline: 2px solid #063b30;
+  outline-offset: 2px;
+}
+
+/* Custom Healthcare Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f4;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbdad5;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #7ea198;
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

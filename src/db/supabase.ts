@@ -30,12 +30,21 @@ export function getSupabase(): SupabaseClient | null {
         persistSession: false,
         autoRefreshToken: false,
       },
+      global: {
+        headers: {
+          "x-application-name": "elite-hospital-system",
+        },
+      },
     });
     return supabaseInstance;
   } catch (err) {
     console.error("[Supabase] Failed to initialize client:", err);
     return null;
   }
+}
+
+export function resetSupabaseClient(): void {
+  supabaseInstance = null;
 }
 
 /**
@@ -87,6 +96,8 @@ export interface SupabaseDoctor {
   department: string;
   mobile_number?: string;
   is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface SupabaseCheckIn {
@@ -98,5 +109,32 @@ export interface SupabaseCheckIn {
   shifts: string[];
   mobile_number?: string;
   checkin_timestamp: string;
+  checkin_date: string;
+  created_at?: string;
+}
+
+export interface SupabaseWeeklyCheckIn {
+  id: string;
+  doctor_id: string;
+  doctor_name: string;
+  doctor_arabic_name: string;
+  department: string;
+  shifts: string[];
+  mobile_number?: string;
+  checkin_timestamp: string;
   checkin_date?: string;
+  created_at?: string;
+}
+
+export interface SupabaseMonthlyCheckIn {
+  id: string;
+  doctor_id: string;
+  doctor_name: string;
+  doctor_arabic_name: string;
+  department: string;
+  shifts: string[];
+  mobile_number?: string;
+  checkin_timestamp: string;
+  checkin_date?: string;
+  created_at?: string;
 }

@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import compression from "compression";
 import path from "path";
@@ -164,73 +167,20 @@ function initPrecompiledPhones() {
 }
 
 // Department mapping utility
+import { normalizeSpecialty, CANONICAL_SPECIALTIES } from "./src/data/specialties.js";
+
+// Department mapping utility utilizing canonical 15-specialty hospital taxonomy
 function normalizeDepartment(dept: string): string {
-  const trimmed = (dept || "").trim();
-  if (trimmed === "ICU طب الحالات الحرجة" || trimmed === "ICU.") {
-    return "ICU";
-  }
-  if (trimmed === "Orthopedic Surgery") {
-    return "Orthopedics";
-  }
-  if (trimmed === "General Surgery Clinic") {
-    return "General Surgery";
-  }
-  if (trimmed === "Internal Medicine Clinic" || trimmed === "Rheumatology Clinic") {
-    return "Internal Medicine";
-  }
-  if (trimmed === "Cardiology Clinic") {
-    return "Cardiology";
-  }
-  if (trimmed === "Adult Nutrition Clinic") {
-    return "Nutrition";
-  }
-  if (trimmed === "Physiotherpy (Physical Medicine)") {
-    return "Physical Medicine";
-  }
-  if (trimmed === "Intervential Radiology") {
-    return "Radiology";
-  }
-  if (
-    trimmed === "Pediatric surgery Clinic" ||
-    trimmed.toUpperCase() === "PEDIATRICS CLINIC" ||
-    trimmed.toUpperCase() === "PEDIATRIC CLINIC" ||
-    trimmed.toUpperCase() === "PEDIATRIC GIT CLINIC" ||
-    trimmed.toUpperCase() === "PEDIATRIC GIT"
-  ) {
-    return "Pediatrics";
-  }
-  if (
-    trimmed.toUpperCase() === "NEPHROLOGY CLINIC" ||
-    trimmed.toUpperCase() === "NEPHROLOGY"
-  ) {
-    return "Nephrology";
-  }
-  if (
-    trimmed.toUpperCase() === "EMERGENCY" ||
-    trimmed.toUpperCase() === "EMERGENCY MEDICINE"
-  ) {
-    return "Emergency Medicine";
-  }
-  if (
-    trimmed.toUpperCase() === "ANESTHESIA AND PAIN THERAPY CLINIC" ||
-    trimmed.toUpperCase() === "ANESTHESIA AND PAIN THERAPY"
-  ) {
-    return "Anesthesia and pain therapy";
-  }
-  return trimmed;
+  const norm = normalizeSpecialty(dept);
+  return norm.department;
 }
 
 let NORMALIZED_DOCTORS_DATABASE: any[] = [];
 
 // Clean department utility from our check-in analysis
 function cleanDepartment(dept: string): string {
-  let cleaned = (dept || "").trim();
-  cleaned = cleaned.replace(/^Job\./, "").replace(/\.Elite$/, "");
-  if (cleaned.includes(".")) {
-    cleaned = cleaned.split(".")[0];
-  }
-  cleaned = cleaned.replace(/\s+Clinic$/i, "");
-  return cleaned;
+  const norm = normalizeSpecialty(dept);
+  return norm.department;
 }
 
 function compareDoctorIds(idA: string, idB: string): number {
@@ -512,15 +462,17 @@ async function cleanupExpiredCheckIns(): Promise<void> {
     
     if (expiredCheckins.length > 0) {
       console.log(`[Elite Server] Auto-resetting ${expiredCheckins.length} expired daily check-ins at 6:30 PM Egypt Time:`, expiredCheckins.map(c => c.id));
-      for (const c of expiredCheckins) {
-        try {
-          // Make sure it is included in the weekly sheet before deleting
-          await addWeeklyCheckIn(c);
-          await deleteCheckIn(c.id);
-        } catch (err) {
-          console.error(`[Elite Server] Failed to archive and clear expired check-in ${c.id}:`, err);
-        }
-      }
+      await Promise.all(
+        expiredCheckins.map(async (c) => {
+          try {
+            // Make sure it is included in the weekly sheet before deleting
+            await addWeeklyCheckIn(c);
+            await deleteCheckIn(c.id);
+          } catch (err) {
+            console.error(`[Elite Server] Failed to archive and clear expired check-in ${c.id}:`, err);
+          }
+        })
+      );
     }
   } catch (err) {
     console.error("Error in cleanupExpiredCheckIns:", err);
@@ -553,7 +505,7 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
         .order("checkin_timestamp", { ascending: false })
         .limit(200);
 
-      if (!error && data && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         const mapped: CheckIn[] = data.map((row: any) => ({
           id: row.doctor_id,
           doctorName: row.doctor_name,
@@ -720,24 +672,38 @@ async function saveCustomDoctorPhone(id: string, mobileNumber: string): Promise<
   localPhones[idKey] = mobileNumber;
   writeCustomPhonesLocal(localPhones);
 
-  // Update Supabase
+  // Update Supabase immediately with cascading updates
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("custom_doctor_phones").upsert({
-        id: cleanId,
-        mobile_number: mobileNumber,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "id" });
-
-      await supabase.from("doctors").update({ mobile_number: mobileNumber, updated_at: new Date().toISOString() }).eq("id", cleanId);
+      await Promise.all([
+        supabase.from("custom_doctor_phones").upsert({
+          id: cleanId,
+          mobile_number: mobileNumber,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "id" }),
+        supabase.from("doctors").update({ mobile_number: mobileNumber, updated_at: new Date().toISOString() }).eq("id", cleanId),
+        supabase.from("checkins").update({ mobile_number: mobileNumber }).or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`),
+        supabase.from("monthly_checkins").update({ mobile_number: mobileNumber }).or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
+      ]);
     } catch (err) {
       console.error("[Supabase] saveCustomDoctorPhone failed:", err);
     }
   }
 
-  // Re-synchronize the unified doctors database
-  await loadEnrichedDoctorsDatabase();
+  // Update in-memory daily check-in phone if active
+  const dailyCheckins = readCheckInsLocal();
+  let dailyPhoneChanged = false;
+  for (const c of dailyCheckins) {
+    if (normalizeId(c.id) === idKey) {
+      c.mobileNumber = mobileNumber;
+      dailyPhoneChanged = true;
+    }
+  }
+  if (dailyPhoneChanged) writeCheckInsLocal(dailyCheckins);
+
+  // Re-synchronize the unified doctors database with force=true
+  await loadEnrichedDoctorsDatabase(true);
 }
 
 // Custom Doctors persistent store helpers
@@ -859,8 +825,9 @@ async function markDoctorAsDeleted(id: string, name?: string) {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      for (const key of keysToAdd) {
-        await supabase.from("deleted_doctors").upsert({ id: key, deleted_at: new Date().toISOString() }, { onConflict: "id" });
+      if (keysToAdd.length > 0) {
+        const payload = keysToAdd.map(k => ({ id: k, deleted_at: new Date().toISOString() }));
+        await supabase.from("deleted_doctors").upsert(payload, { onConflict: "id" });
       }
       if (cleanId) {
         await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId);
@@ -888,8 +855,8 @@ async function unmarkDoctorAsDeleted(id: string, name?: string) {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      for (const key of keysToRemove) {
-        await supabase.from("deleted_doctors").delete().eq("id", key);
+      if (keysToRemove.length > 0) {
+        await supabase.from("deleted_doctors").delete().in("id", keysToRemove);
       }
       if (cleanId) {
         await supabase.from("doctors").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", cleanId);
@@ -1026,13 +993,43 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
         is_active: true,
         updated_at: new Date().toISOString(),
       }, { onConflict: "id" });
+      // Cascade update to any active daily checkins and monthly checkins in Supabase
+      await Promise.all([
+        supabase.from("checkins").update({
+          doctor_name: recordToSave.name,
+          doctor_arabic_name: recordToSave.arabicName,
+          department: recordToSave.department,
+          mobile_number: recordToSave.mobileNumber,
+        }).or(`doctor_id.eq.${cleanId},doctor_id.eq.${docRecord.originalId || cleanId}`),
+        supabase.from("monthly_checkins").update({
+          doctor_name: recordToSave.name,
+          doctor_arabic_name: recordToSave.arabicName,
+          department: recordToSave.department,
+          mobile_number: recordToSave.mobileNumber,
+        }).or(`doctor_id.eq.${cleanId},doctor_id.eq.${docRecord.originalId || cleanId}`)
+      ]);
     } catch (err) {
       console.error("[Supabase] saveCustomDoctorRecord failed:", err);
     }
   }
 
-  // Re-synchronize the unified doctors database
-  await loadEnrichedDoctorsDatabase();
+  // Also cascade update in-memory daily check-ins
+  const dailyCheckins = readCheckInsLocal();
+  let checkinChanged = false;
+  for (const c of dailyCheckins) {
+    if (normalizeId(c.id) === idKey || (origKey && normalizeId(c.id) === origKey)) {
+      c.id = cleanId;
+      c.doctorName = recordToSave.name;
+      c.doctorArabicName = recordToSave.arabicName;
+      c.department = recordToSave.department;
+      c.mobileNumber = recordToSave.mobileNumber;
+      checkinChanged = true;
+    }
+  }
+  if (checkinChanged) writeCheckInsLocal(dailyCheckins);
+
+  // Re-synchronize the unified doctors database with force=true
+  await loadEnrichedDoctorsDatabase(true);
 }
 
 async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void> {
@@ -1065,77 +1062,239 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("custom_doctors").delete().eq("id", cleanId);
-      await supabase.from("deleted_doctors").upsert({ id: cleanId, deleted_at: new Date().toISOString() }, { onConflict: "id" });
-      await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId);
+      await Promise.all([
+        supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId),
+        supabase.from("deleted_doctors").upsert({ id: cleanId, deleted_at: new Date().toISOString() }, { onConflict: "id" }),
+        supabase.from("custom_doctors").delete().eq("id", cleanId),
+        supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
+      ]);
     } catch (err) {
       console.error("[Supabase] deleteCustomDoctorRecord failed:", err);
     }
   }
 
-  // Re-synchronize the unified doctors database
-  await loadEnrichedDoctorsDatabase();
+  // Remove from in-memory daily check-ins if present
+  const dailyCheckins = readCheckInsLocal();
+  const filteredDaily = dailyCheckins.filter(c => normalizeId(c.id) !== idKey);
+  if (filteredDaily.length !== dailyCheckins.length) {
+    writeCheckInsLocal(filteredDaily);
+  }
+
+  // Re-synchronize the unified doctors database with force=true
+  await loadEnrichedDoctorsDatabase(true);
 }
 
-// Weekly Check-Ins local storage and Supabase persistence helpers
+// High-performance batch deletion: executes batch Supabase operations, updates memory and disk once
+async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string } | string>): Promise<number> {
+  if (!items || items.length === 0) return 0;
+
+  const parsedItems: { cleanId: string; idKey: string; nameKey: string; name?: string }[] = [];
+  const keysToAdd: string[] = [];
+  const cleanIds: string[] = [];
+
+  for (const item of items) {
+    const rawId = typeof item === "object" && item !== null ? item.id : String(item);
+    const rawName = typeof item === "object" && item !== null ? item.name : undefined;
+    const cleanId = rawId.trim().replace(/^(emp\.|emp)/i, "");
+    const idKey = normalizeId(cleanId);
+    const nameKey = rawName ? normalizeName(rawName) : "";
+
+    if (cleanId) cleanIds.push(cleanId);
+    if (idKey && nameKey) keysToAdd.push(`${idKey}_${nameKey}`);
+    else if (idKey) keysToAdd.push(idKey);
+    else if (nameKey) keysToAdd.push(nameKey);
+
+    parsedItems.push({ cleanId, idKey, nameKey, name: rawName });
+  }
+
+  // 1. Update local deleted list
+  const localDeleted = readDeletedDoctorsLocal();
+  const updatedDeletedSet = new Set([...localDeleted, ...keysToAdd]);
+  writeDeletedDoctorsLocal(Array.from(updatedDeletedSet));
+
+  // 2. Filter local custom doctors
+  const localCustom = readCustomDoctorsLocal();
+  const updatedCustom = localCustom.filter(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    return !parsedItems.some(p => p.nameKey ? (dIdKey === p.idKey && dNameKey === p.nameKey) : dIdKey === p.idKey);
+  });
+  writeCustomDoctorsLocal(updatedCustom);
+
+  // 3. Filter in-memory database
+  NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
+    const dIdKey = normalizeId(d.id);
+    const dNameKey = normalizeName(d.name);
+    return !parsedItems.some(p => p.nameKey ? (dIdKey === p.idKey && dNameKey === p.nameKey) : dIdKey === p.idKey);
+  });
+
+  // 4. Batch update Supabase
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const deletedEntries = keysToAdd.map(k => ({ id: k, deleted_at: new Date().toISOString() }));
+      await Promise.all([
+        deletedEntries.length > 0
+          ? supabase.from("deleted_doctors").upsert(deletedEntries, { onConflict: "id" })
+          : Promise.resolve(),
+        cleanIds.length > 0
+          ? supabase.from("custom_doctors").delete().in("id", cleanIds)
+          : Promise.resolve(),
+        cleanIds.length > 0
+          ? supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).in("id", cleanIds)
+          : Promise.resolve(),
+      ]);
+    } catch (err) {
+      console.error("[Supabase] deleteCustomDoctorsBatch failed:", err);
+    }
+  }
+
+  // 5. Re-index in memory once!
+  indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
+  lastDoctorsRefreshTime = Date.now();
+
+  return parsedItems.length;
+}
+
+// Monthly Check-Ins (30-Day Rolling Attendance Roster) and backward-compatible weekly helpers
+const MONTHLY_CHECKINS_FILE = path.join(DATA_DIR, "monthly_checkins.json");
 const WEEKLY_CHECKINS_FILE = path.join(DATA_DIR, "weekly_checkins.json");
 
-function ensureLocalWeeklyData() {
+function ensureLocalMonthlyData() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(MONTHLY_CHECKINS_FILE)) {
+    if (fs.existsSync(WEEKLY_CHECKINS_FILE)) {
+      try {
+        const raw = fs.readFileSync(WEEKLY_CHECKINS_FILE, "utf-8");
+        const parsed: CheckIn[] = JSON.parse(raw);
+        // Prune initial migration to 30 days immediately if needed
+        const distinctDates = Array.from(new Set(parsed.map(c => getEgyptDateStr(c.timestamp)))).sort();
+        let initialData = parsed;
+        if (distinctDates.length > 30) {
+          const keepDates = new Set(distinctDates.slice(distinctDates.length - 30));
+          initialData = parsed.filter(c => keepDates.has(getEgyptDateStr(c.timestamp)));
+        }
+        fs.writeFileSync(MONTHLY_CHECKINS_FILE, JSON.stringify(initialData, null, 2), "utf-8");
+      } catch (e) {
+        fs.writeFileSync(MONTHLY_CHECKINS_FILE, JSON.stringify([], null, 2), "utf-8");
+      }
+    } else {
+      fs.writeFileSync(MONTHLY_CHECKINS_FILE, JSON.stringify([], null, 2), "utf-8");
+    }
   }
   if (!fs.existsSync(WEEKLY_CHECKINS_FILE)) {
     fs.writeFileSync(WEEKLY_CHECKINS_FILE, JSON.stringify([], null, 2), "utf-8");
   }
 }
 
-function readWeeklyCheckInsLocal(): CheckIn[] {
+function ensureLocalWeeklyData() {
+  ensureLocalMonthlyData();
+}
+
+function readMonthlyCheckInsLocal(): CheckIn[] {
   try {
-    ensureLocalWeeklyData();
-    if (fs.existsSync(WEEKLY_CHECKINS_FILE)) {
-      const data = fs.readFileSync(WEEKLY_CHECKINS_FILE, "utf-8");
+    ensureLocalMonthlyData();
+    if (fs.existsSync(MONTHLY_CHECKINS_FILE)) {
+      const data = fs.readFileSync(MONTHLY_CHECKINS_FILE, "utf-8");
       return JSON.parse(data);
     }
   } catch (error) {
-    console.error("Error reading local weekly checkins file:", error);
+    console.error("Error reading local monthly checkins file:", error);
   }
   return [];
 }
 
-function writeWeeklyCheckInsLocal(checkins: CheckIn[]) {
+function writeMonthlyCheckInsLocal(checkins: CheckIn[]) {
   try {
-    ensureLocalWeeklyData();
+    ensureLocalMonthlyData();
+    fs.writeFileSync(MONTHLY_CHECKINS_FILE, JSON.stringify(checkins, null, 2), "utf-8");
+    // Keep weekly_checkins.json synchronized for backward compatibility
     fs.writeFileSync(WEEKLY_CHECKINS_FILE, JSON.stringify(checkins, null, 2), "utf-8");
   } catch (error) {
-    console.error("Error writing local weekly checkins file:", error);
+    console.error("Error writing local monthly checkins file:", error);
   }
 }
 
-let weeklyCheckinsCache: CheckIn[] | null = null;
-let lastWeeklyFetchTime = 0;
-const WEEKLY_CACHE_TTL = 30000; // 30 seconds cache
+const readWeeklyCheckInsLocal = readMonthlyCheckInsLocal;
+const writeWeeklyCheckInsLocal = writeMonthlyCheckInsLocal;
 
-function invalidateWeeklyCache() {
-  weeklyCheckinsCache = null;
-  lastWeeklyFetchTime = 0;
+// 30-Day FIFO Sliding Window: strictly enforces maximum 30 distinct calendar days.
+// When 31+ distinct days exist, all records for the oldest day(s) are purged from Supabase & local storage.
+async function pruneMonthlyCheckInsTo30Days(checkins: CheckIn[]): Promise<CheckIn[]> {
+  const dateMap = new Map<string, CheckIn[]>();
+  for (const c of checkins) {
+    const d = getEgyptDateStr(c.timestamp);
+    if (!dateMap.has(d)) dateMap.set(d, []);
+    dateMap.get(d)!.push(c);
+  }
+
+  const sortedDates = Array.from(dateMap.keys()).sort();
+  if (sortedDates.length <= 30) {
+    return checkins;
+  }
+
+  const excessCount = sortedDates.length - 30;
+  const datesToDelete = sortedDates.slice(0, excessCount);
+  const datesToKeep = new Set(sortedDates.slice(excessCount));
+
+  console.log(`[Elite Server] 30-Day Rolling Window: Pruning ${datesToDelete.length} oldest dates (${datesToDelete.join(", ")}). Keeping newest 30 days.`);
+
+  // 1. Purge oldest dates from Supabase
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await Promise.all([
+        supabase.from("monthly_checkins").delete().in("checkin_date", datesToDelete),
+        supabase.from("weekly_checkins").delete().in("checkin_date", datesToDelete),
+      ]);
+    } catch (err) {
+      console.error("[Supabase] Failed to prune oldest dates in monthly_checkins:", err);
+    }
+  }
+
+  // 2. Retain only the newest 30 days in local memory/file
+  const pruned = checkins.filter(c => datesToKeep.has(getEgyptDateStr(c.timestamp)));
+  return pruned;
 }
 
-// Fetch all weekly checkins (asynchronous cloud/local)
-async function readWeeklyCheckIns(): Promise<CheckIn[]> {
+let monthlyCheckinsCache: CheckIn[] | null = null;
+let lastMonthlyFetchTime = 0;
+const MONTHLY_CACHE_TTL = 30000; // 30 seconds cache
+
+function invalidateMonthlyCache() {
+  monthlyCheckinsCache = null;
+  lastMonthlyFetchTime = 0;
+}
+const invalidateWeeklyCache = invalidateMonthlyCache;
+
+// Fetch all monthly checkins (30-day rolling window, cloud/local)
+async function readMonthlyCheckIns(): Promise<CheckIn[]> {
   const now = Date.now();
-  if (weeklyCheckinsCache && (now - lastWeeklyFetchTime < WEEKLY_CACHE_TTL)) {
-    return weeklyCheckinsCache;
+  if (monthlyCheckinsCache && (now - lastMonthlyFetchTime < MONTHLY_CACHE_TTL)) {
+    return monthlyCheckinsCache;
   }
 
   let list: CheckIn[] = [];
   const supabase = getSupabase();
   if (supabase) {
     try {
-      const data = await fetchAllRowsFromSupabase("weekly_checkins", (q) =>
+      let data = await fetchAllRowsFromSupabase("monthly_checkins", (q) =>
         q.order("checkin_timestamp", { ascending: false })
       );
+
+      // If monthly_checkins table is empty, check legacy weekly_checkins table
+      if (!Array.isArray(data) || data.length === 0) {
+        const weeklyData = await fetchAllRowsFromSupabase("weekly_checkins", (q) =>
+          q.order("checkin_timestamp", { ascending: false })
+        );
+        if (Array.isArray(weeklyData) && weeklyData.length > 0) {
+          data = weeklyData;
+        }
+      }
       
-      if (data && data.length > 0) {
+      if (Array.isArray(data) && data.length > 0) {
         list = data.map((row: any) => ({
           id: row.doctor_id,
           doctorName: row.doctor_name,
@@ -1145,17 +1304,20 @@ async function readWeeklyCheckIns(): Promise<CheckIn[]> {
           timestamp: row.checkin_timestamp,
           mobileNumber: row.mobile_number || "",
         }));
-        writeWeeklyCheckInsLocal(list);
       } else {
-        list = readWeeklyCheckInsLocal();
+        list = readMonthlyCheckInsLocal();
       }
     } catch (err: any) {
-      console.error("[Supabase] readWeeklyCheckIns failed, falling back to local:", err);
-      list = readWeeklyCheckInsLocal();
+      console.error("[Supabase] readMonthlyCheckIns failed, falling back to local:", err);
+      list = readMonthlyCheckInsLocal();
     }
   } else {
-    list = readWeeklyCheckInsLocal();
+    list = readMonthlyCheckInsLocal();
   }
+
+  // Enforce 30-day FIFO sliding window
+  list = await pruneMonthlyCheckInsTo30Days(list);
+  writeMonthlyCheckInsLocal(list);
 
   // Normalize details
   const result = list
@@ -1193,21 +1355,27 @@ async function readWeeklyCheckIns(): Promise<CheckIn[]> {
     })
     .filter(c => c.id.toLowerCase().trim() !== "emp");
 
-  weeklyCheckinsCache = result;
-  lastWeeklyFetchTime = Date.now();
+  monthlyCheckinsCache = result;
+  lastMonthlyFetchTime = Date.now();
   return result;
 }
 
-// Add or update check-in
+const readWeeklyCheckIns = readMonthlyCheckIns;
+
+// Add or update check-in (atomic upsert or clean replace)
 async function addCheckIn(checkin: CheckIn): Promise<void> {
   invalidateCheckinsCache();
+  const cleanId = checkin.id.trim().replace(/^(emp\.|emp)/i, "");
+  const normalizedCheckIn: CheckIn = {
+    ...checkin,
+    id: cleanId,
+  };
+
   const supabase = getSupabase();
   if (supabase) {
     try {
-      // Remove any existing active daily check-in for this physician to avoid duplicate active daily rows
-      await supabase.from("checkins").delete().eq("doctor_id", checkin.id);
-      await supabase.from("checkins").insert({
-        doctor_id: checkin.id,
+      const payload = {
+        doctor_id: cleanId,
         doctor_name: checkin.doctorName,
         doctor_arabic_name: checkin.doctorArabicName || checkin.doctorName,
         department: checkin.department,
@@ -1215,63 +1383,103 @@ async function addCheckIn(checkin: CheckIn): Promise<void> {
         mobile_number: checkin.mobileNumber || "",
         checkin_timestamp: checkin.timestamp,
         checkin_date: getEgyptDateStr(checkin.timestamp),
-      });
+      };
+
+      // Try atomic upsert first
+      const { error: upsertErr } = await supabase
+        .from("checkins")
+        .upsert(payload, { onConflict: "doctor_id" });
+
+      if (upsertErr) {
+        // Fallback for schemas without unique constraint
+        await supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${checkin.id}`);
+        await supabase.from("checkins").insert(payload);
+      }
     } catch (err) {
       console.error("[Supabase] addCheckIn failed:", err);
     }
   }
 
   const list = readCheckInsLocal();
-  const filtered = list.filter(c => c.id.toLowerCase() !== checkin.id.toLowerCase());
-  filtered.push(checkin);
+  const filtered = list.filter(c => normalizeId(c.id) !== normalizeId(cleanId));
+  filtered.push(normalizedCheckIn);
   writeCheckInsLocal(filtered);
 }
 
-// Add or update weekly check-in (cumulative, one row per doctor per day)
-async function addWeeklyCheckIn(checkin: CheckIn): Promise<void> {
-  invalidateWeeklyCache();
+// Add or update monthly check-in (cumulative 30-day roster, one row per doctor per day)
+async function addMonthlyCheckIn(checkin: CheckIn): Promise<void> {
+  invalidateMonthlyCache();
+  const cleanId = checkin.id.trim().replace(/^(emp\.|emp)/i, "");
   const dateStr = getEgyptDateStr(checkin.timestamp);
+  const normalizedCheckIn: CheckIn = {
+    ...checkin,
+    id: cleanId,
+  };
 
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("weekly_checkins").insert({
-        doctor_id: checkin.id,
+      const payload = {
+        doctor_id: cleanId,
         doctor_name: checkin.doctorName,
         doctor_arabic_name: checkin.doctorArabicName || checkin.doctorName,
         department: checkin.department,
         shifts: checkin.shifts,
         mobile_number: checkin.mobileNumber || "",
         checkin_timestamp: checkin.timestamp,
-      });
+        checkin_date: dateStr,
+      };
+
+      // Atomic upsert to monthly_checkins
+      const { error: upsertErr } = await supabase
+        .from("monthly_checkins")
+        .upsert(payload, { onConflict: "doctor_id,checkin_date" });
+
+      if (upsertErr) {
+        await supabase.from("monthly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_date", dateStr);
+        await supabase.from("monthly_checkins").insert(payload);
+      }
+
+      // Also upsert to legacy weekly_checkins for backward compatibility
+      try {
+        await supabase.from("weekly_checkins").upsert(payload, { onConflict: "doctor_id,checkin_date" });
+      } catch {}
     } catch (err) {
-      console.error("[Supabase] addWeeklyCheckIn failed:", err);
+      console.error("[Supabase] addMonthlyCheckIn failed:", err);
     }
   }
 
-  const list = readWeeklyCheckInsLocal();
+  const list = readMonthlyCheckInsLocal();
   const filtered = list.filter(c => {
     const cDate = getEgyptDateStr(c.timestamp);
-    return !(c.id.toLowerCase() === checkin.id.toLowerCase() && cDate === dateStr);
+    return !(normalizeId(c.id) === normalizeId(cleanId) && cDate === dateStr);
   });
-  filtered.push(checkin);
-  writeWeeklyCheckInsLocal(filtered);
+  filtered.push(normalizedCheckIn);
+
+  // Enforce 30-day FIFO sliding window on additions
+  const pruned = await pruneMonthlyCheckInsTo30Days(filtered);
+  writeMonthlyCheckInsLocal(pruned);
 }
 
-// Delete a single check-in
+const addWeeklyCheckIn = addMonthlyCheckIn;
+
+// Delete a single daily check-in
 async function deleteCheckIn(id: string): Promise<boolean> {
   invalidateCheckinsCache();
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idNorm = normalizeId(cleanId);
+
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("checkins").delete().eq("doctor_id", id);
+      await supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`);
     } catch (err) {
       console.error("[Supabase] deleteCheckIn failed:", err);
     }
   }
 
   const list = readCheckInsLocal();
-  const filtered = list.filter(c => c.id !== id);
+  const filtered = list.filter(c => normalizeId(c.id) !== idNorm);
   if (filtered.length === list.length) {
     return false;
   }
@@ -1279,27 +1487,34 @@ async function deleteCheckIn(id: string): Promise<boolean> {
   return true;
 }
 
-// Delete a weekly check-in matching doctor ID and date of the check-in
-async function deleteWeeklyCheckIn(id: string, timestamp: string): Promise<void> {
-  invalidateWeeklyCache();
+// Delete a monthly/weekly check-in matching doctor ID AND target date
+async function deleteMonthlyCheckIn(id: string, timestamp: string): Promise<void> {
+  invalidateMonthlyCache();
+  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const idNorm = normalizeId(cleanId);
   const dateStr = getEgyptDateStr(timestamp);
 
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("weekly_checkins").delete().eq("doctor_id", id);
+      await Promise.all([
+        supabase.from("monthly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_date", dateStr),
+        supabase.from("weekly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_date", dateStr),
+      ]);
     } catch (err) {
-      console.error("[Supabase] deleteWeeklyCheckIn failed:", err);
+      console.error("[Supabase] deleteMonthlyCheckIn failed:", err);
     }
   }
 
-  const list = readWeeklyCheckInsLocal();
+  const list = readMonthlyCheckInsLocal();
   const filtered = list.filter(c => {
     const cDate = getEgyptDateStr(c.timestamp);
-    return !(c.id.toLowerCase() === id.toLowerCase() && cDate === dateStr);
+    return !(normalizeId(c.id) === idNorm && cDate === dateStr);
   });
-  writeWeeklyCheckInsLocal(filtered);
+  writeMonthlyCheckInsLocal(filtered);
 }
+
+const deleteWeeklyCheckIn = deleteMonthlyCheckIn;
 
 // Clear all daily check-ins
 async function clearAllCheckIns(): Promise<void> {
@@ -1307,7 +1522,7 @@ async function clearAllCheckIns(): Promise<void> {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await supabase.from("checkins").delete().neq("doctor_id", "__none__");
     } catch (err) {
       console.error("[Supabase] clearAllCheckIns failed:", err);
     }
@@ -1316,20 +1531,25 @@ async function clearAllCheckIns(): Promise<void> {
   writeCheckInsLocal([]);
 }
 
-// Clear all weekly check-ins
-async function clearWeeklyCheckIns(): Promise<void> {
-  invalidateWeeklyCache();
+// Clear all monthly check-ins (and legacy weekly check-ins)
+async function clearMonthlyCheckIns(): Promise<void> {
+  invalidateMonthlyCache();
   const supabase = getSupabase();
   if (supabase) {
     try {
-      await supabase.from("weekly_checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await Promise.all([
+        supabase.from("monthly_checkins").delete().neq("doctor_id", "__none__"),
+        supabase.from("weekly_checkins").delete().neq("doctor_id", "__none__"),
+      ]);
     } catch (err) {
-      console.error("[Supabase] clearWeeklyCheckIns failed:", err);
+      console.error("[Supabase] clearMonthlyCheckIns failed:", err);
     }
   }
 
-  writeWeeklyCheckInsLocal([]);
+  writeMonthlyCheckInsLocal([]);
 }
+
+const clearWeeklyCheckIns = clearMonthlyCheckIns;
 
 // API Endpoints
 app.get("/header_bg.png", (req, res) => {
@@ -1485,17 +1705,17 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
   }
 });
 
-// Get cumulative weekly check-ins with active daily check-ins merged in
-app.get(["/api/weekly-checkins", "/weekly-checkins"], async (req, res) => {
+// Get cumulative monthly check-ins (30-day rolling window) with active daily check-ins merged in
+app.get(["/api/monthly-checkins", "/monthly-checkins", "/api/weekly-checkins", "/weekly-checkins"], async (req, res) => {
   res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, stale-while-revalidate=120");
   try {
-    const weeklyList = await readWeeklyCheckIns();
+    const monthlyList = await readMonthlyCheckIns();
     const dailyList = await readCheckIns();
 
     const mergedMap = new Map<string, CheckIn>();
 
-    // First populate with weekly check-ins
-    weeklyList.forEach(c => {
+    // First populate with 30-day rolling monthly check-ins
+    monthlyList.forEach(c => {
       const dateStr = getEgyptDateStr(c.timestamp);
       const key = `${c.id.toLowerCase()}_${dateStr}`;
       mergedMap.set(key, c);
@@ -1510,8 +1730,8 @@ app.get(["/api/weekly-checkins", "/weekly-checkins"], async (req, res) => {
 
     res.json(Array.from(mergedMap.values()));
   } catch (err) {
-    console.error("Error fetching merged weekly check-ins:", err);
-    res.status(500).json({ error: "Failed to read weekly check-ins." });
+    console.error("Error fetching merged monthly check-ins:", err);
+    res.status(500).json({ error: "Failed to read monthly check-ins." });
   }
 });
 
@@ -1565,9 +1785,9 @@ app.post(["/api/checkins", "/checkins"], async (req, res) => {
   };
 
   try {
-    // Add to daily AND weekly cumulative check-ins
+    // Add to daily AND monthly 30-day cumulative check-ins
     await addCheckIn(newCheckIn);
-    await addWeeklyCheckIn(newCheckIn);
+    await addMonthlyCheckIn(newCheckIn);
     res.status(201).json({ success: true, checkIn: newCheckIn });
   } catch (err) {
     res.status(500).json({ error: "Failed to register check-in." });
@@ -1578,7 +1798,7 @@ app.post(["/api/checkins", "/checkins"], async (req, res) => {
 app.delete(["/api/checkins/:id", "/checkins/:id"], async (req, res) => {
   const { id } = req.params;
   try {
-    // Find the daily check-in first to get its timestamp for matching weekly record deletion
+    // Find the daily check-in first to get its timestamp for matching monthly record deletion
     const dailyCheckIns = await readCheckIns();
     const targetCheckIn = dailyCheckIns.find(c => c.id.toLowerCase() === id.toLowerCase());
 
@@ -1588,16 +1808,16 @@ app.delete(["/api/checkins/:id", "/checkins/:id"], async (req, res) => {
     }
 
     if (targetCheckIn) {
-      await deleteWeeklyCheckIn(targetCheckIn.id, targetCheckIn.timestamp);
+      await deleteMonthlyCheckIn(targetCheckIn.id, targetCheckIn.timestamp);
     }
 
-    res.json({ success: true, message: "Check-in deleted from daily and weekly sheets." });
+    res.json({ success: true, message: "Check-in deleted from daily and monthly sheets." });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete check-in." });
   }
 });
 
-// Clear all active daily check-ins (leaves weekly check-ins intact!)
+// Clear all active daily check-ins (leaves monthly check-ins intact!)
 app.post(["/api/checkins/clear", "/checkins/clear"], async (req, res) => {
   try {
     await clearAllCheckIns();
@@ -1607,13 +1827,13 @@ app.post(["/api/checkins/clear", "/checkins/clear"], async (req, res) => {
   }
 });
 
-// Clear all weekly check-ins
-app.post(["/api/checkins/clear-weekly", "/checkins/clear-weekly"], async (req, res) => {
+// Clear all monthly check-ins (with backward compatible clear-weekly route)
+app.post(["/api/checkins/clear-monthly", "/checkins/clear-monthly", "/api/checkins/clear-weekly", "/checkins/clear-weekly"], async (req, res) => {
   try {
-    await clearWeeklyCheckIns();
-    res.json({ success: true, message: "All cumulative weekly check-ins cleared." });
+    await clearMonthlyCheckIns();
+    res.json({ success: true, message: "All cumulative monthly check-ins cleared." });
   } catch (err) {
-    res.status(500).json({ error: "Failed to clear weekly check-ins." });
+    res.status(500).json({ error: "Failed to clear monthly check-ins." });
   }
 });
 
@@ -1706,14 +1926,8 @@ app.post("/api/doctors/delete-batch", async (req, res) => {
     return res.status(400).json({ error: "An array of Doctor IDs or items is required." });
   }
   try {
-    for (const item of listToDelete) {
-      if (typeof item === "object" && item !== null && item.id) {
-        await deleteCustomDoctorRecord(item.id, item.name);
-      } else if (typeof item === "string") {
-        await deleteCustomDoctorRecord(item);
-      }
-    }
-    res.json({ success: true, message: `${listToDelete.length} physician(s) removed from database successfully.` });
+    const deletedCount = await deleteCustomDoctorsBatch(listToDelete);
+    res.json({ success: true, message: `${deletedCount} physician(s) removed from database successfully.` });
   } catch (err) {
     res.status(500).json({ error: "Failed to delete selected doctor records." });
   }
@@ -1743,6 +1957,7 @@ app.get("/api/supabase/status", async (req, res) => {
     const [
       doctorsRes,
       checkinsRes,
+      monthlyRes,
       weeklyRes,
       customDocsRes,
       customPhonesRes,
@@ -1750,6 +1965,7 @@ app.get("/api/supabase/status", async (req, res) => {
     ] = await Promise.all([
       supabase.from("doctors").select("*", { count: "exact", head: true }),
       supabase.from("checkins").select("*", { count: "exact", head: true }),
+      supabase.from("monthly_checkins").select("*", { count: "exact", head: true }),
       supabase.from("weekly_checkins").select("*", { count: "exact", head: true }),
       supabase.from("custom_doctors").select("*", { count: "exact", head: true }),
       supabase.from("custom_doctor_phones").select("*", { count: "exact", head: true }),
@@ -1759,7 +1975,7 @@ app.get("/api/supabase/status", async (req, res) => {
     const hasError =
       doctorsRes.error ||
       checkinsRes.error ||
-      weeklyRes.error ||
+      (monthlyRes.error && weeklyRes.error) ||
       customDocsRes.error ||
       customPhonesRes.error ||
       deletedDocsRes.error;
@@ -1772,6 +1988,7 @@ app.get("/api/supabase/status", async (req, res) => {
         ? {
             doctors: doctorsRes.error?.message,
             checkins: checkinsRes.error?.message,
+            monthly_checkins: monthlyRes.error?.message,
             weekly_checkins: weeklyRes.error?.message,
             custom_doctors: customDocsRes.error?.message,
             custom_doctor_phones: customPhonesRes.error?.message,
@@ -1781,6 +1998,7 @@ app.get("/api/supabase/status", async (req, res) => {
       counts: {
         doctors: doctorsRes.count ?? 0,
         checkins: checkinsRes.count ?? 0,
+        monthly_checkins: monthlyRes.count ?? weeklyRes.count ?? 0,
         weekly_checkins: weeklyRes.count ?? 0,
         custom_doctors: customDocsRes.count ?? 0,
         custom_doctor_phones: customPhonesRes.count ?? 0,
@@ -1915,47 +2133,83 @@ app.post("/api/supabase/migrate", async (req, res) => {
       results.deleted_doctors = 0;
     }
 
-    // 5. Daily Check-ins
+    // 5. Daily Check-ins - Deduplicate by doctor_id
     const dailyCheckins = readCheckInsLocal();
     if (dailyCheckins.length > 0) {
-      await supabase.from("checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-      const formattedDaily = dailyCheckins.map((c) => ({
-        doctor_id: c.id || "",
-        doctor_name: c.doctorName || "",
-        doctor_arabic_name: c.doctorArabicName || c.doctorName || "",
-        department: c.department || "General",
-        shifts: Array.isArray(c.shifts) ? c.shifts : [],
-        mobile_number: c.mobileNumber || "",
-        checkin_timestamp: c.timestamp || new Date().toISOString(),
-        checkin_date: getEgyptDateStr(c.timestamp),
-      }));
-      const { error } = await supabase.from("checkins").insert(formattedDaily);
-      if (error) throw new Error(`Failed to insert checkins in Supabase: ${error.message}`);
+      await supabase.from("checkins").delete().neq("doctor_id", "__none__");
+      const uniqueDaily = new Map<string, any>();
+      for (const c of dailyCheckins) {
+        const cleanId = String(c.id || "").trim();
+        if (!cleanId) continue;
+        uniqueDaily.set(cleanId.toLowerCase(), {
+          doctor_id: cleanId,
+          doctor_name: c.doctorName || "",
+          doctor_arabic_name: c.doctorArabicName || c.doctorName || "",
+          department: c.department || "General",
+          shifts: Array.isArray(c.shifts) ? c.shifts : [],
+          mobile_number: c.mobileNumber || "",
+          checkin_timestamp: c.timestamp || new Date().toISOString(),
+          checkin_date: getEgyptDateStr(c.timestamp || new Date().toISOString()),
+        });
+      }
+      const formattedDaily = Array.from(uniqueDaily.values());
+      const { error } = await supabase.from("checkins").upsert(formattedDaily, { onConflict: "doctor_id" });
+      if (error) {
+        // Fallback to insert
+        const { error: insErr } = await supabase.from("checkins").insert(formattedDaily);
+        if (insErr) throw new Error(`Failed to insert checkins in Supabase: ${insErr.message}`);
+      }
       results.checkins = formattedDaily.length;
     } else {
       results.checkins = 0;
     }
 
-    // 6. Weekly Check-ins
-    const weeklyCheckins = readWeeklyCheckInsLocal();
-    if (weeklyCheckins.length > 0) {
-      await supabase.from("weekly_checkins").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-      const formattedWeekly = weeklyCheckins.map((w) => ({
-        doctor_id: w.id || "",
-        doctor_name: w.doctorName || "",
-        doctor_arabic_name: w.doctorArabicName || w.doctorName || "",
-        department: w.department || "General",
-        shifts: Array.isArray(w.shifts) ? w.shifts : [],
-        mobile_number: w.mobileNumber || "",
-        checkin_timestamp: w.timestamp || new Date().toISOString(),
-      }));
-      for (let i = 0; i < formattedWeekly.length; i += 100) {
-        const batch = formattedWeekly.slice(i, i + 100);
-        const { error } = await supabase.from("weekly_checkins").insert(batch);
-        if (error) throw new Error(`Failed to insert weekly_checkins in Supabase: ${error.message}`);
+    // 6. Monthly Check-ins (30-day rolling window) & Weekly Check-ins
+    const monthlyCheckins = await pruneMonthlyCheckInsTo30Days(readMonthlyCheckInsLocal());
+    if (monthlyCheckins.length > 0) {
+      await Promise.all([
+        supabase.from("monthly_checkins").delete().neq("doctor_id", "__none__"),
+        supabase.from("weekly_checkins").delete().neq("doctor_id", "__none__"),
+      ]);
+
+      const uniqueMonthly = new Map<string, any>();
+      for (const w of monthlyCheckins) {
+        const cleanId = String(w.id || "").trim();
+        if (!cleanId) continue;
+        const ts = w.timestamp || new Date().toISOString();
+        const dateStr = getEgyptDateStr(ts);
+        const key = `${cleanId.toLowerCase()}_${dateStr}`;
+        uniqueMonthly.set(key, {
+          doctor_id: cleanId,
+          doctor_name: w.doctorName || "",
+          doctor_arabic_name: w.doctorArabicName || w.doctorName || "",
+          department: w.department || "General",
+          shifts: Array.isArray(w.shifts) ? w.shifts : [],
+          mobile_number: w.mobileNumber || "",
+          checkin_timestamp: ts,
+          checkin_date: dateStr,
+        });
       }
-      results.weekly_checkins = formattedWeekly.length;
+      const formattedMonthly = Array.from(uniqueMonthly.values());
+      for (let i = 0; i < formattedMonthly.length; i += 100) {
+        const batch = formattedMonthly.slice(i, i + 100);
+        const { error: monErr } = await supabase.from("monthly_checkins").upsert(batch, { onConflict: "doctor_id,checkin_date" });
+        if (monErr) {
+          const { error: insErr } = await supabase.from("monthly_checkins").insert(batch);
+          if (insErr) console.error("Warning: monthly_checkins insert:", insErr.message);
+        }
+        // Also keep legacy weekly table synchronized
+        const { error: wkErr } = await supabase.from("weekly_checkins").upsert(batch, { onConflict: "doctor_id,checkin_date" });
+        if (wkErr) {
+          try {
+            await supabase.from("weekly_checkins").insert(batch);
+          } catch {}
+        }
+      }
+      results.monthly_checkins = formattedMonthly.length;
+      results.weekly_checkins = formattedMonthly.length;
     } else {
+      results.monthly_checkins = 0;
       results.weekly_checkins = 0;
     }
 
