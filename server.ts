@@ -331,8 +331,13 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         if (key.includes("_")) {
           const [kId, ...rest] = key.split("_");
           const kName = rest.join("_");
-          if (!compositeTombstonesById.has(kId)) compositeTombstonesById.set(kId, new Set());
-          compositeTombstonesById.get(kId)!.add(kName);
+          const normKId = normalizeId(kId);
+          if (!compositeTombstonesById.has(normKId)) compositeTombstonesById.set(normKId, new Set());
+          compositeTombstonesById.get(normKId)!.add(kName);
+          if (kId !== normKId) {
+            if (!compositeTombstonesById.has(kId)) compositeTombstonesById.set(kId, new Set());
+            compositeTombstonesById.get(kId)!.add(kName);
+          }
         }
       }
 
@@ -388,24 +393,75 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         });
       });
 
-      // 2. Apply custom doctors overrides
+      // 2. Safely sync active records from Supabase doctors table if available
+      const supabase = getSupabase();
+      if (supabase) {
+        try {
+          const supabaseDoctors = await fetchAllRowsFromSupabase("doctors", (q) => q.eq("is_active", true));
+          if (supabaseDoctors && supabaseDoctors.length > 0) {
+            for (const sDoc of supabaseDoctors) {
+              const cleanId = sDoc.id.trim().replace(/^(emp\.|emp)/i, "");
+              if (isDeleted(cleanId, sDoc.name, sDoc.arabic_name)) continue;
+              const idKey = normalizeId(cleanId);
+              const nameKey = normalizeName(sDoc.name);
+              const mob = sDoc.mobile_number || customPhones[idKey] || mobileNumbersByCodeMap.get(idKey) || "";
+              const mapKey = `${idKey}___${nameKey}`;
+              doctorMap.set(mapKey, {
+                id: cleanId,
+                name: sDoc.name,
+                arabicName: sDoc.arabic_name || sDoc.name,
+                department: normalizeDepartment(cleanDepartment(sDoc.department || "General Surgery")),
+                mobileNumber: mob,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("[Supabase] Error delta-reading active doctors table:", err);
+        }
+      }
+
+      // 3. Apply custom doctors overrides with strict duplicate & ghost eviction
       customDocs.forEach(cDoc => {
         const cleanId = cDoc.id.trim().replace(/^(emp\.|emp)/i, "");
         if (isDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(cDoc.name);
+        const origIdKey = cDoc.originalId ? normalizeId(cDoc.originalId) : "";
+        const origNameKey = cDoc.originalName ? normalizeName(cDoc.originalName) : "";
+
+        // Remove previous versions of this doctor from doctorMap so edits never duplicate or resurrect
+        for (const [key, existing] of Array.from(doctorMap.entries())) {
+          const exIdKey = normalizeId(existing.id);
+          const exNameKey = normalizeName(existing.name);
+          
+          if (origIdKey && origNameKey && exIdKey === origIdKey && exNameKey === origNameKey) {
+            doctorMap.delete(key);
+            continue;
+          }
+          if (origIdKey && exIdKey === origIdKey && (!origNameKey || exNameKey === origNameKey || exNameKey === nameKey)) {
+            doctorMap.delete(key);
+            continue;
+          }
+          if (exIdKey === idKey && (exNameKey === nameKey || !cDoc.originalId)) {
+            doctorMap.delete(key);
+            continue;
+          }
+        }
+
         const mob = cDoc.mobileNumber || customPhones[idKey] || mobileNumbersByCodeMap.get(idKey) || "";
         const mapKey = `${idKey}___${nameKey}`;
         doctorMap.set(mapKey, {
           id: cleanId,
           name: cDoc.name,
           arabicName: cDoc.arabicName || cDoc.name,
-          department: normalizeDepartment(cleanDepartment(cDoc.department || "General")),
+          department: normalizeDepartment(cleanDepartment(cDoc.department || "General Surgery")),
           mobileNumber: mob,
+          originalId: cDoc.originalId || "",
+          originalName: cDoc.originalName || "",
         });
       });
 
-      // 3. Update global indexes in memory
+      // 4. Update global indexes in memory
       const updatedList = Array.from(doctorMap.values());
       indexDoctorsList(updatedList);
       lastDoctorsRefreshTime = Date.now();
@@ -821,6 +877,7 @@ interface CustomDoctorRecord {
   department: string;
   mobileNumber: string;
   originalId?: string;
+  originalName?: string;
   updatedAt?: string;
 }
 
@@ -1066,20 +1123,26 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
   const nameKey = normalizeName(docRecord.name);
   const origCleanId = docRecord.originalId ? docRecord.originalId.trim().replace(/^(emp\.|emp)/i, "") : "";
   const origKey = origCleanId ? normalizeId(origCleanId) : "";
+  const origName = docRecord.originalName ? docRecord.originalName.trim() : "";
+  const origNameKey = origName ? normalizeName(origName) : "";
 
-  // 1. Unmark any previous deletion tombstones for this doctor or ID
+  // 1. If this is an edit of an existing doctor and either ID or name changed, tombstone the old entry
+  if (origCleanId && (origKey !== idKey || (origNameKey && origNameKey !== nameKey))) {
+    await markDoctorAsDeleted(origCleanId, origName || undefined);
+  }
+
+  // 2. Unmark any previous deletion tombstones for this doctor or ID
   await unmarkDoctorAsDeleted(cleanId, docRecord.name);
   if (origCleanId && origKey === idKey) {
     await unmarkDoctorAsDeleted(origCleanId, docRecord.name);
   }
 
-  // 2. If the ID was changed, tombstone the old ID so it does not resurrect from compiled list
-  if (origKey && origKey !== idKey) {
-    await markDoctorAsDeleted(origCleanId, undefined);
-  }
-
+  // Ensure department is strictly a valid canonical specialty for database constraint safety
   const normDept = normalizeSpecialty(docRecord.department);
-  const canonicalDepartment = normDept.department || "General Surgery";
+  let canonicalDepartment = normDept.department;
+  if (!CANONICAL_SPECIALTIES.includes(canonicalDepartment as any)) {
+    canonicalDepartment = "General Surgery";
+  }
 
   const recordToSave: CustomDoctorRecord = {
     id: cleanId,
@@ -1088,12 +1151,15 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
     department: canonicalDepartment,
     mobileNumber: docRecord.mobileNumber ? docRecord.mobileNumber.trim() : "",
     originalId: origCleanId || "",
+    originalName: origName || "",
     updatedAt: new Date().toISOString()
   };
 
-  // 3. Update in-memory database
+  // 3. Update in-memory database targeting the exact record being edited
   let existingIndex = NORMALIZED_DOCTORS_DATABASE.findIndex(
-    d => (origKey && normalizeId(d.id) === origKey) ||
+    d => (origKey && normalizeId(d.id) === origKey && (!origNameKey || normalizeName(d.name) === origNameKey)) ||
+         (origKey && normalizeId(d.id) === origKey) ||
+         (idKey && normalizeId(d.id) === idKey && (!origNameKey || normalizeName(d.name) === nameKey)) ||
          (idKey && normalizeId(d.id) === idKey)
   );
 
@@ -1118,16 +1184,36 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
 
   indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
 
+  // Update lookup maps
   if (idKey) mobileNumbersByCodeMap.set(idKey, recordToSave.mobileNumber);
   if (nameKey) mobileNumbersByNameMap.set(nameKey, recordToSave.mobileNumber);
   if (origKey && origKey !== idKey) {
     mobileNumbersByCodeMap.delete(origKey);
   }
+  if (origNameKey && origNameKey !== nameKey) {
+    mobileNumbersByNameMap.delete(origNameKey);
+  }
+
+  // Also sync to custom_doctors_phones.json immediately
+  const localPhones = readCustomPhonesLocal();
+  if (recordToSave.mobileNumber) {
+    localPhones[idKey] = recordToSave.mobileNumber;
+    localPhones[cleanId] = recordToSave.mobileNumber;
+  } else {
+    delete localPhones[idKey];
+    delete localPhones[cleanId];
+  }
+  if (origKey && origKey !== idKey) {
+    delete localPhones[origKey];
+    delete localPhones[origCleanId];
+  }
+  writeCustomPhonesLocal(localPhones);
 
   // 4. Update local custom doctors list
   const localList = readCustomDoctorsLocal();
   const existingLocalIdx = localList.findIndex(
-    d => (origKey && normalizeId(d.id) === origKey) ||
+    d => (origKey && normalizeId(d.id) === origKey && (!origNameKey || normalizeName(d.name) === origNameKey)) ||
+         (origKey && normalizeId(d.id) === origKey) ||
          (idKey && normalizeId(d.id) === idKey)
   );
 
@@ -1142,46 +1228,67 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
   const supabase = getSupabase();
   if (supabase) {
     try {
+      const operations: Promise<any>[] = [];
       if (origCleanId && origKey !== idKey) {
-        await supabase.from("custom_doctors").delete().eq("id", origCleanId);
-        await supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", origCleanId);
+        operations.push(supabase.from("custom_doctors").delete().eq("id", origCleanId));
+        operations.push(supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", origCleanId));
+        operations.push(supabase.from("custom_doctor_phones").delete().eq("id", origCleanId));
       }
-      const [customRes, doctorRes, checkinsRes, monthlyRes] = await Promise.all([
-        supabase.from("custom_doctors").upsert({
-          id: recordToSave.id,
-          name: recordToSave.name,
-          arabic_name: recordToSave.arabicName,
-          department: recordToSave.department,
+
+      // Upsert to custom_doctors
+      operations.push(supabase.from("custom_doctors").upsert({
+        id: recordToSave.id,
+        name: recordToSave.name,
+        arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+        original_id: recordToSave.originalId || "",
+        updated_at: recordToSave.updatedAt || new Date().toISOString(),
+      }, { onConflict: "id" }));
+
+      // Upsert to doctors
+      operations.push(supabase.from("doctors").upsert({
+        id: recordToSave.id,
+        name: recordToSave.name,
+        arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" }));
+
+      // Upsert or delete custom_doctor_phones
+      if (recordToSave.mobileNumber) {
+        operations.push(supabase.from("custom_doctor_phones").upsert({
+          id: cleanId,
           mobile_number: recordToSave.mobileNumber,
-          original_id: recordToSave.originalId || "",
-          updated_at: recordToSave.updatedAt || new Date().toISOString(),
-        }, { onConflict: "id" }),
-        supabase.from("doctors").upsert({
-          id: recordToSave.id,
-          name: recordToSave.name,
-          arabic_name: recordToSave.arabicName,
-          department: recordToSave.department,
-          mobile_number: recordToSave.mobileNumber,
-          is_active: true,
           updated_at: new Date().toISOString(),
-        }, { onConflict: "id" }),
-        supabase.from("checkins").update({
-          doctor_name: recordToSave.name,
-          doctor_arabic_name: recordToSave.arabicName,
-          department: recordToSave.department,
-          mobile_number: recordToSave.mobileNumber,
-        }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`),
-        supabase.from("monthly_checkins").update({
-          doctor_name: recordToSave.name,
-          doctor_arabic_name: recordToSave.arabicName,
-          department: recordToSave.department,
-          mobile_number: recordToSave.mobileNumber,
-        }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`)
-      ]);
-      if (customRes.error) console.error("[Supabase] custom_doctors upsert error:", customRes.error.message);
-      if (doctorRes.error) console.error("[Supabase] doctors upsert error:", doctorRes.error.message);
-      if (checkinsRes.error) console.error("[Supabase] checkins update error:", checkinsRes.error.message);
-      if (monthlyRes.error) console.error("[Supabase] monthly_checkins update error:", monthlyRes.error.message);
+        }, { onConflict: "id" }));
+      } else {
+        operations.push(supabase.from("custom_doctor_phones").delete().eq("id", cleanId));
+      }
+
+      // Cascade update checkins and monthly_checkins
+      operations.push(supabase.from("checkins").update({
+        doctor_name: recordToSave.name,
+        doctor_arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+      }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`));
+
+      operations.push(supabase.from("monthly_checkins").update({
+        doctor_name: recordToSave.name,
+        doctor_arabic_name: recordToSave.arabicName,
+        department: recordToSave.department,
+        mobile_number: recordToSave.mobileNumber,
+      }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`));
+
+      const results = await Promise.all(operations);
+      for (const res of results) {
+        if (res?.error) {
+          console.error("[Supabase save error]:", res.error.message);
+        }
+      }
     } catch (err) {
       console.error("[Supabase] saveCustomDoctorRecord failed:", err);
     }
@@ -1202,7 +1309,7 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
   }
   if (checkinChanged) writeCheckInsLocal(dailyCheckins);
 
-  lastDoctorsRefreshTime = Date.now();
+  lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
 }
 
@@ -1290,9 +1397,11 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
         tombstones.length > 0
           ? supabase.from("deleted_doctors").upsert(tombstones, { onConflict: "id" })
           : Promise.resolve({ error: null }),
-        nameKey && targetName
-          ? supabase.from("custom_doctors").delete().match({ id: cleanId, name: targetName })
-          : supabase.from("custom_doctors").delete().or(`id.eq.${cleanId},original_id.eq.${cleanId}`),
+        !otherDoctorsShareId
+          ? supabase.from("custom_doctors").delete().or(`id.eq.${cleanId},original_id.eq.${cleanId}`)
+          : (nameKey && targetName
+              ? supabase.from("custom_doctors").delete().match({ id: cleanId, name: targetName })
+              : supabase.from("custom_doctors").delete().eq("id", cleanId)),
         !otherDoctorsShareId
           ? supabase.from("custom_doctor_phones").delete().eq("id", cleanId)
           : Promise.resolve({ error: null }),
@@ -1326,7 +1435,7 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
 
   // 7. Re-index in memory immediately
   indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
-  lastDoctorsRefreshTime = Date.now();
+  lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
 }
 
