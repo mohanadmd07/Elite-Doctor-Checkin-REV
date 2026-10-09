@@ -11,6 +11,11 @@ import { COMPILED_DOCTORS } from "./src/data/compiledDoctors.js";
 import { PRECOMPILED_CODE_PHONES, PRECOMPILED_NAME_PHONES } from "./src/data/compiledPhones.js";
 import { getSupabase, getSupabaseConfig, fetchAllRowsFromSupabase, resetSupabaseClient } from "./src/db/supabase.js";
 
+// Ensure local fallback data directory path is defined before boot calls
+const DATA_DIR = process.env.VERCEL
+  ? path.join("/tmp", "data")
+  : path.join(process.cwd(), "data");
+
 // Global Mobile Numbers lookup Maps populated from the Excel sheet
 const mobileNumbersByCodeMap = new Map<string, string>();
 const mobileNumbersByNameMap = new Map<string, string>();
@@ -582,10 +587,7 @@ const PORT = 3000;
 app.use(compression());
 app.use(express.json());
 
-// Ensure local fallback data structure is intact
-const DATA_DIR = process.env.VERCEL
-  ? path.join("/tmp", "data")
-  : path.join(process.cwd(), "data");
+// Local fallback data files
 const CHECKINS_FILE = path.join(DATA_DIR, "checkins.json");
 
 function ensureLocalData() {
@@ -2802,6 +2804,20 @@ app.get(["/api/download/daily-sheet", "/download/daily-sheet"], async (req, res)
   }
 });
 
+// Helper to parse and normalize multiple comma-separated WhatsApp Group IDs
+function parseAndNormalizeGroupIds(raw: string): string[] {
+  return raw
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(id => {
+      // Strip everything after first '@' to handle unnormalized inputs or accidental duplicates
+      const cleanNum = id.replace(/@.*$/, "").trim();
+      return `${cleanNum}@g.us`;
+    })
+    .filter((id, idx, arr) => arr.indexOf(id) === idx);
+}
+
 // Helper function to dispatch daily sheet to WhatsApp via Green-API
 async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCaption?: string } = {}) {
   const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
@@ -2814,62 +2830,74 @@ async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCa
     );
   }
 
-  // Ensure target group chat ID has @g.us suffix
-  let targetChatId = rawGroupId;
-  if (!targetChatId.includes("@")) {
-    targetChatId = `${targetChatId}@g.us`;
+  const targetChatIds = parseAndNormalizeGroupIds(rawGroupId);
+  if (targetChatIds.length === 0) {
+    throw new Error("No valid WhatsApp group IDs found in WHATSAPP_GROUP_ID.");
   }
 
   const { buffer, fileName, arabicWeekday, formattedDate, totalCheckins, departmentsCount } =
     await buildDailySheetWorkbook({ dateParam: options.targetDate });
 
-  const cairoTimeNow = new Date().toLocaleTimeString("ar-EG", {
-    timeZone: "Africa/Cairo",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true
-  });
-
+  // Clean, focused morning briefing message requested by user
   const caption =
     options.customCaption ||
-    `📋 *Elite Medical Center — كشف الأطباء اليومي*\n` +
-    `📅 *اليوم:* ${arabicWeekday} (${formattedDate})\n` +
-    `👨‍⚕️ *إجمالي الأطباء المسجلين:* ${totalCheckins}\n` +
-    `🏥 *عدد العيادات النشطة:* ${departmentsCount}\n` +
-    `⏰ *توقيت الإرسال:* ${cairoTimeNow} بتوقيت القاهرة`;
+    `📋 كشف الأطباء اليومي\n` +
+    `📅 اليوم: ${arabicWeekday} (${formattedDate})\n` +
+    `👨‍⚕️ إجمالي الأطباء المسجلين: ${totalCheckins}`;
 
   const url = `https://api.green-api.com/waInstance${idInstance}/sendFileByUpload/${apiTokenInstance}`;
 
-  const formData = new FormData();
-  formData.append("chatId", targetChatId);
-  formData.append("fileName", fileName);
-  formData.append("caption", caption);
+  const dispatchResults: { targetChatId: string; success: boolean; idMessage?: string; error?: string }[] = [];
 
-  const fileBlob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  });
-  formData.append("file", fileBlob, fileName);
+  for (const targetChatId of targetChatIds) {
+    try {
+      const formData = new FormData();
+      formData.append("chatId", targetChatId);
+      formData.append("fileName", fileName);
+      formData.append("caption", caption);
 
-  const response = await fetch(url, {
-    method: "POST",
-    body: formData
-  });
+      const fileBlob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      formData.append("file", fileBlob, fileName);
 
-  const responseData: any = await response.json().catch(() => ({}));
+      const response = await fetch(url, {
+        method: "POST",
+        body: formData
+      });
 
-  if (!response.ok) {
-    const errorDetails = typeof responseData === "object" ? JSON.stringify(responseData) : String(responseData);
-    throw new Error(`Green-API returned error (${response.status}): ${errorDetails}`);
+      const responseData: any = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const errorDetails = typeof responseData === "object" ? JSON.stringify(responseData) : String(responseData);
+        console.error(`Green-API returned error for group ${targetChatId} (${response.status}): ${errorDetails}`);
+        dispatchResults.push({ targetChatId, success: false, error: errorDetails });
+      } else {
+        dispatchResults.push({
+          targetChatId,
+          success: true,
+          idMessage: responseData?.idMessage || null
+        });
+      }
+    } catch (err: any) {
+      console.error(`Failed to send daily sheet to group ${targetChatId}:`, err);
+      dispatchResults.push({ targetChatId, success: false, error: err?.message || String(err) });
+    }
+  }
+
+  const anySuccess = dispatchResults.some(r => r.success);
+  if (!anySuccess && dispatchResults.length > 0) {
+    throw new Error(`Failed to deliver to any WhatsApp group: ${JSON.stringify(dispatchResults)}`);
   }
 
   return {
-    success: true,
-    idMessage: responseData?.idMessage || null,
+    success: anySuccess,
     fileName,
-    targetChatId,
+    targetChatIds,
     totalCheckins,
     departmentsCount,
-    formattedDate
+    formattedDate,
+    results: dispatchResults
   };
 }
 
@@ -2878,14 +2906,15 @@ app.get(["/api/whatsapp/status", "/whatsapp/status"], (req, res) => {
   const hasInstanceId = Boolean(process.env.GREEN_API_ID_INSTANCE?.trim());
   const hasToken = Boolean(process.env.GREEN_API_API_TOKEN_INSTANCE?.trim());
   const rawGroupId = process.env.WHATSAPP_GROUP_ID?.trim() || "";
-  const isConfigured = hasInstanceId && hasToken && Boolean(rawGroupId);
+  const groups = parseAndNormalizeGroupIds(rawGroupId);
+  const isConfigured = hasInstanceId && hasToken && groups.length > 0;
 
   res.json({
     configured: isConfigured,
     hasInstanceId,
     hasToken,
-    hasGroupId: Boolean(rawGroupId),
-    targetGroupMasked: rawGroupId ? `${rawGroupId.slice(0, 6)}...${rawGroupId.slice(-8)}` : null
+    groupsCount: groups.length,
+    groups
   });
 });
 
@@ -2896,7 +2925,7 @@ app.post(["/api/whatsapp/send-daily-sheet", "/whatsapp/send-daily-sheet"], async
     const result = await sendDailySheetToWhatsApp({ targetDate });
     res.json({
       success: true,
-      message: `Daily sheet successfully delivered to WhatsApp group ${result.targetChatId}`,
+      message: `Daily sheet successfully delivered to WhatsApp (${result.targetChatIds.length} group${result.targetChatIds.length > 1 ? "s" : ""})`,
       data: result
     });
   } catch (err: any) {

@@ -5,6 +5,7 @@ export interface CompiledDoctor {
   arabicName: string;
   department: string;
   mobileNumber?: string;
+  isActive?: boolean;
 }
 
 export const COMPILED_DOCTORS: CompiledDoctor[] = [

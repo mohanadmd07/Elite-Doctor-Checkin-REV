@@ -3777,11 +3777,26 @@ export default function App() {
                           )}
                           <span>{isDownloadingDaily ? "DOWNLOADING..." : "DOWNLOAD TODAY XLS"}</span>
                         </button>
+
+                        <button
+                          id="send-whatsapp-report-btn"
+                          onClick={handleSendWhatsAppSheet}
+                          disabled={isSendingWhatsApp}
+                          className="bg-[#128C7E] hover:bg-[#075E54] text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                          title="Send today's spreadsheet directly to the WhatsApp group"
+                        >
+                          {isSendingWhatsApp ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isSendingWhatsApp ? "SENDING TO WHATSAPP..." : "SEND TO WHATSAPP"}</span>
+                        </button>
                         
                         <button
                           id="clear-all-records-btn"
                           onClick={handleClearAllCheckins}
-                          disabled={isDownloadingDaily}
+                          disabled={isDownloadingDaily || isSendingWhatsApp}
                           className="bg-red-50 hover:bg-red-100 text-red-700 font-bold text-[11px] py-2 px-3 rounded border border-red-200 transition-colors disabled:opacity-50 cursor-pointer"
                           title="Clear All Submissions for today only"
                         >
