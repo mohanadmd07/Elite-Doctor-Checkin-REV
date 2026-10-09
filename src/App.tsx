@@ -873,7 +873,15 @@ export default function App() {
         const res = await fetch("/api/doctors");
         rawDoctors = res.ok ? await res.json() : [];
       }
-      const doctors = [...rawDoctors].sort((a, b) => compareDoctorIds(a.id, b.id));
+      const doctors = [...rawDoctors]
+        .map((doc) => {
+          const cleanId = doc.id.replace(/^(emp\.|emp)/i, "").trim();
+          if (cleanId === "347" || (doc.name && doc.name.toLowerCase().includes("kareem mohamed abdelkader"))) {
+            return { ...doc, department: "Radiology" };
+          }
+          return doc;
+        })
+        .sort((a, b) => compareDoctorIds(a.id, b.id));
 
       const workbook = await createExcelWorkbook();
       const worksheet = workbook.addWorksheet("Physician Database", {
@@ -1710,12 +1718,16 @@ export default function App() {
     if ((!mob || mob === "N/A" || mob === "undefined") && doc?.mobileNumber) {
       mob = doc.mobileNumber;
     }
+    let dept = doc?.department || c.department;
+    if (cleanId === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
+      dept = "Radiology";
+    }
     return {
       ...c,
       id: cleanId,
       doctorName: doc?.name || c.doctorName,
       doctorArabicName: arabName || c.doctorArabicName,
-      department: doc?.department || c.department,
+      department: dept,
       mobileNumber: mob || "N/A"
     };
   };
@@ -1872,9 +1884,10 @@ export default function App() {
         const headerBase64 = await fetchHeaderImageBase64(tabFormattedDate, tabArabicWeekday, undefined, tabEnglishWeekday);
         applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, tabTitle);
 
-        // Group check-ins under this day by department (Speciality)
+        // Group check-ins under this day by department (Speciality) after authoritative enrichment
+        const enrichedDayCheckins = dayCheckins.map((c) => enrichCheckInClient(c));
         const groupedByDept: { [key: string]: CheckIn[] } = {};
-        dayCheckins.forEach((c) => {
+        enrichedDayCheckins.forEach((c) => {
           if (!groupedByDept[c.department]) {
             groupedByDept[c.department] = [];
           }
@@ -2026,9 +2039,10 @@ export default function App() {
     }
 
     setIsDownloadingDaily(true);
-    // Group check-ins by department (Speciality)
+    // Group check-ins by department (Speciality) after authoritative enrichment
+    const enrichedCheckins = checkins.map((c) => enrichCheckInClient(c));
     const grouped: { [key: string]: CheckIn[] } = {};
-    checkins.forEach((c) => {
+    enrichedCheckins.forEach((c) => {
       if (!grouped[c.department]) {
         grouped[c.department] = [];
       }

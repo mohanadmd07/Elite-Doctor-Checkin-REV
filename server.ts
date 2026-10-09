@@ -305,12 +305,23 @@ function indexDoctorsList(doctors: any[]) {
   PREINDEXED_SEARCH_DATABASE = [];
 
   // Filter ONLY active doctors (exclude inactive or non-canonical departments, or deleted doctors)
-  const activeOnly = doctors.filter(d => {
-    if (d.isActive === false) return false;
+  const activeOnly = doctors.map(d => {
     const cleanId = (d.id || "").toString().trim().replace(/^(emp\.|emp)/i, "");
-    if (isDoctorDeleted(cleanId, d.name, d.arabicName)) return false;
-    const norm = normalizeSpecialty(d.department || "");
-    return norm.active;
+    let rawDept = d.department || "";
+    if (cleanId === "347" || d.name === "kareem Mohamed Abdelkader Mohamed" || rawDept === "Rad Coordinator" || rawDept.toLowerCase().includes("rad coordinator")) {
+      rawDept = "Radiology";
+    }
+    const norm = normalizeSpecialty(rawDept);
+    return {
+      ...d,
+      id: cleanId,
+      department: norm.department,
+      isActive: norm.active && d.isActive !== false
+    };
+  }).filter(d => {
+    if (!d.isActive) return false;
+    if (isDoctorDeleted(d.id, d.name, d.arabicName)) return false;
+    return true;
   });
 
   NORMALIZED_DOCTORS_DATABASE = activeOnly.sort((a, b) => compareDoctorIds(a.id, b.id));
@@ -443,7 +454,11 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
             for (const sDoc of supabaseDoctors) {
               const cleanId = sDoc.id.trim().replace(/^(emp\.|emp)/i, "");
               if (isDoctorDeleted(cleanId, sDoc.name, sDoc.arabic_name)) continue;
-              const norm = normalizeSpecialty(sDoc.department || "");
+              let rawDept = sDoc.department || "";
+              if (cleanId === "347" || sDoc.name === "kareem Mohamed Abdelkader Mohamed" || rawDept.toLowerCase().includes("rad coordinator")) {
+                rawDept = "Radiology";
+              }
+              const norm = normalizeSpecialty(rawDept);
               if (!norm.active) continue; // Skip non-canonical / inactive records
               const idKey = normalizeId(cleanId);
               const nameKey = normalizeName(sDoc.name);
@@ -468,7 +483,11 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
       customDocs.forEach(cDoc => {
         const cleanId = cDoc.id.trim().replace(/^(emp\.|emp)/i, "");
         if (isDoctorDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
-        const norm = normalizeSpecialty(cDoc.department || "");
+        let cDept = cDoc.department || "";
+        if (cleanId === "347" || cDoc.name === "kareem Mohamed Abdelkader Mohamed" || cDept.toLowerCase().includes("rad coordinator")) {
+          cDept = "Radiology";
+        }
+        const norm = normalizeSpecialty(cDept);
         if (cDoc.isActive === false || !norm.active) return;
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(cDoc.name);
@@ -569,7 +588,10 @@ function enrichCheckIn(c: CheckIn): CheckIn {
   }
 
   // 3. Resolve Specialty / Department
-  const resolvedDept = doc?.department ? normalizeSpecialty(doc.department).department : normalizeSpecialty(c.department || "").department;
+  let resolvedDept = doc?.department ? normalizeSpecialty(doc.department).department : normalizeSpecialty(c.department || "").department;
+  if (cleanId === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
+    resolvedDept = "Radiology";
+  }
 
   return {
     ...c,
@@ -827,7 +849,7 @@ async function readCheckIns(): Promise<CheckIn[]> {
         dept = "Internal Medicine";
       } else if (c.doctorName === "Abdelrahman Mahmoud Bassyoni Mohamed" || id === "2956") {
         dept = "Radiology";
-      } else if (c.doctorName === "kareem Mohamed Abdelkader Mohamed" || id === "347") {
+      } else if (id === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
         dept = "Radiology";
       } else if (c.doctorName === "Moustafa Mohamed Mahmoud AbdelMagid" || id === "3365") {
         dept = "Pediatrics";
@@ -1906,7 +1928,7 @@ async function readMonthlyCheckIns(): Promise<CheckIn[]> {
         dept = "Internal Medicine";
       } else if (c.doctorName === "Abdelrahman Mahmoud Bassyoni Mohamed" || id === "2956") {
         dept = "Radiology";
-      } else if (c.doctorName === "kareem Mohamed Abdelkader Mohamed" || id === "347") {
+      } else if (id === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
         dept = "Radiology";
       } else if (c.doctorName === "Moustafa Mohamed Mahmoud AbdelMagid" || id === "3365") {
         dept = "Pediatrics";

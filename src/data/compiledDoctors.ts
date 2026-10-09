@@ -1624,7 +1624,7 @@ export const COMPILED_DOCTORS: CompiledDoctor[] = [
     "id": "347",
     "name": "kareem Mohamed Abdelkader Mohamed",
     "arabicName": "kareem Mohamed Abdelkader Mohamed",
-    "department": "Rad Coordinator",
+    "department": "Radiology",
     "mobileNumber": "01006218970"
   },
   {

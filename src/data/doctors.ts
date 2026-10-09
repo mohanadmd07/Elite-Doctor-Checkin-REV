@@ -1262,7 +1262,7 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "arabicName": "مصطفى بلال بلال",
     "department": "ICU",
     "mobileNumber": "01278555783",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "261",

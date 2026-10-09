@@ -401,17 +401,33 @@ END $$;
 UPDATE public.checkins c
 SET department = d.department
 FROM public.doctors d
-WHERE c.doctor_id = d.id;
+WHERE c.doctor_id = d.id OR replace(lower(c.doctor_id), 'emp.', '') = replace(lower(d.id), 'emp.', '');
 
 UPDATE public.weekly_checkins wc
 SET department = d.department
 FROM public.doctors d
-WHERE wc.doctor_id = d.id;
+WHERE wc.doctor_id = d.id OR replace(lower(wc.doctor_id), 'emp.', '') = replace(lower(d.id), 'emp.', '');
 
 UPDATE public.monthly_checkins mc
 SET department = d.department
 FROM public.doctors d
-WHERE mc.doctor_id = d.id;
+WHERE mc.doctor_id = d.id OR replace(lower(mc.doctor_id), 'emp.', '') = replace(lower(d.id), 'emp.', '');
+
+-- Explicitly guarantee Kareem Mohamed Abdelkader Mohamed (ID 347) is in Radiology across all tables
+UPDATE public.checkins
+SET department = 'Radiology'
+WHERE doctor_id IN ('347', 'emp.347', 'emp347')
+   OR doctor_name ILIKE '%kareem Mohamed Abdelkader Mohamed%';
+
+UPDATE public.weekly_checkins
+SET department = 'Radiology'
+WHERE doctor_id IN ('347', 'emp.347', 'emp347')
+   OR doctor_name ILIKE '%kareem Mohamed Abdelkader Mohamed%';
+
+UPDATE public.monthly_checkins
+SET department = 'Radiology'
+WHERE doctor_id IN ('347', 'emp.347', 'emp347')
+   OR doctor_name ILIKE '%kareem Mohamed Abdelkader Mohamed%';
 
 -- ==============================================================================
 -- 6. CREATE INDEXES & CONSTRAINTS SAFELY
