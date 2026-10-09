@@ -269,7 +269,7 @@ function initPrecompiledPhones() {
 }
 
 // Department mapping utility
-import { normalizeSpecialty, CANONICAL_SPECIALTIES } from "./src/data/specialties.js";
+import { normalizeSpecialty, CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./src/data/specialties.js";
 
 // Department mapping utility utilizing canonical 15-specialty hospital taxonomy
 function normalizeDepartment(dept: string): string {
@@ -310,6 +310,8 @@ function indexDoctorsList(doctors: any[]) {
     let rawDept = d.department || "";
     if (cleanId === "347" || d.name === "kareem Mohamed Abdelkader Mohamed" || rawDept === "Rad Coordinator" || rawDept.toLowerCase().includes("rad coordinator")) {
       rawDept = "Radiology";
+    } else if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+      rawDept = "Nephrology";
     }
     const norm = normalizeSpecialty(rawDept);
     return {
@@ -457,6 +459,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
               let rawDept = sDoc.department || "";
               if (cleanId === "347" || sDoc.name === "kareem Mohamed Abdelkader Mohamed" || rawDept.toLowerCase().includes("rad coordinator")) {
                 rawDept = "Radiology";
+              } else if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+                rawDept = "Nephrology";
               }
               const norm = normalizeSpecialty(rawDept);
               if (!norm.active) continue; // Skip non-canonical / inactive records
@@ -486,6 +490,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         let cDept = cDoc.department || "";
         if (cleanId === "347" || cDoc.name === "kareem Mohamed Abdelkader Mohamed" || cDept.toLowerCase().includes("rad coordinator")) {
           cDept = "Radiology";
+        } else if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+          cDept = "Nephrology";
         }
         const norm = normalizeSpecialty(cDept);
         if (cDoc.isActive === false || !norm.active) return;
@@ -591,6 +597,8 @@ function enrichCheckIn(c: CheckIn): CheckIn {
   let resolvedDept = doc?.department ? normalizeSpecialty(doc.department).department : normalizeSpecialty(c.department || "").department;
   if (cleanId === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
     resolvedDept = "Radiology";
+  } else if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+    resolvedDept = "Nephrology";
   }
 
   return {
@@ -838,9 +846,14 @@ async function readCheckIns(): Promise<CheckIn[]> {
   return validList
     .map(c => {
       let id = c.id.replace(/^(emp\.|emp)/i, "");
-      let dept = c.department;
+      const cleanIdKey = normalizeId(id);
+      const nameKey = normalizeName(c.doctorName);
+      const masterDoc = DOCTORS_BY_ID_MAP.get(cleanIdKey) || DOCTORS_BY_NAME_MAP.get(nameKey);
+      let dept = masterDoc?.department || c.department;
       
-      if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
+      if (NEPHROLOGY_DOCTOR_IDS.has(id)) {
+        dept = "Nephrology";
+      } else if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
         id = "201";
         dept = "Physical Medicine";
       } else if (c.doctorName === "Beshoy Nagy Farag Gerges" || id === "2310") {
@@ -857,9 +870,7 @@ async function readCheckIns(): Promise<CheckIn[]> {
         dept = "Nephrology";
       }
 
-      const idKey = normalizeId(id);
-      const nameKey = normalizeName(c.doctorName);
-      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(cleanIdKey) || mobileNumbersByNameMap.get(nameKey) || "";
 
       return {
         ...c,
@@ -1917,9 +1928,14 @@ async function readMonthlyCheckIns(): Promise<CheckIn[]> {
   const result = list
     .map(c => {
       let id = c.id.replace(/^(emp\.|emp)/i, "");
-      let dept = c.department;
+      const cleanIdKey = normalizeId(id);
+      const nameKey = normalizeName(c.doctorName);
+      const masterDoc = DOCTORS_BY_ID_MAP.get(cleanIdKey) || DOCTORS_BY_NAME_MAP.get(nameKey);
+      let dept = masterDoc?.department || c.department;
       
-      if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
+      if (NEPHROLOGY_DOCTOR_IDS.has(id)) {
+        dept = "Nephrology";
+      } else if (c.doctorName === "Amr Mohamed Sabry" || id === "201") {
         id = "201";
         dept = "Physical Medicine";
       } else if (c.doctorName === "Beshoy Nagy Farag Gerges" || id === "2310") {
@@ -1936,9 +1952,7 @@ async function readMonthlyCheckIns(): Promise<CheckIn[]> {
         dept = "Nephrology";
       }
 
-      const idKey = normalizeId(id);
-      const nameKey = normalizeName(c.doctorName);
-      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+      const mobileNumber = c.mobileNumber || mobileNumbersByCodeMap.get(cleanIdKey) || mobileNumbersByNameMap.get(nameKey) || "";
 
       return {
         ...c,

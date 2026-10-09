@@ -42,7 +42,7 @@ import {
   Server,
   Send
 } from "lucide-react";
-import { CANONICAL_SPECIALTIES } from "./data/specialties.js";
+import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./data/specialties.js";
 
 export const SUPABASE_SQL_SCHEMA_TEXT = `-- ==============================================================================
 -- ELITE HOSPITAL ATTENDANCE & PHYSICIAN SYSTEM - SUPABASE DATABASE MIGRATION
@@ -142,6 +142,23 @@ CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (depar
 -- Enforce canonical medical specialties on active records
 DO $$
 BEGIN
+  -- Pre-sanitization: Ensure all 31 Nephrology physicians are explicitly set to Nephrology
+  UPDATE public.doctors
+  SET department = 'Nephrology', is_active = true
+  WHERE department ILIKE '%nephro%'
+     OR department ILIKE '%كلي%'
+     OR department ILIKE '%كلى%'
+     OR department = 'طبيب باطن وكلي'
+     OR department = 'طبيب باطن وكلى'
+     OR id IN (
+       '55', '56', '57', '58', '251', '252', '348', '401', '724', '1177',
+       '2300', '2542', '2631', '2649', '3255', '3536', '030723.09.23.26',
+       '030822.11.20.21', '030822.11.21.36', '041123.12.39.10', '041124.05.24.17',
+       '051123.02.59.41', '070225.11.20.37', '100824.10.08.23', '110225.01.59.17',
+       '160726.01.40.36', '180126.03.03.04', '180726.02.44.44', '200123.04.03.57',
+       '260522.05.46.18', '300925.10.01.27'
+     );
+
   -- Pre-sanitization: Activate canonical specialties and deactivate non-canonical
   UPDATE public.doctors
   SET is_active = true
@@ -890,6 +907,9 @@ export default function App() {
           if (cleanId === "347" || (doc.name && doc.name.toLowerCase().includes("kareem mohamed abdelkader"))) {
             return { ...doc, department: "Radiology" };
           }
+          if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+            return { ...doc, department: "Nephrology" };
+          }
           return doc;
         })
         .sort((a, b) => compareDoctorIds(a.id, b.id));
@@ -1263,6 +1283,12 @@ export default function App() {
       setIsSavingDirectoryPhone(false);
     }
   };
+
+  // Initial load of doctors database and checkins on mount
+  useEffect(() => {
+    fetchCheckins();
+    fetchFullDoctorsDatabase();
+  }, []);
 
   // Fetch and live-sync current checkins if admin is authenticated (polls every 3 seconds)
   useEffect(() => {
@@ -1732,6 +1758,8 @@ export default function App() {
     let dept = doc?.department || c.department;
     if (cleanId === "347" || (c.doctorName && c.doctorName.toLowerCase().includes("kareem mohamed abdelkader"))) {
       dept = "Radiology";
+    } else if (NEPHROLOGY_DOCTOR_IDS.has(cleanId)) {
+      dept = "Nephrology";
     }
     return {
       ...c,

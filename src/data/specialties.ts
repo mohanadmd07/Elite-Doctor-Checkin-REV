@@ -31,6 +31,15 @@ export const CANONICAL_SPECIALTIES = [
 
 export type CanonicalSpecialty = (typeof CANONICAL_SPECIALTIES)[number];
 
+export const NEPHROLOGY_DOCTOR_IDS = new Set([
+  "55", "56", "57", "58", "251", "252", "348", "401", "724", "1177",
+  "2300", "2542", "2631", "2649", "3255", "3536", "030723.09.23.26",
+  "030822.11.20.21", "030822.11.21.36", "041123.12.39.10", "041124.05.24.17",
+  "051123.02.59.41", "070225.11.20.37", "100824.10.08.23", "110225.01.59.17",
+  "160726.01.40.36", "180126.03.03.04", "180726.02.44.44", "200123.04.03.57",
+  "260522.05.46.18", "300925.10.01.27"
+]);
+
 /**
  * Normalizes any legacy string, typo, or Arabic alias into a canonical specialty
  * or flags it as inactive/filtered out.
@@ -110,11 +119,18 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     return { active: true, department: "Emergency Medicine" };
   }
 
-  // Nephrology (Independent Specialty)
+  // Nephrology (Independent Specialty - Kidneys & Dialysis)
   if (
     lower.includes("nephrology") ||
+    lower.includes("nephro") ||
+    lower.includes("kidney") ||
+    lower.includes("renal") ||
+    lower.includes("dialysis") ||
+    lower.includes("غسيل كلوي") ||
     lower.includes("كلي") ||
-    clean === "طبيب باطن وكلي"
+    lower.includes("كلى") ||
+    clean === "طبيب باطن وكلي" ||
+    clean === "طبيب باطن وكلى"
   ) {
     return { active: true, department: "Nephrology" };
   }
