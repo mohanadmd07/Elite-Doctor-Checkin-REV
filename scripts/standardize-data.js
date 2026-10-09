@@ -7,15 +7,13 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
 import { normalizeSpecialty, CANONICAL_SPECIALTIES } from '../src/data/specialties.js';
+import { COMPILED_DOCTORS } from '../src/data/compiledDoctors.js';
 
 console.log('--- STANDARDIZING LOCAL DOCTOR DATASETS ---');
 
-// 1. Process src/data/doctors.ts
+// 1. Process src/data/doctors.ts from COMPILED_DOCTORS (raw source of truth)
 const doctorsTsPath = path.join(rootDir, 'src', 'data', 'doctors.ts');
-let doctorsTs = fs.readFileSync(doctorsTsPath, 'utf8');
-const start = doctorsTs.indexOf('= [') + 2;
-const end = doctorsTs.lastIndexOf('];') + 1;
-const rawDocs = JSON.parse(doctorsTs.substring(start, end));
+const rawDocs = COMPILED_DOCTORS;
 
 let updatedActive = 0;
 let updatedInactive = 0;

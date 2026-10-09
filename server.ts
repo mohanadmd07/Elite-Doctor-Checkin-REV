@@ -225,7 +225,14 @@ function indexDoctorsList(doctors: any[]) {
   DOCTORS_BY_NAME_MAP.clear();
   PREINDEXED_SEARCH_DATABASE = [];
 
-  NORMALIZED_DOCTORS_DATABASE = doctors.sort((a, b) => compareDoctorIds(a.id, b.id));
+  // Filter ONLY active doctors (exclude inactive or non-canonical departments)
+  const activeOnly = doctors.filter(d => {
+    if (d.isActive === false) return false;
+    const norm = normalizeSpecialty(d.department || "");
+    return norm.active;
+  });
+
+  NORMALIZED_DOCTORS_DATABASE = activeOnly.sort((a, b) => compareDoctorIds(a.id, b.id));
 
   for (let i = 0; i < NORMALIZED_DOCTORS_DATABASE.length; i++) {
     const d = NORMALIZED_DOCTORS_DATABASE[i];
@@ -378,10 +385,12 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
 
       const doctorMap = new Map<string, any>();
 
-      // 1. Seed with base compiled doctors
+      // 1. Seed with base compiled doctors (Active canonical only)
       COMPILED_DOCTORS.forEach(doc => {
         const cleanId = doc.id.trim().replace(/^(emp\.|emp)/i, "");
         if (isDeleted(cleanId, doc.name, doc.arabicName)) return;
+        const norm = normalizeSpecialty(doc.department || "");
+        if (!norm.active) return; // Skip filtered out / inactive records
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(doc.name);
         const mob = customPhones[idKey] || doc.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
@@ -389,7 +398,9 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         doctorMap.set(mapKey, {
           ...doc,
           id: cleanId,
+          department: norm.department,
           mobileNumber: mob,
+          isActive: true,
         });
       });
 
@@ -402,6 +413,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
             for (const sDoc of supabaseDoctors) {
               const cleanId = sDoc.id.trim().replace(/^(emp\.|emp)/i, "");
               if (isDeleted(cleanId, sDoc.name, sDoc.arabic_name)) continue;
+              const norm = normalizeSpecialty(sDoc.department || "");
+              if (!norm.active) continue; // Skip non-canonical / inactive records
               const idKey = normalizeId(cleanId);
               const nameKey = normalizeName(sDoc.name);
               const mob = sDoc.mobile_number || customPhones[idKey] || mobileNumbersByCodeMap.get(idKey) || "";
@@ -410,8 +423,9 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
                 id: cleanId,
                 name: sDoc.name,
                 arabicName: sDoc.arabic_name || sDoc.name,
-                department: normalizeDepartment(cleanDepartment(sDoc.department || "General Surgery")),
+                department: norm.department,
                 mobileNumber: mob,
+                isActive: true,
               });
             }
           }
@@ -424,6 +438,8 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
       customDocs.forEach(cDoc => {
         const cleanId = cDoc.id.trim().replace(/^(emp\.|emp)/i, "");
         if (isDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
+        const norm = normalizeSpecialty(cDoc.department || "");
+        if (cDoc.isActive === false || !norm.active) return;
         const idKey = normalizeId(cleanId);
         const nameKey = normalizeName(cDoc.name);
         const origIdKey = cDoc.originalId ? normalizeId(cDoc.originalId) : "";
@@ -454,8 +470,9 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
           id: cleanId,
           name: cDoc.name,
           arabicName: cDoc.arabicName || cDoc.name,
-          department: normalizeDepartment(cleanDepartment(cDoc.department || "General Surgery")),
+          department: norm.department,
           mobileNumber: mob,
+          isActive: true,
           originalId: cDoc.originalId || "",
           originalName: cDoc.originalName || "",
         });
@@ -879,6 +896,7 @@ interface CustomDoctorRecord {
   originalId?: string;
   originalName?: string;
   updatedAt?: string;
+  isActive?: boolean;
 }
 
 function ensureCustomDoctorsLocal() {
@@ -1228,7 +1246,7 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
   const supabase = getSupabase();
   if (supabase) {
     try {
-      const operations: Promise<any>[] = [];
+      const operations: PromiseLike<any>[] = [];
       if (origCleanId && origKey !== idKey) {
         operations.push(supabase.from("custom_doctors").delete().eq("id", origCleanId));
         operations.push(supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", origCleanId));
@@ -1580,7 +1598,7 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
 
   // 7. Re-index in memory once!
   indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
-  lastDoctorsRefreshTime = Date.now();
+  lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
 
   return parsedItems.length;
@@ -2747,7 +2765,7 @@ app.get(["/api/doctors", "/doctors"], async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
-  if (req.query.refresh === "true" || NORMALIZED_DOCTORS_DATABASE.length === 0) {
+  if (req.query.refresh === "true" || NORMALIZED_DOCTORS_DATABASE.length === 0 || lastDoctorsRefreshTime === 0) {
     try {
       await loadEnrichedDoctorsDatabase(true);
     } catch (err) {
@@ -2807,7 +2825,7 @@ app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
     }
   }
 
-  if (doctor) {
+  if (doctor && doctor.isActive !== false && normalizeSpecialty(doctor.department || "").active) {
     const idKey = normalizeId(doctor.id);
     const nameKey = normalizeName(doctor.name);
     const mobileNumber = doctor.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
@@ -3013,13 +3031,14 @@ app.put("/api/checkins/:id/phone", async (req, res) => {
 
 // Save or update doctor in persistent database (IDs, names, department, phone)
 app.post("/api/doctors/upsert", async (req, res) => {
-  const { originalId, id, name, arabicName, department, mobileNumber } = req.body;
+  const { originalId, originalName, id, name, arabicName, department, mobileNumber } = req.body;
   if (!id || !name) {
     return res.status(400).json({ error: "ID and English Name are required." });
   }
   try {
     await saveCustomDoctorRecord({
       originalId: originalId || "",
+      originalName: originalName || "",
       id,
       name,
       arabicName: arabicName || name,
@@ -3027,8 +3046,9 @@ app.post("/api/doctors/upsert", async (req, res) => {
       mobileNumber: mobileNumber || ""
     });
     res.json({ success: true, message: "Doctor record saved successfully in persistent database." });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save doctor record." });
+  } catch (err: any) {
+    console.error("Error in /api/doctors/upsert:", err);
+    res.status(500).json({ error: err?.message || "Failed to save doctor record." });
   }
 });
 

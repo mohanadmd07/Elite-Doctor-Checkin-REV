@@ -146,23 +146,26 @@ BEGIN
   SET is_active = false
   WHERE is_active IS NULL 
      OR (is_active = true AND department NOT IN (
-       'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
-       'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+       'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
+       'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
+       'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
+       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
+       'Clinical Pharmacy', 'OPD Coordinator'
      ));
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_active_canonical_dept') THEN
-    ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
-    CHECK (
-      is_active = false OR department IN (
-        'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
-        'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
-        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
-      )
-    );
-  END IF;
+  ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
+  ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
+  CHECK (
+    is_active = false OR department IN (
+      'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
+      'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
+      'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+      'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+      'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
+      'Clinical Pharmacy', 'OPD Coordinator'
+    )
+  );
 END $$;
 
 -- 1. Daily checkins: Deduplicate keeping newest record per doctor, then create unique index
@@ -605,6 +608,7 @@ export default function App() {
   const [doctorModalMode, setDoctorModalMode] = useState<"add" | "edit">("add");
   const [doctorFormData, setDoctorFormData] = useState({
     originalId: "",
+    originalName: "",
     id: "",
     name: "",
     arabicName: "",
@@ -775,6 +779,7 @@ export default function App() {
     setDoctorModalMode("add");
     setDoctorFormData({
       originalId: "",
+      originalName: "",
       id: "",
       name: "",
       arabicName: "",
@@ -789,6 +794,7 @@ export default function App() {
     setDoctorModalMode("edit");
     setDoctorFormData({
       originalId: doc.id,
+      originalName: doc.name,
       id: doc.id,
       name: doc.name,
       arabicName: doc.arabicName || doc.name,
@@ -816,11 +822,36 @@ export default function App() {
       const data = await res.json();
       if (res.ok && data.success) {
         setDoctorSaveMsg("Physician saved successfully!");
+        const cleanNewId = doctorFormData.id.trim().replace(/^(emp\.|emp)/i, "");
+        const cleanOrigId = doctorFormData.originalId ? doctorFormData.originalId.trim().replace(/^(emp\.|emp)/i, "") : "";
+        const origName = doctorFormData.originalName?.trim();
+        const updatedDoc: Doctor = {
+          id: cleanNewId,
+          name: doctorFormData.name.trim(),
+          arabicName: doctorFormData.arabicName.trim() || doctorFormData.name.trim(),
+          department: doctorFormData.department.trim() || "General Surgery",
+          mobileNumber: doctorFormData.mobileNumber.trim()
+        };
+        setFullDoctorList((prev) => {
+          let replaced = false;
+          const newList = prev.map((d) => {
+            if ((cleanOrigId && d.id === cleanOrigId && (!origName || d.name === origName)) ||
+                (!cleanOrigId && d.id === cleanNewId)) {
+              replaced = true;
+              return updatedDoc;
+            }
+            return d;
+          });
+          if (!replaced) {
+            newList.push(updatedDoc);
+          }
+          return newList.sort((a, b) => compareDoctorIds(a.id, b.id));
+        });
         await fetchFullDoctorsDatabase(true);
         setTimeout(() => {
           setIsDoctorModalOpen(false);
           setDoctorSaveMsg("");
-        }, 800);
+        }, 600);
       } else {
         setDoctorSaveMsg(data.error || "Failed to save physician.");
       }
@@ -1254,15 +1285,18 @@ export default function App() {
         const searchRes = await fetch(`/api/doctors/search?q=${encodeURIComponent(query)}`);
         if (searchRes.ok) {
           const searchData = await searchRes.json();
-          setSuggestions(searchData);
-          setShowSuggestions(true);
+          const activeResults = (searchData || []).filter((d: any) => 
+            d.isActive !== false && (!d.department || (CANONICAL_SPECIALTIES as readonly string[]).includes(d.department))
+          );
+          setSuggestions(activeResults);
+          setShowSuggestions(activeResults.length > 0);
         }
 
         // 2. Check exact doctor lookup
         const res = await fetch(`/api/doctors/${encodeURIComponent(query)}`);
         if (res.ok) {
           const data = await res.json();
-          if (data.found) {
+          if (data.found && data.doctor && data.doctor.isActive !== false && (!data.doctor.department || (CANONICAL_SPECIALTIES as readonly string[]).includes(data.doctor.department))) {
             setFoundDoctor(data.doctor);
             setIsManualReg(false);
             setSearched(true);
@@ -1313,7 +1347,7 @@ export default function App() {
       const data = await res.json();
       
       setSearched(true);
-      if (data.found) {
+      if (data.found && data.doctor && data.doctor.isActive !== false && (!data.doctor.department || (CANONICAL_SPECIALTIES as readonly string[]).includes(data.doctor.department))) {
         setFoundDoctor(data.doctor);
         setIsManualReg(false);
         // Reset manual form fields
@@ -1925,12 +1959,13 @@ export default function App() {
       setIsAdminMode(true);
       setShowAdminLogin(false);
       setAdminPasscode("");
+      fetchFullDoctorsDatabase(true);
     } else if (pin.toLowerCase() === "coordinator") {
       setAdminRole("coordinator");
       setIsAdminAuthenticated(true);
       setAdminTab("database");
       setIsAdminMode(true);
-      fetchFullDoctorsDatabase();
+      fetchFullDoctorsDatabase(true);
       setShowAdminLogin(false);
       setAdminPasscode("");
     } else {
@@ -2205,7 +2240,7 @@ export default function App() {
                   setIsAdminMode(true);
                   if (adminRole === "coordinator") {
                     setAdminTab("database");
-                    fetchFullDoctorsDatabase();
+                    fetchFullDoctorsDatabase(true);
                   }
                 }}
                 className={`px-5 py-2 rounded-lg text-xs font-bold uppercase transition-all duration-150 flex items-center gap-2 ${
@@ -2568,7 +2603,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       setAdminTab("database");
-                      fetchFullDoctorsDatabase();
+                      fetchFullDoctorsDatabase(true);
                     }}
                     className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
                       adminTab === "database"
@@ -2590,7 +2625,7 @@ export default function App() {
                       <button
                         onClick={() => {
                           setAdminTab("duplicates");
-                          fetchFullDoctorsDatabase();
+                          fetchFullDoctorsDatabase(true);
                         }}
                         className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
                           adminTab === "duplicates"
@@ -2880,7 +2915,7 @@ export default function App() {
 
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={fetchFullDoctorsDatabase}
+                          onClick={() => fetchFullDoctorsDatabase(true)}
                           className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs rounded-lg border border-slate-300 shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                         >
                           <RefreshCw className="w-3.5 h-3.5 text-slate-600" />
@@ -3102,7 +3137,7 @@ export default function App() {
                                                     method: "DELETE"
                                                   });
                                                   if (res.ok) {
-                                                    await fetchFullDoctorsDatabase();
+                                                    await fetchFullDoctorsDatabase(true);
                                                   } else {
                                                     const data = await res.json().catch(() => ({}));
                                                     alert(data.error || "Failed to delete doctor.");

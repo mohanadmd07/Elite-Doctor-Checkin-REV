@@ -101,23 +101,26 @@ BEGIN
   SET is_active = false
   WHERE is_active IS NULL 
      OR (is_active = true AND department NOT IN (
-       'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
-       'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+       'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
+       'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
+       'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
+       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
+       'Clinical Pharmacy', 'OPD Coordinator'
      ));
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_active_canonical_dept') THEN
-    ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
-    CHECK (
-      is_active = false OR department IN (
-        'Internal Medicine', 'General Surgery', 'ICU', 'Cardiology',
-        'Pediatrics', 'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
-        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy'
-      )
-    );
-  END IF;
+  ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
+  ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
+  CHECK (
+    is_active = false OR department IN (
+      'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
+      'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
+      'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+      'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+      'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
+      'Clinical Pharmacy', 'OPD Coordinator'
+    )
+  );
 END $$;
 
 -- 1. Daily checkins: Deduplicate keeping newest record per doctor, then create unique index

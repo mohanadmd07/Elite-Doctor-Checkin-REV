@@ -2,16 +2,19 @@
  * CANONICAL MEDICAL SPECIALTIES & NOMENCLATURE TAXONOMY
  * Elite Hospital Physician Check-in & Roster System
  * 
- * Collapses 147 raw database strings into 15 unified inpatient hospital specialties,
- * and filters out outpatient, third-party vendor, and administrative entries.
+ * Unified inpatient hospital specialties (18 canonical disciplines),
+ * including independent Nephrology, Nutrition, and Emergency Medicine.
  */
 
 export const CANONICAL_SPECIALTIES = [
   "Internal Medicine",
   "General Surgery",
   "ICU",
+  "Emergency Medicine",
   "Cardiology",
   "Pediatrics",
+  "Nephrology",
+  "Nutrition",
   "Cardiothoracic Surgery",
   "Urology",
   "Orthopedic Surgery",
@@ -22,6 +25,8 @@ export const CANONICAL_SPECIALTIES = [
   "Radiology",
   "Physiotherapy",
   "Anesthesiology & Pain Therapy",
+  "Clinical Pharmacy",
+  "OPD Coordinator",
 ] as const;
 
 export type CanonicalSpecialty = (typeof CANONICAL_SPECIALTIES)[number];
@@ -55,7 +60,6 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("pediatric cardiology") ||
     lower.includes("laboratory") ||
     lower.includes("معمل") ||
-    lower.includes("pharmac") ||
     lower.includes("nurse") ||
     lower.includes("medical records") ||
     lower.includes("speciality") ||
@@ -78,6 +82,48 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // =========================================================================
   // 2. ACTIVE CANONICAL SPECIALTIES
   // =========================================================================
+
+  // Clinical Pharmacy (Independent Specialty)
+  if (
+    lower.includes("clinical pharmacy") ||
+    lower.includes("pharmac") ||
+    clean === "Clinical Pharmacy" ||
+    clean === "Pharmacist"
+  ) {
+    return { active: true, department: "Clinical Pharmacy" };
+  }
+
+  // OPD Coordinator (Independent Specialty)
+  if (
+    lower.includes("opd coordinator") ||
+    lower.includes("coordinator") ||
+    clean === "OPD Coordinator"
+  ) {
+    return { active: true, department: "OPD Coordinator" };
+  }
+
+  // Emergency Medicine (Independent Specialty)
+  if (
+    lower.includes("emerg") ||
+    clean === "Emergency" ||
+    clean === "Emergency Medicine"
+  ) {
+    return { active: true, department: "Emergency Medicine" };
+  }
+
+  // Nephrology (Independent Specialty)
+  if (
+    lower.includes("nephrology") ||
+    lower.includes("كلي") ||
+    clean === "طبيب باطن وكلي"
+  ) {
+    return { active: true, department: "Nephrology" };
+  }
+
+  // Nutrition (Independent Specialty)
+  if (lower.includes("nutrition")) {
+    return { active: true, department: "Nutrition" };
+  }
 
   // General Surgery (Includes Vascular Surgery, iVein, Bariatrics, GIT Surgery, Pediatric Surgery, Maxillofacial, etc.)
   if (
@@ -102,7 +148,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     return { active: true, department: "General Surgery" };
   }
 
-  // Internal Medicine (Pulmonology, Hematology, Endocrinology, Rheumatology, Nephrology, Hepatology, Nutrition)
+  // Internal Medicine (Pulmonology, Hematology, Endocrinology, Rheumatology, Hepatology, Geriatrics)
   if (
     lower.includes("internal medicine") ||
     lower.includes("باطن") ||
@@ -116,26 +162,23 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("pituitary") ||
     lower.includes("الغدة النخامية") ||
     lower.includes("rheumatolog") ||
-    lower.includes("nephrology") ||
     lower.includes("hepatolog") ||
     lower.includes("hepatica") ||
     lower.includes("liver transplantation") ||
     lower.includes("gastroenterology") ||
     lower.includes("infectious disease") ||
-    lower.includes("immunology") ||
-    lower.includes("nutrition")
+    lower.includes("immunology")
   ) {
     return { active: true, department: "Internal Medicine" };
   }
 
-  // ICU (Critical Care, Emergency, SICU)
+  // ICU (Critical Care, SICU)
   if (
     clean === "ICU" ||
     clean.startsWith("ICU") ||
     lower.includes("critical care") ||
     lower.includes("حالات حرجة") ||
-    lower.includes("sicu") ||
-    lower.includes("emerg")
+    lower.includes("sicu")
   ) {
     return { active: true, department: "ICU" };
   }
@@ -144,6 +187,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   if (
     lower.includes("cardiology") ||
     lower.includes("القلب") ||
+    lower.includes("قلب") ||
     lower.includes("structural heart") ||
     lower.includes("heart failure") ||
     lower.includes("cardiac rehabilitation") ||

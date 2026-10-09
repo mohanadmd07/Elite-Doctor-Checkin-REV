@@ -20,37 +20,44 @@ This specification establishes a clean, unified **15-specialty canonical hospita
 
 | # | Topic | Decision | Alternatives Considered | Rationale |
 |---|---|---|---|---|
-| **D1** | **Taxonomy Architecture** | Collapsed 147 raw strings into **15 canonical inpatient hospital departments**. | Hierarchical 2-tier table; dynamic translation view. | Matches hospital inpatient workflows directly without query join overhead. |
-| **D2** | **Subspecialty Merges** | - Merged Pulmonology, Hematology, Endocrinology, Rheumatology, Nephrology, Hepatology into **`Internal Medicine`**.<br>- Merged GIT Surgery, Bariatrics, Pediatric Surgery, Colorectal, Breast, and **Vascular Surgery** into **`General Surgery`**.<br>- Merged Interventional Radiology into **`Radiology`**.<br>- Strictly standardized **`ICU`** (cleaning Critical Care, ICU Doctor, Arabic variants). | Keeping them as independent departments. | Clinical consensus that subspecialists cover core inpatient rosters under primary departments. |
+| **D1** | **Taxonomy Architecture** | Collapsed 147 raw strings into **18 canonical inpatient hospital departments**. | Hierarchical 2-tier table; dynamic translation view. | Matches hospital inpatient workflows directly without query join overhead. |
+| **D2** | **Subspecialty Separation & Merges** | - **Independent Departments**: Nephrology, Nutrition, and Emergency Medicine separated into distinct specialties.<br>- Merged Pulmonology, Hematology, Endocrinology, Rheumatology, Hepatology into **`Internal Medicine`**.<br>- Merged GIT Surgery, Bariatrics, Pediatric Surgery, Colorectal, Breast, and **Vascular Surgery** into **`General Surgery`**.<br>- Merged Interventional Radiology into **`Radiology`**.<br>- Strictly standardized **`ICU`** (cleaning Critical Care, ICU Doctor, Arabic variants). | Keeping all subspecialties merged under Internal Medicine and ICU. | Direct requirement to track renal care, clinical nutrition, and emergency intake independently. |
 | **D3** | **Exclusion & Filtering** | Soft-deactivated (`is_active = false`) for: `Home Visit`, `Dental / General Dental / Orthodontics`, `Dermatology & Cosmetology`, `Ophthalmology`, `Neurology`, `Pediatric Cardiology`, and non-physicians (`Laboratory`, `Pharmacy`, `Medical Records`). | Hard-deleting rows; creating Outpatient category. | Preserves foreign key integrity and historical attendance audits while cleaning active rosters. |
 | **D4** | **Database Pattern (Option 2)** | In-place standardization of `public.doctors.department` with a PostgreSQL `CHECK` constraint and a **Partial B-Tree Index** on `(department) WHERE is_active = true`. | Master reference table with foreign keys (Option 1); Dynamic View (Option 3). | Lowest implementation risk, zero breaking changes to existing API/frontend consumers, immediate ~35% index memory reduction. |
 | **D5** | **Immediate Supabase Persistence** | Frontend mutations (Edit Name, Phone, Dept; Single & Batch Delete) execute immediate, atomic writes to Supabase (`doctors`, `custom_doctors`, `deleted_doctors`, `custom_doctor_phones`) with cascading updates to active daily check-ins. | Delayed batch sync; background cron job. | Prevents "ghost" records on page reload and ensures Supabase is the single real-time source of truth. |
 
 ---
 
-## 3. Canonical Medical Specialties Taxonomy (15 Specialties)
+## 3. Canonical Medical Specialties Taxonomy (20 Specialties)
 
-| # | Canonical Department Name | Included & Merged Variations |
-|---|---|---|
-| 1 | **Internal Medicine** | Internal Medicine, Internal Medicine Clinic, Pulmonology, Hematology, Endocrinology & Diabetes, Diabetes, Rheumatology, Nephrology, Gastroenterology (GIT) and Hepatology, Internal Medicine and Geriatrics, Infectious Disease, طبيب باطن وكلي, Consolto diabetes program, Thyroid gland consolto program. |
-| 2 | **General Surgery** | General Surgery, General surgery Doctor, General surgery الجراحة العامة, GS Doctor, General, GIT Surgery, Git and Pancreas Surgery, Bariatric surgery, External - Bariatrics srugery, Pediatric surgery, Endocrine Surgery, Colorectal Surgery, Breast surgery, Hand and microsurgery, **Vascular Surgery**, **iVein**. |
-| 3 | **ICU** | ICU, ICU., ICU Doctor, Critical care, ICU طب الحالات الحرجة. |
-| 4 | **Cardiology** | Cardiology, Cardiology القلب, Structural Heart Disease, Heart Failure, Cardiac Rehabilitation, Holter Cinic, Echo. |
-| 5 | **Pediatrics** | Pediatrics, Doctor Fly Pediatrics, Pediatric GIT, Pediatric Hematology, Pediatric Hepatology, Pediatric Nephrology, Pediatric Nutrition, Pediatrics and Adolescent psychology. |
-| 6 | **Cardiothoracic Surgery** | Cardiothoracic surgery, Pediatric Cardiac Surgery. |
-| 7 | **Urology** | Urology, Pediatric urology and congenital disorders. |
-| 8 | **Orthopedic Surgery** | Orthopedic Surgery, Orthopedics, Pediatric orthopedics. |
-| 9 | **Neurosurgery** | Neurosurgery, Neurosurgery Doctor, External Neurosurgery, Doctor Fly Spine Surgeon. |
-| 10 | **Oncology** | Oncology, Surgical oncology. |
-| 11 | **ENT** | ENT,  ENT (trimmed), Ear, Audiometry. |
-| 12 | **Obstetrics and gynecology** | Obstetrics and gynecology, Obstetrics and gynecology نساء, 4D (fetal ultrasound). |
-| 13 | **Radiology** | Radiology, Intervential Radiology (typo fixed), External Radiology, Rad Doctor, X Ray, CT, MRI, U/S. |
-| 14 | **Physiotherapy** | Physiotherapy (typo fixed), Physiotherpy, Physiotherpy (Physical Medicine), Physiotherapy Sessions, S-Physiotherapy, Physical Medicine, علاج طبيعي, Consolto Rheuma-physio, Consolto Pulmonary-Rehab. |
-| 15 | **Anesthesiology & Pain Therapy** | Anesthesia and pain therapy, Anesthesia Specialist. |
+| # | Canonical Department Name | Included & Merged Variations | Active Physicians |
+|---|---|---|:---:|
+| 1 | **General Surgery** | General Surgery, General surgery Doctor, General surgery الجراحة العامة, GS Doctor, General, GIT Surgery, Git and Pancreas Surgery, Bariatric surgery, External - Bariatrics srugery, Pediatric surgery, Endocrine Surgery, Colorectal Surgery, Breast surgery, Hand and microsurgery, **Vascular Surgery**, **iVein**, Maxillofacial. | 394 |
+| 2 | **Obstetrics and gynecology** | Obstetrics and gynecology, Obstetrics and gynecology نساء, 4D (fetal ultrasound), Breast Feeding. | 275 |
+| 3 | **Internal Medicine** | Internal Medicine, Internal Medicine Clinic, Pulmonology, Hematology, Endocrinology & Diabetes, Diabetes, Rheumatology, Hepatology, Internal Medicine and Geriatrics, Infectious Disease, Consolto diabetes program, Thyroid gland consolto program. | 191 |
+| 4 | **Physiotherapy** | Physiotherapy (typo fixed), Physiotherpy, Physiotherpy (Physical Medicine), Physiotherapy Sessions, S-Physiotherapy, Physical Medicine, علاج طبيعي, Consolto Rheuma-physio, Consolto Pulmonary-Rehab. | 123 |
+| 5 | **Orthopedic Surgery** | Orthopedic Surgery, Orthopedics, Pediatric orthopedics. | 105 |
+| 6 | **Cardiology** | Cardiology, Cardiology القلب, أستشارى قلب, Structural Heart Disease, Heart Failure, Cardiac Rehabilitation, Holter Cinic, Echo. | 95 |
+| 7 | **Neurosurgery** | Neurosurgery, Neurosurgery Doctor, External Neurosurgery, Doctor Fly Spine Surgeon. | 93 |
+| 8 | **Anesthesiology & Pain Therapy** | Anesthesia and pain therapy, Anesthesia Specialist. | 93 |
+| 9 | **Radiology** | Radiology, Intervential Radiology (typo fixed), External Radiology, Rad Doctor, X Ray, CT, MRI, U/S. | 89 |
+| 10 | **Oncology** | Oncology, Surgical oncology. | 66 |
+| 11 | **Pediatrics** | Pediatrics, Doctor Fly Pediatrics, Pediatric GIT, Pediatric Hematology, Pediatric Hepatology, Pediatric Nephrology, Pediatrics and Adolescent psychology. | 65 |
+| 12 | **ENT** | ENT, ENT (trimmed), Ear, Audiometry. | 57 |
+| 13 | **Urology** | Urology, Pediatric urology and congenital disorders. | 55 |
+| 14 | **ICU** | ICU, ICU., ICU Doctor, Critical care, ICU طب الحالات الحرجة, SICU. | 52 |
+| 15 | **Clinical Pharmacy** | Clinical Pharmacy, Pharmacist. | 39 |
+| 16 | **Cardiothoracic Surgery** | Cardiothoracic surgery, Pediatric Cardiac Surgery. | 34 |
+| 17 | **Nephrology** | Nephrology, طبيب باطن وكلي, Renal medicine. | 31 |
+| 18 | **Emergency Medicine** | Emergency, Emergency Medicine, ER Doctors. | 26 |
+| 19 | **Nutrition** | Adult Nutrition, Nutrition, Sports nutrition, Pediatric Nutrition. | 17 |
+| 20 | **OPD Coordinator** | OPD Coordinator, Rad Coordinator. | 5 |
+| **Total** | **Active Inpatient Specialties** | **All 20 Canonical Specialties** | **1,905** |
 
 ### Excluded & Filtered-out Domains (`is_active = false`):
 - **Outpatient / Specialized**: `Home Visit`, `Home Visits`, `Dental`, `General Dental`, `Orthodontist`, `Pediatric Dentistry`, `Dermatology and Cosmotology`, `طبيب جلدية`, `Hair Transplant`, `Psoriasis`, `Ophthalmology`, `Neurology`, `Neurology and Neuropsychiatry`, `Neuropsychiatry`, `Pediatric Cardiology`.
-- **Non-Inpatient / Administrative**: `Laboratory`, `External Laboratory`, `طبيب معمل`, `Chemical preparation nurse`, `Medical Records`, `Pharmacist`, `Clinical Pharmacy`, `NULL`, `Offers`, `Other`, `Visiting Doctor Assessments`, `Check Up Program`.
+- **Non-Inpatient / Administrative**: `Laboratory`, `External Laboratory`, `طبيب معمل`, `Chemical preparation nurse`, `Medical Records`, `NULL`, `Offers`, `Other`, `Visiting Doctor Assessments`, `Check Up Program`.
+- **Frontend Search Enforcement**: Filtered-out doctors are strictly excluded from autocomplete, ranked search, exact lookup (`/api/doctors/:id`), and the Admin database table. Only active canonical physicians appear in search.
 
 ---
 
@@ -76,8 +83,11 @@ CHECK (
         'Internal Medicine',
         'General Surgery',
         'ICU',
+        'Emergency Medicine',
         'Cardiology',
         'Pediatrics',
+        'Nephrology',
+        'Nutrition',
         'Cardiothoracic Surgery',
         'Urology',
         'Orthopedic Surgery',

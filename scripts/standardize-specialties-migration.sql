@@ -9,6 +9,36 @@ BEGIN;
 -- 1. ENSURE ATTENDANCE TABLES AND COLUMNS EXIST (Resolves Error 42P01 & 42703)
 -- ==============================================================================
 
+CREATE TABLE IF NOT EXISTS public.doctors (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    arabic_name TEXT,
+    department TEXT NOT NULL DEFAULT 'General',
+    mobile_number TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.doctors ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE public.doctors ADD COLUMN IF NOT EXISTS department TEXT DEFAULT 'General';
+
+-- Drop previous CHECK constraint upfront so batch updates proceed without 23514 conflicts
+ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
+
+CREATE TABLE IF NOT EXISTS public.checkins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doctor_id TEXT NOT NULL,
+    doctor_name TEXT NOT NULL,
+    doctor_arabic_name TEXT,
+    department TEXT NOT NULL,
+    shifts TEXT[] NOT NULL DEFAULT '{}',
+    mobile_number TEXT,
+    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 CREATE TABLE IF NOT EXISTS public.weekly_checkins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doctor_id TEXT NOT NULL,
@@ -36,6 +66,11 @@ CREATE TABLE IF NOT EXISTS public.monthly_checkins (
 );
 
 -- Ensure checkin_date column exists and backfill values from timestamp
+ALTER TABLE public.checkins ADD COLUMN IF NOT EXISTS checkin_date DATE DEFAULT CURRENT_DATE;
+UPDATE public.checkins 
+SET checkin_date = (checkin_timestamp AT TIME ZONE 'Africa/Cairo')::DATE 
+WHERE checkin_date IS NULL;
+
 ALTER TABLE public.weekly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE DEFAULT CURRENT_DATE;
 UPDATE public.weekly_checkins 
 SET checkin_date = (checkin_timestamp AT TIME ZONE 'Africa/Cairo')::DATE 
@@ -94,6 +129,23 @@ UPDATE public.doctors
 SET department = TRIM(REPLACE(department, E'\u00A0', ' '))
 WHERE department IS NOT NULL;
 
+-- Emergency Medicine (Separate Specialty)
+UPDATE public.doctors
+SET department = 'Emergency Medicine', updated_at = now()
+WHERE department ILIKE '%emerg%';
+
+-- Nephrology (Separate Specialty)
+UPDATE public.doctors
+SET department = 'Nephrology', updated_at = now()
+WHERE department ILIKE '%nephrology%'
+   OR department ILIKE '%كلي%'
+   OR department = 'طبيب باطن وكلي';
+
+-- Nutrition (Separate Specialty)
+UPDATE public.doctors
+SET department = 'Nutrition', updated_at = now()
+WHERE department ILIKE '%nutrition%';
+
 -- General Surgery (including Vascular Surgery & iVein)
 UPDATE public.doctors
 SET department = 'General Surgery', updated_at = now()
@@ -114,10 +166,10 @@ WHERE department ILIKE '%general surgery%'
    OR department ILIKE '%hand and microsurgery%'
    OR department ILIKE '%maxillofacial%';
 
--- Internal Medicine
+-- Internal Medicine (excluding Nephrology & Nutrition which are now independent)
 UPDATE public.doctors
 SET department = 'Internal Medicine', updated_at = now()
-WHERE department ILIKE '%internal medicine%'
+WHERE (department ILIKE '%internal medicine%'
    OR department ILIKE '%باطن%'
    OR department ILIKE '%pulmonology%'
    OR department ILIKE '%pulmonary%'
@@ -129,35 +181,39 @@ WHERE department ILIKE '%internal medicine%'
    OR department ILIKE '%pituitary%'
    OR department ILIKE '%الغدة النخامية%'
    OR department ILIKE '%rheumatolog%'
-   OR department ILIKE '%nephrology%'
    OR department ILIKE '%hepatolog%'
    OR department ILIKE '%hepatica%'
    OR department ILIKE '%liver transplantation%'
    OR department ILIKE '%gastroenterology%'
    OR department ILIKE '%infectious disease%'
-   OR department ILIKE '%immunology%'
-   OR department ILIKE '%nutrition%';
+   OR department ILIKE '%immunology%')
+   AND department NOT ILIKE '%nephrology%'
+   AND department NOT ILIKE '%كلي%'
+   AND department != 'طبيب باطن وكلي'
+   AND department NOT ILIKE '%nutrition%';
 
--- ICU
+-- ICU (excluding Emergency Medicine which is now independent)
 UPDATE public.doctors
 SET department = 'ICU', updated_at = now()
-WHERE department = 'ICU'
+WHERE (department = 'ICU'
    OR department ILIKE 'ICU%'
    OR department ILIKE '%critical care%'
    OR department ILIKE '%حالات حرجة%'
-   OR department ILIKE '%sicu%'
-   OR department ILIKE '%emerg%';
+   OR department ILIKE '%sicu%')
+   AND department NOT ILIKE '%emerg%';
 
 -- Cardiology
 UPDATE public.doctors
 SET department = 'Cardiology', updated_at = now()
-WHERE department ILIKE '%cardiology%'
+WHERE (department ILIKE '%cardiology%'
    OR department ILIKE '%القلب%'
+   OR department ILIKE '%قلب%'
    OR department ILIKE '%structural heart%'
    OR department ILIKE '%heart failure%'
    OR department ILIKE '%cardiac rehabilitation%'
    OR department ILIKE '%holter%'
-   OR department ILIKE '%echo%';
+   OR department ILIKE '%echo%')
+   AND department NOT ILIKE '%pediatric%';
 
 -- Pediatrics
 UPDATE public.doctors
@@ -243,6 +299,21 @@ WHERE department ILIKE '%anesthesia%'
    OR department ILIKE '%pain therapy%'
    OR department ILIKE '%تخدير%';
 
+-- Clinical Pharmacy (Independent Specialty)
+UPDATE public.doctors
+SET department = 'Clinical Pharmacy', is_active = true, updated_at = now()
+WHERE department ILIKE '%clinical pharmacy%'
+   OR department ILIKE '%pharmac%'
+   OR department = 'Pharmacist'
+   OR department = 'Clinical Pharmacy';
+
+-- OPD Coordinator (Independent Specialty)
+UPDATE public.doctors
+SET department = 'OPD Coordinator', is_active = true, updated_at = now()
+WHERE department ILIKE '%opd coordinator%'
+   OR department ILIKE '%coordinator%'
+   OR department = 'OPD Coordinator';
+
 -- ==============================================================================
 -- 4. SOFT-DEACTIVATE EXCLUDED & NON-INPATIENT PHYSICIANS
 -- ==============================================================================
@@ -263,7 +334,6 @@ WHERE department ILIKE '%home visit%'
    OR department ILIKE '%pediatric cardiology%'
    OR department ILIKE '%laboratory%'
    OR department ILIKE '%معمل%'
-   OR department ILIKE '%pharmac%'
    OR department ILIKE '%nurse%'
    OR department ILIKE '%medical records%'
    OR department ILIKE '%speciality%'
@@ -283,7 +353,7 @@ UPDATE public.doctors
 SET is_active = false, updated_at = now()
 WHERE is_active IS NULL;
 
--- Any row not in canonical 15 is marked inactive
+-- Any row not in canonical 20 is marked inactive
 UPDATE public.doctors
 SET is_active = false, updated_at = now()
 WHERE department IS NULL
@@ -291,8 +361,11 @@ WHERE department IS NULL
     'Internal Medicine',
     'General Surgery',
     'ICU',
+    'Emergency Medicine',
     'Cardiology',
     'Pediatrics',
+    'Nephrology',
+    'Nutrition',
     'Cardiothoracic Surgery',
     'Urology',
     'Orthopedic Surgery',
@@ -302,7 +375,9 @@ WHERE department IS NULL
     'Obstetrics and gynecology',
     'Radiology',
     'Physiotherapy',
-    'Anesthesiology & Pain Therapy'
+    'Anesthesiology & Pain Therapy',
+    'Clinical Pharmacy',
+    'OPD Coordinator'
   );
 
 -- Sync custom_doctors table if it exists
@@ -369,8 +444,11 @@ CHECK (
     'Internal Medicine',
     'General Surgery',
     'ICU',
+    'Emergency Medicine',
     'Cardiology',
     'Pediatrics',
+    'Nephrology',
+    'Nutrition',
     'Cardiothoracic Surgery',
     'Urology',
     'Orthopedic Surgery',
@@ -380,7 +458,9 @@ CHECK (
     'Obstetrics and gynecology',
     'Radiology',
     'Physiotherapy',
-    'Anesthesiology & Pain Therapy'
+    'Anesthesiology & Pain Therapy',
+    'Clinical Pharmacy',
+    'OPD Coordinator'
   )
 );
 
