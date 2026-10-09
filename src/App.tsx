@@ -142,18 +142,29 @@ CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (depar
 -- Enforce canonical medical specialties on active records
 DO $$
 BEGIN
-  -- Pre-sanitization: Ensure no legacy rows violate the upcoming constraint
+  -- Pre-sanitization: Activate canonical specialties and deactivate non-canonical
+  UPDATE public.doctors
+  SET is_active = true
+  WHERE department IN (
+    'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
+    'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
+    'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
+    'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
+    'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
+    'Clinical Pharmacy', 'OPD Coordinator'
+  );
+
   UPDATE public.doctors
   SET is_active = false
   WHERE is_active IS NULL 
-     OR (is_active = true AND department NOT IN (
+     OR department NOT IN (
        'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
        'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
        'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
        'Clinical Pharmacy', 'OPD Coordinator'
-     ));
+     );
 
   ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
   ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept

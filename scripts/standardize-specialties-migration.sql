@@ -131,20 +131,25 @@ WHERE department IS NOT NULL;
 
 -- Emergency Medicine (Separate Specialty)
 UPDATE public.doctors
-SET department = 'Emergency Medicine', updated_at = now()
+SET department = 'Emergency Medicine', is_active = true, updated_at = now()
 WHERE department ILIKE '%emerg%';
 
 -- Nephrology (Separate Specialty)
 UPDATE public.doctors
-SET department = 'Nephrology', updated_at = now()
+SET department = 'Nephrology', is_active = true, updated_at = now()
 WHERE department ILIKE '%nephrology%'
    OR department ILIKE '%كلي%'
    OR department = 'طبيب باطن وكلي';
 
--- Nutrition (Separate Specialty)
+-- Nutrition (Separate Specialty - All 17 physicians active)
 UPDATE public.doctors
-SET department = 'Nutrition', updated_at = now()
-WHERE department ILIKE '%nutrition%';
+SET department = 'Nutrition', is_active = true, updated_at = now()
+WHERE department ILIKE '%nutrition%'
+   OR id IN (
+     '30', '83', '84', '456', '518', '1498', '2036', '2071', '2107',
+     '2800', '2830', '3154', '3393', '091024.02.43.56', '101122.04.33.37',
+     '181022.08.29.10', '190223.11.46.50'
+   );
 
 -- General Surgery (including Vascular Surgery & iVein)
 UPDATE public.doctors
@@ -215,11 +220,12 @@ WHERE (department ILIKE '%cardiology%'
    OR department ILIKE '%echo%')
    AND department NOT ILIKE '%pediatric%';
 
--- Pediatrics
+-- Pediatrics (excluding Pediatric Nutrition & Pediatric Cardiology)
 UPDATE public.doctors
 SET department = 'Pediatrics', updated_at = now()
-WHERE department ILIKE '%pediatric%'
-   OR department ILIKE '%اطفال%';
+WHERE (department ILIKE '%pediatric%' OR department ILIKE '%اطفال%')
+  AND department NOT ILIKE '%nutrition%'
+  AND department NOT ILIKE '%cardiology%';
 
 -- Cardiothoracic Surgery
 UPDATE public.doctors
@@ -316,6 +322,32 @@ SET department = 'OPD Coordinator', is_active = true, updated_at = now()
 WHERE (department ILIKE '%opd coordinator%' OR department = 'OPD Coordinator')
   AND id != '347'
   AND department NOT ILIKE '%rad%';
+
+-- Ensure all physicians in the 20 canonical specialties are marked active
+UPDATE public.doctors
+SET is_active = true, updated_at = now()
+WHERE department IN (
+  'Internal Medicine',
+  'General Surgery',
+  'ICU',
+  'Emergency Medicine',
+  'Cardiology',
+  'Pediatrics',
+  'Nephrology',
+  'Nutrition',
+  'Cardiothoracic Surgery',
+  'Urology',
+  'Orthopedic Surgery',
+  'Neurosurgery',
+  'Oncology',
+  'ENT',
+  'Obstetrics and gynecology',
+  'Radiology',
+  'Physiotherapy',
+  'Anesthesiology & Pain Therapy',
+  'Clinical Pharmacy',
+  'OPD Coordinator'
+);
 
 -- ==============================================================================
 -- 4. SOFT-DEACTIVATE EXCLUDED & NON-INPATIENT PHYSICIANS
