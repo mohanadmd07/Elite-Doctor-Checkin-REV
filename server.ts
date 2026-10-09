@@ -504,6 +504,53 @@ interface CheckIn {
   mobileNumber?: string;
 }
 
+function enrichCheckIn(c: CheckIn): CheckIn {
+  if (!c) return c;
+  const cleanId = (c.id || "").trim().replace(/^(emp\.|emp)/i, "");
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(c.doctorName || "");
+
+  // Look up doctor from authoritative memory index (O(1))
+  const doc = (idKey ? DOCTORS_BY_ID_MAP.get(idKey) : null) ||
+              (nameKey ? DOCTORS_BY_NAME_MAP.get(nameKey) : null) ||
+              (cleanId ? DOCTORS_BY_ID_MAP.get(cleanId.toLowerCase()) : null);
+
+  const hasArabicChars = (str?: string) => Boolean(str && /[\u0600-\u06FF]/.test(str));
+
+  // 1. Resolve Arabic name:
+  // If doctor in registry has authentic Arabic characters, and check-in's arabic name either lacks Arabic chars
+  // or was just identical to English name, always prioritize the registry's authentic Arabic name!
+  let resolvedArabicName = (c.doctorArabicName || "").trim();
+  if (doc?.arabicName && hasArabicChars(doc.arabicName)) {
+    if (!hasArabicChars(resolvedArabicName) || resolvedArabicName.toLowerCase() === (c.doctorName || "").toLowerCase()) {
+      resolvedArabicName = doc.arabicName;
+    }
+  } else if (!resolvedArabicName && doc?.arabicName) {
+    resolvedArabicName = doc.arabicName;
+  }
+
+  // 2. Resolve Mobile phone number:
+  let resolvedMobile = (c.mobileNumber || "").trim();
+  if (!resolvedMobile || resolvedMobile === "N/A" || resolvedMobile === "undefined") {
+    resolvedMobile = (doc?.mobileNumber || "").trim() ||
+                     (idKey ? (mobileNumbersByCodeMap.get(idKey) || "").trim() : "") ||
+                     (nameKey ? (mobileNumbersByNameMap.get(nameKey) || "").trim() : "") ||
+                     "";
+  }
+
+  // 3. Resolve Specialty / Department
+  const resolvedDept = doc?.department ? normalizeSpecialty(doc.department).department : normalizeSpecialty(c.department || "").department;
+
+  return {
+    ...c,
+    id: cleanId || c.id,
+    doctorName: doc?.name || c.doctorName,
+    doctorArabicName: resolvedArabicName || c.doctorArabicName,
+    department: resolvedDept,
+    mobileNumber: resolvedMobile || ""
+  };
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -872,12 +919,37 @@ async function saveCustomDoctorPhone(id: string, mobileNumber: string): Promise<
   const dailyCheckins = readCheckInsLocal();
   let dailyPhoneChanged = false;
   for (const c of dailyCheckins) {
-    if (normalizeId(c.id) === idKey) {
+    if (normalizeId(c.id) === idKey || (nameKey && normalizeName(c.doctorName) === nameKey)) {
       c.mobileNumber = mobileNumber;
       dailyPhoneChanged = true;
     }
   }
   if (dailyPhoneChanged) writeCheckInsLocal(dailyCheckins);
+
+  // Update in-memory and local monthly check-in phone
+  const monthlyCheckins = readMonthlyCheckInsLocal();
+  let monthlyPhoneChanged = false;
+  for (const c of monthlyCheckins) {
+    if (normalizeId(c.id) === idKey || (nameKey && normalizeName(c.doctorName) === nameKey)) {
+      c.mobileNumber = mobileNumber;
+      monthlyPhoneChanged = true;
+    }
+  }
+  if (monthlyPhoneChanged) writeMonthlyCheckInsLocal(monthlyCheckins);
+
+  // Update custom_doctors.json so persistent custom doctor store stays in sync
+  const localCustom = readCustomDoctorsLocal();
+  const targetDoc = localCustom.find(d => normalizeId(d.id) === idKey || (nameKey && normalizeName(d.name) === nameKey));
+  if (targetDoc) {
+    targetDoc.mobileNumber = mobileNumber;
+    writeCustomDoctorsLocal(localCustom);
+  }
+
+  // Invalidate in-memory caches immediately
+  invalidateCheckinsCache();
+  invalidateMonthlyCache();
+  lastDoctorsRefreshTime = 0;
+  doctorsRefreshPromise = null;
 
   // Re-synchronize the unified doctors database with force=true
   await loadEnrichedDoctorsDatabase(true);
@@ -1312,21 +1384,41 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
     }
   }
 
-  // 6. Cascade update in-memory daily check-ins
+  // 6. Cascade update in-memory daily and monthly check-ins
   const dailyCheckins = readCheckInsLocal();
-  let checkinChanged = false;
+  let dailyChanged = false;
   for (const c of dailyCheckins) {
-    if (normalizeId(c.id) === idKey || (origKey && normalizeId(c.id) === origKey)) {
+    const idMatch = normalizeId(c.id) === idKey || (origKey && normalizeId(c.id) === origKey);
+    const nameMatch = (nameKey && normalizeName(c.doctorName) === nameKey) || (origNameKey && normalizeName(c.doctorName) === origNameKey);
+    if (idMatch || nameMatch) {
       c.id = cleanId;
       c.doctorName = recordToSave.name;
       c.doctorArabicName = recordToSave.arabicName;
       c.department = recordToSave.department;
       c.mobileNumber = recordToSave.mobileNumber;
-      checkinChanged = true;
+      dailyChanged = true;
     }
   }
-  if (checkinChanged) writeCheckInsLocal(dailyCheckins);
+  if (dailyChanged) writeCheckInsLocal(dailyCheckins);
 
+  const monthlyCheckins = readMonthlyCheckInsLocal();
+  let monthlyChanged = false;
+  for (const c of monthlyCheckins) {
+    const idMatch = normalizeId(c.id) === idKey || (origKey && normalizeId(c.id) === origKey);
+    const nameMatch = (nameKey && normalizeName(c.doctorName) === nameKey) || (origNameKey && normalizeName(c.doctorName) === origNameKey);
+    if (idMatch || nameMatch) {
+      c.id = cleanId;
+      c.doctorName = recordToSave.name;
+      c.doctorArabicName = recordToSave.arabicName;
+      c.department = recordToSave.department;
+      c.mobileNumber = recordToSave.mobileNumber;
+      monthlyChanged = true;
+    }
+  }
+  if (monthlyChanged) writeMonthlyCheckInsLocal(monthlyCheckins);
+
+  invalidateCheckinsCache();
+  invalidateMonthlyCache();
   lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
 }
@@ -2177,15 +2269,23 @@ const ARABIC_TO_ENGLISH_WEEKDAYS: Record<string, string> = {
   "الجمعة": "Friday"
 };
 
+interface EgyptDateOptions {
+  autoReset?: boolean;
+  cutoff?: string; // e.g. "18:30" (6:30 PM Cairo Time)
+  nextDay?: boolean;
+}
+
 // Helper to get localized Egypt (Africa/Cairo) weekday and formatted date
-function getEgyptDateInfo(dateInput?: string | Date) {
+function getEgyptDateInfo(dateInput?: string | Date, options?: EgyptDateOptions) {
   let d: Date;
+  let isExplicitDate = false;
   if (!dateInput) {
     d = new Date();
   } else if (typeof dateInput === "string") {
     const trimmed = dateInput.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
       d = new Date(trimmed + "T12:00:00+02:00");
+      isExplicitDate = true;
     } else {
       // Support DD/MM/YYYY or DD-MM-YYYY (e.g. 08/10/2026) to prevent US MM/DD swap
       const ddmmyyyy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
@@ -2194,14 +2294,45 @@ function getEgyptDateInfo(dateInput?: string | Date) {
         const month = ddmmyyyy[2].padStart(2, "0");
         const year = ddmmyyyy[3];
         d = new Date(`${year}-${month}-${day}T12:00:00+02:00`);
+        isExplicitDate = true;
       } else {
         d = new Date(trimmed);
+        if (!isNaN(d.getTime())) isExplicitDate = true;
       }
     }
   } else {
     d = dateInput;
+    isExplicitDate = true;
   }
-  if (isNaN(d.getTime())) d = new Date();
+  if (isNaN(d.getTime())) {
+    d = new Date();
+    isExplicitDate = false;
+  }
+
+  // Handle autoReset / nextDay when date is not explicitly locked, or when options.nextDay is requested
+  const autoReset = options?.autoReset !== false;
+  const nextDayExplicit = options?.nextDay === true;
+
+  if (nextDayExplicit) {
+    d.setDate(d.getDate() + 1);
+  } else if (!isExplicitDate && autoReset) {
+    // Check if current time in Egypt is past the reset cutoff (default 18:30 / 6:30 PM Cairo Time)
+    const cutoffStr = options?.cutoff || "18:30";
+    const [cHourStr, cMinStr] = cutoffStr.split(":");
+    const cutoffHour = parseInt(cHourStr || "18", 10);
+    const cutoffMin = parseInt(cMinStr || "30", 10);
+
+    const nowInEgypt = new Date();
+    const egyptHourStr = nowInEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+    const egyptMinStr = nowInEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+    const curEgyptHour = parseInt(egyptHourStr, 10) || 0;
+    const curEgyptMin = parseInt(egyptMinStr, 10) || 0;
+
+    const isAfterReset = curEgyptHour > cutoffHour || (curEgyptHour === cutoffHour && curEgyptMin >= cutoffMin);
+    if (isAfterReset) {
+      d.setDate(d.getDate() + 1);
+    }
+  }
 
   const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
     weekday: "long",
@@ -2238,11 +2369,18 @@ interface SheetHeaderOptions {
   subTitle?: string;
   width?: number;
   height?: number;
+  autoReset?: boolean;
+  cutoff?: string;
+  nextDay?: boolean;
 }
 
 // Build header SVG integrating user-provided picture with words: "الأطباء المتواجدين عن يوم [اليوم] [التاريخ]"
 function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
-  const dateInfo = getEgyptDateInfo(options.date);
+  const dateInfo = getEgyptDateInfo(options.date, {
+    autoReset: options.autoReset,
+    cutoff: options.cutoff,
+    nextDay: options.nextDay
+  });
   const arabicWeekday = options.day && options.day.trim() ? options.day.trim() : dateInfo.arabicWeekday;
   const formattedDate = options.date && options.date.trim() ? options.date.trim() : dateInfo.formattedDate;
 
@@ -2351,7 +2489,7 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
 </svg>`;
 }
 
-// Endpoint supporting Node.js backend parameters (?date=..., ?day=..., ?title=..., ?w=..., ?h=..., ?format=...)
+// Endpoint supporting Node.js backend parameters (?date=..., ?day=..., ?title=..., ?w=..., ?h=..., ?format=..., ?autoReset=..., ?cutoff=..., ?nextDay=...)
 app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req, res) => {
   const widthParam = parseInt(String(req.query.w || req.query.width || "1200"), 10) || 1200;
   const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
@@ -2363,6 +2501,9 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
   const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
   const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
   const formatParam = String(req.query.format || "").toLowerCase();
+  const autoResetParam = req.query.autoReset !== "false";
+  const cutoffParam = typeof req.query.cutoff === "string" ? req.query.cutoff.trim() : "18:30";
+  const nextDayParam = req.query.nextDay === "true" || req.query.afterReset === "true";
 
   const svg = buildSheetHeaderSvg({
     title: titleParam,
@@ -2371,11 +2512,18 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
     englishWeekday: englishWeekdayParam,
     subTitle: subTitleParam,
     width: widthParam,
-    height: heightParam
+    height: heightParam,
+    autoReset: autoResetParam,
+    cutoff: cutoffParam,
+    nextDay: nextDayParam
   });
 
   if (formatParam === "json") {
-    const dateInfo = getEgyptDateInfo(dateParam);
+    const dateInfo = getEgyptDateInfo(dateParam, {
+      autoReset: autoResetParam,
+      cutoff: cutoffParam,
+      nextDay: nextDayParam
+    });
     const day = dayParam || dateInfo.arabicWeekday;
     const date = dateParam || dateInfo.formattedDate;
     const englishWeekday = englishWeekdayParam || ARABIC_TO_ENGLISH_WEEKDAYS[day.replace(/^يوم\s+/, "").trim()] || dateInfo.englishWeekday;
@@ -2414,8 +2562,15 @@ app.get("/api/sheet-header", (req, res) => {
     : (typeof req.query.enDay === "string" ? req.query.enDay.trim() : (typeof req.query.enWeekday === "string" ? req.query.enWeekday.trim() : undefined));
   const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
   const subTitleParam = typeof req.query.subTitle === "string" ? req.query.subTitle.trim() : undefined;
+  const autoResetParam = req.query.autoReset !== "false";
+  const cutoffParam = typeof req.query.cutoff === "string" ? req.query.cutoff.trim() : "18:30";
+  const nextDayParam = req.query.nextDay === "true" || req.query.afterReset === "true";
 
-  const dateInfo = getEgyptDateInfo(dateParam);
+  const dateInfo = getEgyptDateInfo(dateParam, {
+    autoReset: autoResetParam,
+    cutoff: cutoffParam,
+    nextDay: nextDayParam
+  });
   const arabicWeekday = dayParam || dateInfo.arabicWeekday;
   const formattedDate = dateParam || dateInfo.formattedDate;
   const englishWeekday = englishWeekdayParam || ARABIC_TO_ENGLISH_WEEKDAYS[arabicWeekday.replace(/^يوم\s+/, "").trim()] || dateInfo.englishWeekday;
@@ -2429,7 +2584,10 @@ app.get("/api/sheet-header", (req, res) => {
     englishWeekday,
     subTitle: subTitleParam,
     width: widthParam,
-    height: heightParam
+    height: heightParam,
+    autoReset: autoResetParam,
+    cutoff: cutoffParam,
+    nextDay: nextDayParam
   });
 
   res.json({
@@ -2437,6 +2595,7 @@ app.get("/api/sheet-header", (req, res) => {
     title,
     day: arabicWeekday,
     date: formattedDate,
+    englishWeekday,
     fullTitle
   });
 });
@@ -2444,14 +2603,22 @@ app.get("/api/sheet-header", (req, res) => {
 // Server-side daily sheet downloadable endpoint with Node.js backend parameters
 app.get(["/api/download/daily-sheet", "/download/daily-sheet"], async (req, res) => {
   try {
-    const checkins = await readCheckIns();
+    const rawCheckins = await readCheckIns();
+    const checkins = rawCheckins.map(c => enrichCheckIn(c));
     const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
     const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : undefined;
     const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
+    const autoResetParam = req.query.autoReset !== "false";
+    const cutoffParam = typeof req.query.cutoff === "string" ? req.query.cutoff.trim() : "18:30";
+    const nextDayParam = req.query.nextDay === "true" || req.query.afterReset === "true";
     
-    const dateInfo = getEgyptDateInfo(dateParam);
+    const dateInfo = getEgyptDateInfo(dateParam, {
+      autoReset: autoResetParam,
+      cutoff: cutoffParam,
+      nextDay: nextDayParam
+    });
     const arabicWeekday = dayParam || dateInfo.arabicWeekday;
-    const formattedDate = dateParam || dateInfo.formattedDate;
+    const formattedDate = dateInfo.formattedDate;
     const fullTitle = `${titleParam} ${arabicWeekday} ${formattedDate}`;
 
     const workbook = new ExcelJS.Workbook();
@@ -2586,7 +2753,8 @@ function formatTimestampForDisplay(timestampStr: string): string {
 // Server-side monthly sheet downloadable endpoint with Node.js backend parameters
 app.get(["/api/download/monthly-sheet", "/download/monthly-sheet"], async (req, res) => {
   try {
-    const monthlyData = await readMonthlyCheckIns();
+    const rawMonthly = await readMonthlyCheckIns();
+    const monthlyData = rawMonthly.map(c => enrichCheckIn(c));
     const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
     const workbook = new ExcelJS.Workbook();
     const headerImgB64 = getHeaderBgBase64();
@@ -2842,11 +3010,14 @@ app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
 });
 
 // Get current check-ins
+// Get current check-ins
 app.get(["/api/checkins", "/checkins"], async (req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=1, s-maxage=2, stale-while-revalidate=4");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   try {
     const list = await readCheckIns();
-    res.json(list);
+    res.json(list.map(c => enrichCheckIn(c)));
   } catch (err) {
     res.status(500).json({ error: "Failed to read check-ins." });
   }
@@ -2854,7 +3025,9 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
 
 // Get cumulative monthly check-ins (30-day rolling window) with active daily check-ins merged in
 app.get(["/api/monthly-checkins", "/monthly-checkins", "/api/weekly-checkins", "/weekly-checkins"], async (req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, stale-while-revalidate=120");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   try {
     const monthlyList = await readMonthlyCheckIns();
     const dailyList = await readCheckIns();
@@ -2863,16 +3036,18 @@ app.get(["/api/monthly-checkins", "/monthly-checkins", "/api/weekly-checkins", "
 
     // First populate with 30-day rolling monthly check-ins
     monthlyList.forEach(c => {
-      const dateStr = getEgyptDateStr(c.timestamp);
-      const key = `${c.id.toLowerCase()}_${dateStr}`;
-      mergedMap.set(key, c);
+      const enriched = enrichCheckIn(c);
+      const dateStr = getEgyptDateStr(enriched.timestamp);
+      const key = `${enriched.id.toLowerCase()}_${dateStr}`;
+      mergedMap.set(key, enriched);
     });
 
     // Then overwrite or add with daily check-ins (ensuring latest data for today)
     dailyList.forEach(c => {
-      const dateStr = getEgyptDateStr(c.timestamp);
-      const key = `${c.id.toLowerCase()}_${dateStr}`;
-      mergedMap.set(key, c);
+      const enriched = enrichCheckIn(c);
+      const dateStr = getEgyptDateStr(enriched.timestamp);
+      const key = `${enriched.id.toLowerCase()}_${dateStr}`;
+      mergedMap.set(key, enriched);
     });
 
     res.json(Array.from(mergedMap.values()));
@@ -2919,12 +3094,25 @@ app.post(["/api/checkins", "/checkins"], async (req, res) => {
   const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
   const idKey = normalizeId(cleanId);
   const nameKey = normalizeName(doctorName);
-  const mobileNumber = mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
+  const docInDb = DOCTORS_BY_ID_MAP.get(idKey) || DOCTORS_BY_NAME_MAP.get(nameKey);
+
+  // Detect if incoming Arabic name lacks Arabic characters while authoritative DB has real Arabic
+  let resolvedArabicName = (doctorArabicName || "").trim();
+  const hasArabic = (s: string) => /[\u0600-\u06FF]/.test(s);
+  if (docInDb?.arabicName && hasArabic(docInDb.arabicName) && !hasArabic(resolvedArabicName)) {
+    resolvedArabicName = docInDb.arabicName;
+  }
+
+  const mobileNumber = (req.body.mobileNumber ? String(req.body.mobileNumber).trim() : "") ||
+                       (docInDb?.mobileNumber || "") ||
+                       mobileNumbersByCodeMap.get(idKey) ||
+                       mobileNumbersByNameMap.get(nameKey) ||
+                       "";
 
   const newCheckIn: CheckIn = {
     id: cleanId,
-    doctorName: doctorName.trim(),
-    doctorArabicName: doctorArabicName.trim(),
+    doctorName: (docInDb?.name || doctorName).trim(),
+    doctorArabicName: resolvedArabicName || (docInDb?.arabicName || doctorName).trim(),
     department: normalizeDepartment(department),
     shifts: finalShifts,
     timestamp: new Date().toISOString(),

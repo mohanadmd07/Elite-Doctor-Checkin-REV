@@ -848,6 +848,7 @@ export default function App() {
           return newList.sort((a, b) => compareDoctorIds(a.id, b.id));
         });
         await fetchFullDoctorsDatabase(true);
+        await fetchCheckins();
         setTimeout(() => {
           setIsDoctorModalOpen(false);
           setDoctorSaveMsg("");
@@ -1565,7 +1566,8 @@ export default function App() {
     dateStr?: string,
     weekdayStr?: string,
     titleStr?: string,
-    englishWeekdayStr?: string
+    englishWeekdayStr?: string,
+    options?: { autoReset?: boolean; cutoff?: string; nextDay?: boolean }
   ): Promise<string> => {
     try {
       const params = new URLSearchParams();
@@ -1573,6 +1575,10 @@ export default function App() {
       if (weekdayStr) params.set("day", weekdayStr);
       if (titleStr) params.set("title", titleStr);
       if (englishWeekdayStr) params.set("englishWeekday", englishWeekdayStr);
+      if (options?.autoReset !== undefined) params.set("autoReset", String(options.autoReset));
+      else params.set("autoReset", "true");
+      if (options?.cutoff) params.set("cutoff", options.cutoff);
+      if (options?.nextDay !== undefined) params.set("nextDay", String(options.nextDay));
       params.set("w", "1200");
       params.set("h", "150");
 
@@ -1685,6 +1691,33 @@ export default function App() {
     });
   };
 
+  // Helper to dynamically enrich check-in with authoritative physician details (Arabic name and phone)
+  const enrichCheckInClient = (c: CheckIn): CheckIn => {
+    if (!c) return c;
+    const cleanId = c.id.trim().replace(/^(emp\.|emp)/i, "");
+    const doc = fullDoctorList.find(d => 
+      d.id.toLowerCase() === cleanId.toLowerCase() || 
+      d.name.toLowerCase() === c.doctorName.toLowerCase()
+    );
+    const hasArabic = (s?: string) => Boolean(s && /[\u0600-\u06FF]/.test(s));
+    let arabName = c.doctorArabicName;
+    if (doc?.arabicName && hasArabic(doc.arabicName) && (!hasArabic(arabName) || arabName.toLowerCase() === c.doctorName.toLowerCase())) {
+      arabName = doc.arabicName;
+    }
+    let mob = c.mobileNumber;
+    if ((!mob || mob === "N/A" || mob === "undefined") && doc?.mobileNumber) {
+      mob = doc.mobileNumber;
+    }
+    return {
+      ...c,
+      id: cleanId,
+      doctorName: doc?.name || c.doctorName,
+      doctorArabicName: arabName || c.doctorArabicName,
+      department: doc?.department || c.department,
+      mobileNumber: mob || "N/A"
+    };
+  };
+
   // Download Cumulative Monthly Excel Sheet (30-day rolling attendance roster with sub-sheets per weekday date)
   const downloadMonthlyCSVReport = async () => {
     setIsDownloadingMonthly(true);
@@ -1698,9 +1731,18 @@ export default function App() {
       if (monthlyData.length === 0) {
         // Create an empty template sheet so it's always ready to download at any time!
         const workbook = await createExcelWorkbook();
-        const d = new Date();
-        const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
-        const dateStr = d.toISOString().split("T")[0];
+        const nowEgypt = new Date();
+        const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+        const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+        const egyptHour = parseInt(egyptHourStr, 10) || 0;
+        const egyptMin = parseInt(egyptMinStr, 10) || 0;
+        const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
+        const d = new Date(nowEgypt);
+        if (isPastReset) {
+          d.setDate(d.getDate() + 1);
+        }
+        const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "Africa/Cairo", weekday: "long" }).format(d);
+        const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
         const arabicWeekday = new Intl.DateTimeFormat("ar-EG", { timeZone: "Africa/Cairo", weekday: "long" }).format(d);
         const formattedDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
         const sheetName = `${weekday} ${dateStr}`;
@@ -1881,19 +1923,20 @@ export default function App() {
 
           // Add doctor rows under this specialty
           groupedByDept[dept].forEach((c, idx) => {
+            const enriched = enrichCheckInClient(c);
             const row = worksheet.getRow(currentRowNum);
             row.height = 22;
 
-            const timestampFormatted = formatTimestampStr(c.timestamp);
-            const shiftsFormatted = formatShiftsForDisplay(c.shifts);
+            const timestampFormatted = formatTimestampStr(enriched.timestamp);
+            const shiftsFormatted = formatShiftsForDisplay(enriched.shifts);
 
             row.values = [
-              c.id,
+              enriched.id,
               timestampFormatted,
-              c.doctorArabicName,
-              c.department,
+              enriched.doctorArabicName,
+              enriched.department,
               shiftsFormatted,
-              c.mobileNumber || "N/A"
+              enriched.mobileNumber || "N/A"
             ];
 
             // Zebra striping - alternating white and soft light-mint tint #F0FDF9 from the SVG header
@@ -2006,7 +2049,17 @@ export default function App() {
       views: [{ showGridLines: true }]
     });
 
-    const d = new Date();
+    const nowEgypt = new Date();
+    const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+    const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+    const egyptHour = parseInt(egyptHourStr, 10) || 0;
+    const egyptMin = parseInt(egyptMinStr, 10) || 0;
+    const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
+    const d = new Date(nowEgypt);
+    if (isPastReset) {
+      d.setDate(d.getDate() + 1);
+    }
+
     const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
       timeZone: "Africa/Cairo",
       weekday: "long"
@@ -2021,10 +2074,16 @@ export default function App() {
       month: "2-digit",
       day: "2-digit"
     }).format(d);
+    const targetIsoDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
     const dailyTitle = `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`;
 
     // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, englishWeekday);
+    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, englishWeekday, { autoReset: true });
     applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, dailyTitle);
 
     let currentRowNum = 8;
@@ -2072,19 +2131,20 @@ export default function App() {
 
       // Add doctor rows under this specialty
       grouped[dept].forEach((c, idx) => {
+        const enriched = enrichCheckInClient(c);
         const row = worksheet.getRow(currentRowNum);
         row.height = 22;
 
-        const timestampFormatted = formatTimestamp(c.timestamp);
-        const shiftsFormatted = formatShiftsForDisplay(c.shifts);
+        const timestampFormatted = formatTimestamp(enriched.timestamp);
+        const shiftsFormatted = formatShiftsForDisplay(enriched.shifts);
 
         row.values = [
-          c.id,
+          enriched.id,
           timestampFormatted,
-          c.doctorArabicName,
-          c.department,
+          enriched.doctorArabicName,
+          enriched.department,
           shiftsFormatted,
-          c.mobileNumber || "N/A"
+          enriched.mobileNumber || "N/A"
         ];
 
         // Zebra striping - alternating white and soft light-mint tint #F0FDF9 from the SVG header
@@ -2125,7 +2185,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `Physician_Checkins_${new Date().toISOString().split('T')[0]}.xlsx`;
+      link.download = `Physician_Checkins_${targetIsoDate}.xlsx`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
