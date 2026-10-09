@@ -40,7 +40,7 @@ This specification establishes a clean, unified **15-specialty canonical hospita
 | 6 | **Cardiology** | Cardiology, Cardiology القلب, أستشارى قلب, Structural Heart Disease, Heart Failure, Cardiac Rehabilitation, Holter Cinic, Echo. | 95 |
 | 7 | **Neurosurgery** | Neurosurgery, Neurosurgery Doctor, External Neurosurgery, Doctor Fly Spine Surgeon. | 93 |
 | 8 | **Anesthesiology & Pain Therapy** | Anesthesia and pain therapy, Anesthesia Specialist. | 93 |
-| 9 | **Radiology** | Radiology, Intervential Radiology (typo fixed), External Radiology, Rad Doctor, X Ray, CT, MRI, U/S. | 89 |
+| 9 | **Radiology** | Radiology, Intervential Radiology (typo fixed), External Radiology, Rad Doctor, Rad Coordinator (Kareem Mohamed Abdelkader Mohamed), X Ray, CT, MRI, U/S. | 90 |
 | 10 | **Oncology** | Oncology, Surgical oncology. | 66 |
 | 11 | **Pediatrics** | Pediatrics, Doctor Fly Pediatrics, Pediatric GIT, Pediatric Hematology, Pediatric Hepatology, Pediatric Nephrology, Pediatrics and Adolescent psychology. | 65 |
 | 12 | **ENT** | ENT, ENT (trimmed), Ear, Audiometry. | 57 |
@@ -51,7 +51,7 @@ This specification establishes a clean, unified **15-specialty canonical hospita
 | 17 | **Nephrology** | Nephrology, طبيب باطن وكلي, Renal medicine. | 31 |
 | 18 | **Emergency Medicine** | Emergency, Emergency Medicine, ER Doctors. | 26 |
 | 19 | **Nutrition** | Adult Nutrition, Nutrition, Sports nutrition, Pediatric Nutrition. | 17 |
-| 20 | **OPD Coordinator** | OPD Coordinator, Rad Coordinator. | 5 |
+| 20 | **OPD Coordinator** | OPD Coordinator (Rahma Adawy, Hebatullah Osama, Bahaa El Semary, Rana Mohamed). | 4 |
 | **Total** | **Active Inpatient Specialties** | **All 20 Canonical Specialties** | **1,905** |
 
 ### Excluded & Filtered-out Domains (`is_active = false`):

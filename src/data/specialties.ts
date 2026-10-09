@@ -96,7 +96,6 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // OPD Coordinator (Independent Specialty)
   if (
     lower.includes("opd coordinator") ||
-    lower.includes("coordinator") ||
     clean === "OPD Coordinator"
   ) {
     return { active: true, department: "OPD Coordinator" };
@@ -256,9 +255,11 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     return { active: true, department: "Obstetrics and gynecology" };
   }
 
-  // Radiology (including Interventional Radiology)
+  // Radiology (including Interventional Radiology & Radiology Coordinator)
   if (
     lower.includes("radiology") ||
+    lower.includes("rad coordinator") ||
+    lower.includes("radiology coordinator") ||
     lower.includes("intervential") ||
     lower.includes("interventional") ||
     lower.includes("x ray") ||

@@ -269,10 +269,13 @@ WHERE department ILIKE '%obstetrics%'
    OR department = '4D'
    OR department ILIKE '%breast feeding%';
 
--- Radiology (including Interventional Radiology)
+-- Radiology (including Interventional Radiology & Radiology Coordinator)
 UPDATE public.doctors
-SET department = 'Radiology', updated_at = now()
+SET department = 'Radiology', is_active = true, updated_at = now()
 WHERE department ILIKE '%radiology%'
+   OR department ILIKE '%rad coordinator%'
+   OR department ILIKE '%radiology coordinator%'
+   OR id = '347'
    OR department ILIKE '%intervential%'
    OR department ILIKE '%interventional%'
    OR department ILIKE '%x ray%'
@@ -307,12 +310,12 @@ WHERE department ILIKE '%clinical pharmacy%'
    OR department = 'Pharmacist'
    OR department = 'Clinical Pharmacy';
 
--- OPD Coordinator (Independent Specialty)
+-- OPD Coordinator (Independent Specialty - strictly for OPD coordinators)
 UPDATE public.doctors
 SET department = 'OPD Coordinator', is_active = true, updated_at = now()
-WHERE department ILIKE '%opd coordinator%'
-   OR department ILIKE '%coordinator%'
-   OR department = 'OPD Coordinator';
+WHERE (department ILIKE '%opd coordinator%' OR department = 'OPD Coordinator')
+  AND id != '347'
+  AND department NOT ILIKE '%rad%';
 
 -- ==============================================================================
 -- 4. SOFT-DEACTIVATE EXCLUDED & NON-INPATIENT PHYSICIANS

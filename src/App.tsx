@@ -39,7 +39,8 @@ import {
   Check,
   ExternalLink,
   Terminal,
-  Server
+  Server,
+  Send
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES } from "./data/specialties.js";
 
@@ -462,6 +463,7 @@ export default function App() {
   const [isDownloadingMonthly, setIsDownloadingMonthly] = useState(false);
   const isDownloadingWeekly = isDownloadingMonthly;
   const setIsDownloadingWeekly = setIsDownloadingMonthly;
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
 
   // Editing active checked-in doctor phone number
   const [editingCheckedInDoctorId, setEditingCheckedInDoctorId] = useState<string | null>(null);
@@ -2195,6 +2197,28 @@ export default function App() {
       alert("Failed to export styled Excel sheet. Please try again.");
     } finally {
       setIsDownloadingDaily(false);
+    }
+  };
+
+  const handleSendWhatsAppSheet = async () => {
+    if (isSendingWhatsApp) return;
+    setIsSendingWhatsApp(true);
+    try {
+      const res = await fetch("/api/whatsapp/send-daily-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || data.error || "Failed to send to WhatsApp");
+      }
+      alert(`✅ ${data.message || "Daily sheet successfully sent to the WhatsApp group!"}`);
+    } catch (err: any) {
+      console.error("Error sending daily sheet to WhatsApp:", err);
+      alert(`❌ WhatsApp delivery failed: ${err.message || err}\n\nPlease check GREEN_API_ID_INSTANCE, GREEN_API_API_TOKEN_INSTANCE, and WHATSAPP_GROUP_ID in .env or Vercel Environment Variables.`);
+    } finally {
+      setIsSendingWhatsApp(false);
     }
   };
 

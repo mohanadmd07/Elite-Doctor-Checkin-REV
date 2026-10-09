@@ -79,6 +79,77 @@ function areDoctorNamesSimilar(name1: string, name2: string): boolean {
   return common >= 2;
 }
 
+const COLLATERAL_CONFLICT_BARE_IDS = new Set([
+  "238", "258", "272", "274", "277", "295", "3113", "347", "366", "404", "407", "410", "608", "616", "625"
+]);
+
+const CACHED_DELETED_KEYS = new Set<string>();
+const COMPOSITE_TOMBSTONES_BY_ID = new Map<string, Set<string>>();
+
+function updateCachedDeletedKeys(keys: Iterable<string>) {
+  CACHED_DELETED_KEYS.clear();
+  COMPOSITE_TOMBSTONES_BY_ID.clear();
+  for (const rawKey of keys) {
+    if (!rawKey) continue;
+    const key = String(rawKey).trim();
+    if (!key) continue;
+    if (COLLATERAL_CONFLICT_BARE_IDS.has(key)) continue;
+
+    CACHED_DELETED_KEYS.add(key);
+    const normK = normalizeId(key);
+    if (normK) CACHED_DELETED_KEYS.add(normK);
+
+    if (key.includes("_")) {
+      const [kId, ...rest] = key.split("_");
+      const kName = rest.join("_").trim().toLowerCase();
+      const normKId = normalizeId(kId);
+      if (!COMPOSITE_TOMBSTONES_BY_ID.has(normKId)) COMPOSITE_TOMBSTONES_BY_ID.set(normKId, new Set());
+      COMPOSITE_TOMBSTONES_BY_ID.get(normKId)!.add(kName);
+      if (kId !== normKId) {
+        if (!COMPOSITE_TOMBSTONES_BY_ID.has(kId)) COMPOSITE_TOMBSTONES_BY_ID.set(kId, new Set());
+        COMPOSITE_TOMBSTONES_BY_ID.get(kId)!.add(kName);
+      }
+    }
+  }
+}
+
+function isDoctorDeleted(cleanId: string, name: string, araName?: string): boolean {
+  if (CACHED_DELETED_KEYS.size === 0) return false;
+
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(name);
+  const araKey = araName ? normalizeArabic(araName) : "";
+
+  // 1. Direct composite match (ID + Name)
+  if (idKey && nameKey && CACHED_DELETED_KEYS.has(`${idKey}_${nameKey}`)) return true;
+  if (cleanId && nameKey && CACHED_DELETED_KEYS.has(`${cleanId}_${nameKey}`)) return true;
+  if (idKey && araKey && CACHED_DELETED_KEYS.has(`${idKey}_${araKey}`)) return true;
+
+  // 2. Direct full name match
+  if (nameKey && CACHED_DELETED_KEYS.has(nameKey)) return true;
+  if (araKey && CACHED_DELETED_KEYS.has(araKey)) return true;
+
+  // 3. ID match with collateral conflict protection
+  if ((idKey && CACHED_DELETED_KEYS.has(idKey)) || (cleanId && CACHED_DELETED_KEYS.has(cleanId))) {
+    const compNames = COMPOSITE_TOMBSTONES_BY_ID.get(idKey) || COMPOSITE_TOMBSTONES_BY_ID.get(cleanId);
+    if (compNames && compNames.size > 0) {
+      let matchesTombstone = false;
+      for (const compName of compNames) {
+        if (compName === nameKey || (araKey && compName === araKey) || areDoctorNamesSimilar(name, compName)) {
+          matchesTombstone = true;
+          break;
+        }
+      }
+      if (!matchesTombstone) {
+        return false; // Protect active physician from collateral duplicate tombstone!
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
 function searchDoctors(query: string, maxResults = 20): any[] {
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
@@ -89,11 +160,13 @@ function searchDoctors(query: string, maxResults = 20): any[] {
   // Exact ID match check first (O(1))
   if (normIdQuery && DOCTORS_BY_ID_MAP.has(normIdQuery)) {
     const exact = DOCTORS_BY_ID_MAP.get(normIdQuery);
-    const rest = PREINDEXED_SEARCH_DATABASE
-      .filter(item => item.doc !== exact && matchesItemTerms(item, normQuery))
-      .map(i => i.doc)
-      .slice(0, maxResults - 1);
-    return [exact, ...rest];
+    if (exact && !isDoctorDeleted(exact.id, exact.name, exact.arabicName)) {
+      const rest = PREINDEXED_SEARCH_DATABASE
+        .filter(item => item.doc !== exact && !isDoctorDeleted(item.doc.id, item.doc.name, item.doc.arabicName) && matchesItemTerms(item, normQuery))
+        .map(i => i.doc)
+        .slice(0, maxResults - 1);
+      return [exact, ...rest];
+    }
   }
 
   const terms = normQuery.split(/\s+/).filter(Boolean);
@@ -103,6 +176,7 @@ function searchDoctors(query: string, maxResults = 20): any[] {
 
   for (let i = 0; i < PREINDEXED_SEARCH_DATABASE.length; i++) {
     const item = PREINDEXED_SEARCH_DATABASE[i];
+    if (isDoctorDeleted(item.doc.id, item.doc.name, item.doc.arabicName)) continue;
     let score = 0;
 
     // Direct ID score
@@ -225,9 +299,11 @@ function indexDoctorsList(doctors: any[]) {
   DOCTORS_BY_NAME_MAP.clear();
   PREINDEXED_SEARCH_DATABASE = [];
 
-  // Filter ONLY active doctors (exclude inactive or non-canonical departments)
+  // Filter ONLY active doctors (exclude inactive or non-canonical departments, or deleted doctors)
   const activeOnly = doctors.filter(d => {
     if (d.isActive === false) return false;
+    const cleanId = (d.id || "").toString().trim().replace(/^(emp\.|emp)/i, "");
+    if (isDoctorDeleted(cleanId, d.name, d.arabicName)) return false;
     const norm = normalizeSpecialty(d.department || "");
     return norm.active;
   });
@@ -260,10 +336,6 @@ function indexDoctorsList(doctors: any[]) {
   }
 }
 
-const COLLATERAL_CONFLICT_BARE_IDS = new Set([
-  "238", "258", "272", "274", "277", "295", "3113", "347", "366", "404", "407", "410", "608", "616", "625"
-]);
-
 function sanitizeLingeringDeletedDoctors() {
   try {
     const rawDeletedList = readDeletedDoctorsLocal();
@@ -273,6 +345,7 @@ function sanitizeLingeringDeletedDoctors() {
       console.log(`[Elite Server] Purged ${rawDeletedList.length - cleanedDeletedList.length} collateral bare ID tombstones.`);
       writeDeletedDoctorsLocal(cleanedDeletedList);
     }
+    updateCachedDeletedKeys(cleanedDeletedList);
 
     const deletedKeys = new Set(cleanedDeletedList.map(k => normalizeId(k) || k));
     const localCustom = readCustomDoctorsLocal();
@@ -307,12 +380,13 @@ function sanitizeLingeringDeletedDoctors() {
 
 // Immediately initialize the in-memory database with pre-compiled records (0ms startup)
 initPrecompiledPhones();
+updateCachedDeletedKeys(readDeletedDoctorsLocal());
 sanitizeLingeringDeletedDoctors();
 indexDoctorsList(COMPILED_DOCTORS);
 console.log(`[Elite Server] Instantly initialized ${NORMALIZED_DOCTORS_DATABASE.length} doctors into memory on boot.`);
 
 let doctorsRefreshPromise: Promise<void> | null = null;
-let lastDoctorsRefreshTime = Date.now();
+let lastDoctorsRefreshTime = 0; // Set to 0 so the initial background delta sync runs immediately!
 const DOCTORS_REFRESH_TTL = 60 * 1000; // 60-second in-memory TTL
 
 async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
@@ -331,64 +405,15 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
         loadDeletedDoctorsKeys(),
         loadCustomDoctorsPhones(),
       ]);
+      updateCachedDeletedKeys(deletedKeys);
       const customDocs = await loadCustomDoctors(deletedKeys);
-
-      const compositeTombstonesById = new Map<string, Set<string>>();
-      for (const key of deletedKeys) {
-        if (key.includes("_")) {
-          const [kId, ...rest] = key.split("_");
-          const kName = rest.join("_");
-          const normKId = normalizeId(kId);
-          if (!compositeTombstonesById.has(normKId)) compositeTombstonesById.set(normKId, new Set());
-          compositeTombstonesById.get(normKId)!.add(kName);
-          if (kId !== normKId) {
-            if (!compositeTombstonesById.has(kId)) compositeTombstonesById.set(kId, new Set());
-            compositeTombstonesById.get(kId)!.add(kName);
-          }
-        }
-      }
-
-      const isDeleted = (cleanId: string, name: string, araName?: string) => {
-        const idKey = normalizeId(cleanId);
-        const nameKey = normalizeName(name);
-        const araKey = araName ? normalizeArabic(araName) : "";
-
-        // 1. Direct composite match (ID + Name)
-        if (idKey && nameKey && deletedKeys.has(`${idKey}_${nameKey}`)) return true;
-        if (cleanId && nameKey && deletedKeys.has(`${cleanId}_${nameKey}`)) return true;
-        if (idKey && araKey && deletedKeys.has(`${idKey}_${araKey}`)) return true;
-
-        // 2. Direct full name match
-        if (nameKey && deletedKeys.has(nameKey)) return true;
-        if (araKey && deletedKeys.has(araKey)) return true;
-
-        // 3. ID match with collateral conflict protection
-        if ((idKey && deletedKeys.has(idKey)) || (cleanId && deletedKeys.has(cleanId))) {
-          const compNames = compositeTombstonesById.get(idKey) || compositeTombstonesById.get(cleanId);
-          if (compNames && compNames.size > 0) {
-            let matchesTombstone = false;
-            for (const compName of compNames) {
-              if (compName === nameKey || (araKey && compName === araKey) || areDoctorNamesSimilar(name, compName)) {
-                matchesTombstone = true;
-                break;
-              }
-            }
-            if (!matchesTombstone) {
-              return false; // Protect active physician from collateral duplicate tombstone!
-            }
-          }
-          return true;
-        }
-
-        return false;
-      };
 
       const doctorMap = new Map<string, any>();
 
       // 1. Seed with base compiled doctors (Active canonical only)
       COMPILED_DOCTORS.forEach(doc => {
         const cleanId = doc.id.trim().replace(/^(emp\.|emp)/i, "");
-        if (isDeleted(cleanId, doc.name, doc.arabicName)) return;
+        if (isDoctorDeleted(cleanId, doc.name, doc.arabicName)) return;
         const norm = normalizeSpecialty(doc.department || "");
         if (!norm.active) return; // Skip filtered out / inactive records
         const idKey = normalizeId(cleanId);
@@ -412,7 +437,7 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
           if (supabaseDoctors && supabaseDoctors.length > 0) {
             for (const sDoc of supabaseDoctors) {
               const cleanId = sDoc.id.trim().replace(/^(emp\.|emp)/i, "");
-              if (isDeleted(cleanId, sDoc.name, sDoc.arabic_name)) continue;
+              if (isDoctorDeleted(cleanId, sDoc.name, sDoc.arabic_name)) continue;
               const norm = normalizeSpecialty(sDoc.department || "");
               if (!norm.active) continue; // Skip non-canonical / inactive records
               const idKey = normalizeId(cleanId);
@@ -437,7 +462,7 @@ async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
       // 3. Apply custom doctors overrides with strict duplicate & ghost eviction
       customDocs.forEach(cDoc => {
         const cleanId = cDoc.id.trim().replace(/^(emp\.|emp)/i, "");
-        if (isDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
+        if (isDoctorDeleted(cleanId, cDoc.name, cDoc.arabicName)) return;
         const norm = normalizeSpecialty(cDoc.department || "");
         if (cDoc.isActive === false || !norm.active) return;
         const idKey = normalizeId(cleanId);
@@ -1066,6 +1091,7 @@ async function loadDeletedDoctorsKeys(): Promise<Set<string>> {
       console.error("[Supabase] loadDeletedDoctorsKeys failed:", err);
     }
   }
+  updateCachedDeletedKeys(keysSet);
   return keysSet;
 }
 
@@ -1094,6 +1120,7 @@ async function markDoctorAsDeleted(id: string, name?: string) {
   const localList = readDeletedDoctorsLocal();
   const updatedSet = new Set([...localList, ...Array.from(keysToAdd)]);
   writeDeletedDoctorsLocal(Array.from(updatedSet));
+  updateCachedDeletedKeys(updatedSet);
 
   const supabase = getSupabase();
   if (supabase) {
@@ -1127,6 +1154,7 @@ async function unmarkDoctorAsDeleted(id: string, name?: string) {
   const localList = readDeletedDoctorsLocal();
   const updatedList = localList.filter((k) => !keysToRemove.has(k));
   writeDeletedDoctorsLocal(updatedList);
+  updateCachedDeletedKeys(updatedList);
 
   const supabase = getSupabase();
   if (supabase) {
@@ -1544,6 +1572,7 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
   }
 
   // 7. Re-index in memory immediately
+  updateCachedDeletedKeys(readDeletedDoctorsLocal());
   indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
   lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
@@ -1595,6 +1624,7 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   const localDeleted = readDeletedDoctorsLocal();
   const updatedDeletedSet = new Set([...localDeleted, ...keysToAdd]);
   writeDeletedDoctorsLocal(Array.from(updatedDeletedSet));
+  updateCachedDeletedKeys(updatedDeletedSet);
 
   // 2. Filter local custom doctors targeting specific records
   const localCustom = readCustomDoctorsLocal();
@@ -2600,140 +2630,317 @@ app.get("/api/sheet-header", (req, res) => {
   });
 });
 
-// Server-side daily sheet downloadable endpoint with Node.js backend parameters
-app.get(["/api/download/daily-sheet", "/download/daily-sheet"], async (req, res) => {
-  try {
-    const rawCheckins = await readCheckIns();
-    const checkins = rawCheckins.map(c => enrichCheckIn(c));
-    const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
-    const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : undefined;
-    const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
-    const autoResetParam = req.query.autoReset !== "false";
-    const cutoffParam = typeof req.query.cutoff === "string" ? req.query.cutoff.trim() : "18:30";
-    const nextDayParam = req.query.nextDay === "true" || req.query.afterReset === "true";
-    
-    const dateInfo = getEgyptDateInfo(dateParam, {
-      autoReset: autoResetParam,
-      cutoff: cutoffParam,
-      nextDay: nextDayParam
+// Interface for daily sheet generation options
+interface DailySheetGenOptions {
+  dateParam?: string;
+  dayParam?: string;
+  titleParam?: string;
+  autoReset?: boolean;
+  cutoff?: string;
+  nextDay?: boolean;
+}
+
+// Reusable function to build the daily sheet Excel workbook buffer
+async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
+  const rawCheckins = await readCheckIns();
+  const checkins = rawCheckins.map(c => enrichCheckIn(c));
+  const autoReset = options.autoReset !== false;
+  const cutoff = options.cutoff || "18:30";
+  const nextDay = options.nextDay === true;
+  const title = options.titleParam || "الأطباء المتواجدين عن يوم";
+
+  const dateInfo = getEgyptDateInfo(options.dateParam, {
+    autoReset,
+    cutoff,
+    nextDay
+  });
+  const arabicWeekday = options.dayParam || dateInfo.arabicWeekday;
+  const formattedDate = dateInfo.formattedDate;
+  const fullTitle = `${title} ${arabicWeekday} ${formattedDate}`;
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Roster Report", {
+    views: [{ showGridLines: true }]
+  });
+
+  worksheet.columns = [
+    { key: "id", width: 18 },
+    { key: "timestamp", width: 22 },
+    { key: "arabicName", width: 35 },
+    { key: "speciality", width: 25 },
+    { key: "shift", width: 22 },
+    { key: "mobileNumber", width: 22 }
+  ];
+
+  for (let r = 1; r <= 5; r++) {
+    worksheet.getRow(r).height = 25;
+  }
+
+  worksheet.mergeCells(2, 1, 4, 6);
+  const titleCell = worksheet.getCell("A2");
+  titleCell.value = fullTitle;
+  titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
+  titleCell.alignment = { horizontal: "center", vertical: "middle" };
+
+  const headerImgB64 = getHeaderBgBase64();
+  if (headerImgB64) {
+    const imgId = workbook.addImage({
+      base64: headerImgB64,
+      extension: "png"
     });
-    const arabicWeekday = dayParam || dateInfo.arabicWeekday;
-    const formattedDate = dateInfo.formattedDate;
-    const fullTitle = `${titleParam} ${arabicWeekday} ${formattedDate}`;
+    worksheet.addImage(imgId, "A1:F5");
+  }
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Roster Report", {
-      views: [{ showGridLines: true }]
-    });
+  worksheet.getRow(6).height = 10;
 
-    worksheet.columns = [
-      { key: "id", width: 18 },
-      { key: "timestamp", width: 22 },
-      { key: "arabicName", width: 35 },
-      { key: "speciality", width: 25 },
-      { key: "shift", width: 22 },
-      { key: "mobileNumber", width: 22 }
-    ];
+  const headerRow = worksheet.getRow(7);
+  headerRow.height = 32;
+  headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
+  headerRow.eachCell((cell) => {
+    cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FF34D399" } },
+      left: { style: "thin", color: { argb: "FF34D399" } },
+      bottom: { style: "thin", color: { argb: "FF34D399" } },
+      right: { style: "thin", color: { argb: "FF34D399" } }
+    };
+  });
 
-    for (let r = 1; r <= 5; r++) {
-      worksheet.getRow(r).height = 25;
-    }
+  // Group by specialty
+  const grouped: { [key: string]: CheckIn[] } = {};
+  checkins.forEach((c) => {
+    if (!grouped[c.department]) grouped[c.department] = [];
+    grouped[c.department].push(c);
+  });
 
-    worksheet.mergeCells(2, 1, 4, 6);
-    const titleCell = worksheet.getCell("A2");
-    titleCell.value = fullTitle;
-    titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
-    titleCell.alignment = { horizontal: "center", vertical: "middle" };
-
-    const headerImgB64 = getHeaderBgBase64();
-    if (headerImgB64) {
-      const imgId = workbook.addImage({
-        base64: headerImgB64,
-        extension: "png"
-      });
-      worksheet.addImage(imgId, "A1:F5");
-    }
-
-    worksheet.getRow(6).height = 10;
-
-    const headerRow = worksheet.getRow(7);
-    headerRow.height = 32;
-    headerRow.values = ["ID", "Timestamp", "Arabic name", "Speciality", "shift", "Phone Number"];
-    headerRow.eachCell((cell) => {
+  let currentRowNum = 8;
+  Object.keys(grouped).forEach((dept) => {
+    const sepRow = worksheet.getRow(currentRowNum);
+    sepRow.height = 26;
+    worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
+    sepRow.getCell(1).value = `■ ${dept} ■`;
+    sepRow.eachCell((cell) => {
       cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6EE7B7" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFA7F3D0" } };
       cell.alignment = { horizontal: "center", vertical: "middle" };
       cell.border = {
-        top: { style: "thin", color: { argb: "FF34D399" } },
-        left: { style: "thin", color: { argb: "FF34D399" } },
-        bottom: { style: "thin", color: { argb: "FF34D399" } },
-        right: { style: "thin", color: { argb: "FF34D399" } }
+        top: { style: "thin", color: { argb: "FF6EE7B7" } },
+        left: { style: "thin", color: { argb: "FF6EE7B7" } },
+        bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
+        right: { style: "thin", color: { argb: "FF6EE7B7" } }
       };
     });
+    currentRowNum++;
 
-    // Group by specialty
-    const grouped: { [key: string]: CheckIn[] } = {};
-    checkins.forEach((c) => {
-      if (!grouped[c.department]) grouped[c.department] = [];
-      grouped[c.department].push(c);
-    });
-
-    let currentRowNum = 8;
-    Object.keys(grouped).forEach((dept) => {
-      const sepRow = worksheet.getRow(currentRowNum);
-      sepRow.height = 26;
-      worksheet.mergeCells(currentRowNum, 1, currentRowNum, 6);
-      sepRow.getCell(1).value = `■ ${dept} ■`;
-      sepRow.eachCell((cell) => {
-        cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: true, size: 11 };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFA7F3D0" } };
+    grouped[dept].forEach((c, idx) => {
+      const row = worksheet.getRow(currentRowNum);
+      row.height = 22;
+      row.values = [
+        c.id,
+        formatTimestampForDisplay(c.timestamp),
+        c.doctorArabicName,
+        c.department,
+        Array.isArray(c.shifts) ? c.shifts.join(" + ") : (c.shifts || ""),
+        c.mobileNumber || "N/A"
+      ];
+      const isEven = idx % 2 === 0;
+      const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
+      row.eachCell((cell, colNumber) => {
+        cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: colNumber !== 2, size: 10 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowBgColor } };
         cell.alignment = { horizontal: "center", vertical: "middle" };
         cell.border = {
-          top: { style: "thin", color: { argb: "FF6EE7B7" } },
-          left: { style: "thin", color: { argb: "FF6EE7B7" } },
-          bottom: { style: "thin", color: { argb: "FF6EE7B7" } },
-          right: { style: "thin", color: { argb: "FF6EE7B7" } }
+          top: { style: "thin", color: { argb: "FFCBDAD5" } },
+          left: { style: "thin", color: { argb: "FFCBDAD5" } },
+          bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
+          right: { style: "thin", color: { argb: "FFCBDAD5" } }
         };
       });
       currentRowNum++;
+    });
+  });
 
-      grouped[dept].forEach((c, idx) => {
-        const row = worksheet.getRow(currentRowNum);
-        row.height = 22;
-        row.values = [
-          c.id,
-          formatTimestampForDisplay(c.timestamp),
-          c.doctorArabicName,
-          c.department,
-          Array.isArray(c.shifts) ? c.shifts.join(" + ") : (c.shifts || ""),
-          c.mobileNumber || "N/A"
-        ];
-        const isEven = idx % 2 === 0;
-        const rowBgColor = isEven ? "FFFFFFFF" : "FFF0FDF9";
-        row.eachCell((cell, colNumber) => {
-          cell.font = { name: "Segoe UI", color: { argb: "FF063B30" }, bold: colNumber !== 2, size: 10 };
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowBgColor } };
-          cell.alignment = { horizontal: "center", vertical: "middle" };
-          cell.border = {
-            top: { style: "thin", color: { argb: "FFCBDAD5" } },
-            left: { style: "thin", color: { argb: "FFCBDAD5" } },
-            bottom: { style: "thin", color: { argb: "FFCBDAD5" } },
-            right: { style: "thin", color: { argb: "FFCBDAD5" } }
-          };
-        });
-        currentRowNum++;
-      });
+  const buffer = await workbook.xlsx.writeBuffer();
+  return {
+    buffer: Buffer.from(buffer),
+    fileName: `Physician_Checkins_${dateInfo.isoDate}.xlsx`,
+    dateInfo,
+    arabicWeekday,
+    formattedDate,
+    totalCheckins: checkins.length,
+    departmentsCount: Object.keys(grouped).length
+  };
+}
+
+// Server-side daily sheet downloadable endpoint with Node.js backend parameters
+app.get(["/api/download/daily-sheet", "/download/daily-sheet"], async (req, res) => {
+  try {
+    const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
+    const dayParam = typeof req.query.day === "string" ? req.query.day.trim() : undefined;
+    const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
+    const autoReset = req.query.autoReset !== "false";
+    const cutoff = typeof req.query.cutoff === "string" ? req.query.cutoff.trim() : "18:30";
+    const nextDay = req.query.nextDay === "true" || req.query.afterReset === "true";
+
+    const result = await buildDailySheetWorkbook({
+      dateParam,
+      dayParam,
+      titleParam,
+      autoReset,
+      cutoff,
+      nextDay
     });
 
-    const buffer = await workbook.xlsx.writeBuffer();
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="Physician_Checkins_${dateInfo.isoDate}.xlsx"`);
-    res.send(Buffer.from(buffer));
+    res.setHeader("Content-Disposition", `attachment; filename="${result.fileName}"`);
+    res.send(result.buffer);
   } catch (err: any) {
     console.error("Error generating server daily sheet:", err);
     res.status(500).json({ error: "Failed to generate daily sheet", message: err?.message });
   }
 });
+
+// Helper function to dispatch daily sheet to WhatsApp via Green-API
+async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCaption?: string } = {}) {
+  const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
+  const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim();
+  const rawGroupId = process.env.WHATSAPP_GROUP_ID?.trim();
+
+  if (!idInstance || !apiTokenInstance || !rawGroupId) {
+    throw new Error(
+      "WhatsApp credentials incomplete. Please set GREEN_API_ID_INSTANCE, GREEN_API_API_TOKEN_INSTANCE, and WHATSAPP_GROUP_ID in environment variables."
+    );
+  }
+
+  // Ensure target group chat ID has @g.us suffix
+  let targetChatId = rawGroupId;
+  if (!targetChatId.includes("@")) {
+    targetChatId = `${targetChatId}@g.us`;
+  }
+
+  const { buffer, fileName, arabicWeekday, formattedDate, totalCheckins, departmentsCount } =
+    await buildDailySheetWorkbook({ dateParam: options.targetDate });
+
+  const cairoTimeNow = new Date().toLocaleTimeString("ar-EG", {
+    timeZone: "Africa/Cairo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true
+  });
+
+  const caption =
+    options.customCaption ||
+    `📋 *Elite Medical Center — كشف الأطباء اليومي*\n` +
+    `📅 *اليوم:* ${arabicWeekday} (${formattedDate})\n` +
+    `👨‍⚕️ *إجمالي الأطباء المسجلين:* ${totalCheckins}\n` +
+    `🏥 *عدد العيادات النشطة:* ${departmentsCount}\n` +
+    `⏰ *توقيت الإرسال:* ${cairoTimeNow} بتوقيت القاهرة`;
+
+  const url = `https://api.green-api.com/waInstance${idInstance}/sendFileByUpload/${apiTokenInstance}`;
+
+  const formData = new FormData();
+  formData.append("chatId", targetChatId);
+  formData.append("fileName", fileName);
+  formData.append("caption", caption);
+
+  const fileBlob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  });
+  formData.append("file", fileBlob, fileName);
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData
+  });
+
+  const responseData: any = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const errorDetails = typeof responseData === "object" ? JSON.stringify(responseData) : String(responseData);
+    throw new Error(`Green-API returned error (${response.status}): ${errorDetails}`);
+  }
+
+  return {
+    success: true,
+    idMessage: responseData?.idMessage || null,
+    fileName,
+    targetChatId,
+    totalCheckins,
+    departmentsCount,
+    formattedDate
+  };
+}
+
+// WhatsApp configuration status check endpoint
+app.get(["/api/whatsapp/status", "/whatsapp/status"], (req, res) => {
+  const hasInstanceId = Boolean(process.env.GREEN_API_ID_INSTANCE?.trim());
+  const hasToken = Boolean(process.env.GREEN_API_API_TOKEN_INSTANCE?.trim());
+  const rawGroupId = process.env.WHATSAPP_GROUP_ID?.trim() || "";
+  const isConfigured = hasInstanceId && hasToken && Boolean(rawGroupId);
+
+  res.json({
+    configured: isConfigured,
+    hasInstanceId,
+    hasToken,
+    hasGroupId: Boolean(rawGroupId),
+    targetGroupMasked: rawGroupId ? `${rawGroupId.slice(0, 6)}...${rawGroupId.slice(-8)}` : null
+  });
+});
+
+// Manual UI trigger endpoint: POST /api/whatsapp/send-daily-sheet
+app.post(["/api/whatsapp/send-daily-sheet", "/whatsapp/send-daily-sheet"], async (req, res) => {
+  try {
+    const targetDate = typeof req.body?.targetDate === "string" ? req.body.targetDate.trim() : undefined;
+    const result = await sendDailySheetToWhatsApp({ targetDate });
+    res.json({
+      success: true,
+      message: `Daily sheet successfully delivered to WhatsApp group ${result.targetChatId}`,
+      data: result
+    });
+  } catch (err: any) {
+    console.error("Manual WhatsApp daily sheet dispatch failed:", err);
+    res.status(500).json({
+      success: false,
+      error: "Failed to send daily sheet to WhatsApp",
+      message: err?.message || String(err)
+    });
+  }
+});
+
+// Vercel Cron automated scheduled endpoint: GET /api/cron/send-daily-sheet
+app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, res) => {
+  try {
+    // Optional CRON_SECRET verification
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    const authHeader = req.headers.authorization;
+    const isVercelCron = req.headers["x-vercel-cron"] === "1";
+
+    if (cronSecret && !isVercelCron && authHeader !== `Bearer ${cronSecret}`) {
+      console.warn("Unauthorized attempt to invoke cron endpoint /api/cron/send-daily-sheet");
+      return res.status(401).json({ error: "Unauthorized cron execution" });
+    }
+
+    console.log(`[Vercel Cron] Triggering automated daily sheet dispatch at ${new Date().toISOString()}...`);
+    const result = await sendDailySheetToWhatsApp();
+    console.log("[Vercel Cron] Daily sheet sent successfully:", result);
+
+    res.json({
+      success: true,
+      invokedAt: new Date().toISOString(),
+      result
+    });
+  } catch (err: any) {
+    console.error("[Vercel Cron] Automated daily sheet dispatch failed:", err);
+    res.status(500).json({
+      success: false,
+      error: "Automated daily sheet dispatch failed",
+      message: err?.message || String(err)
+    });
+  }
+});
+
 
 // Helper for formatting timestamp in server
 function formatTimestampForDisplay(timestampStr: string): string {
@@ -2993,7 +3200,7 @@ app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
     }
   }
 
-  if (doctor && doctor.isActive !== false && normalizeSpecialty(doctor.department || "").active) {
+  if (doctor && doctor.isActive !== false && normalizeSpecialty(doctor.department || "").active && !isDoctorDeleted(doctor.id, doctor.name, doctor.arabicName)) {
     const idKey = normalizeId(doctor.id);
     const nameKey = normalizeName(doctor.name);
     const mobileNumber = doctor.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "";
@@ -3639,7 +3846,7 @@ app.post("/api/supabase/migrate", async (req, res) => {
 // Serve Frontend using Vite or static assets
 async function startServer() {
   // Non-blocking background delta sync with Supabase
-  loadEnrichedDoctorsDatabase().catch(err => {
+  loadEnrichedDoctorsDatabase(true).catch(err => {
     console.warn("[Elite Server] Background doctors delta sync:", err);
   });
 

@@ -1105,7 +1105,8 @@ export const COMPILED_DOCTORS: CompiledDoctor[] = [
     "name": "Moustafa Belal",
     "arabicName": "مصطفى بلال بلال",
     "department": "ICU",
-    "mobileNumber": "01278555783"
+    "mobileNumber": "01278555783",
+    "isActive": false
   },
   {
     "id": "261",
