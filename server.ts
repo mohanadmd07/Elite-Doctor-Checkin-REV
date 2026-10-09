@@ -10,11 +10,18 @@ import { DOCTORS_DATABASE } from "./src/data/doctors.js";
 import { COMPILED_DOCTORS } from "./src/data/compiledDoctors.js";
 import { PRECOMPILED_CODE_PHONES, PRECOMPILED_NAME_PHONES } from "./src/data/compiledPhones.js";
 import { getSupabase, getSupabaseConfig, fetchAllRowsFromSupabase, resetSupabaseClient } from "./src/db/supabase.js";
+import { COMPILED_HEADER_BG_BASE64, COMPILED_ELITE_LOGO_BASE64 } from "./src/data/compiledAssets.js";
+
+// In-memory cache for latest client-rendered Retina header image
+let LATEST_RENDERED_HEADER_BASE64: string | null = null;
 
 // Ensure local fallback data directory path is defined before boot calls
 const DATA_DIR = process.env.VERCEL
   ? path.join("/tmp", "data")
   : path.join(process.cwd(), "data");
+const CHECKINS_FILE = path.join(DATA_DIR, "checkins.json");
+const CUSTOM_DOCTORS_FILE = path.join(DATA_DIR, "custom_doctors.json");
+const DELETED_DOCTORS_FILE = path.join(DATA_DIR, "deleted_doctors.json");
 
 // Global Mobile Numbers lookup Maps populated from the Excel sheet
 const mobileNumbersByCodeMap = new Map<string, string>();
@@ -617,9 +624,7 @@ const PORT = 3000;
 app.use(compression());
 app.use(express.json());
 
-// Local fallback data files
-const CHECKINS_FILE = path.join(DATA_DIR, "checkins.json");
-
+// Local fallback data initialization
 function ensureLocalData() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1016,9 +1021,6 @@ async function saveCustomDoctorPhone(id: string, mobileNumber: string): Promise<
 }
 
 // Custom Doctors persistent store helpers
-const CUSTOM_DOCTORS_FILE = path.join(DATA_DIR, "custom_doctors.json");
-const DELETED_DOCTORS_FILE = path.join(DATA_DIR, "deleted_doctors.json");
-
 interface CustomDoctorRecord {
   id: string;
   name: string;
@@ -2284,6 +2286,10 @@ function escapeXml(unsafe: string): string {
 let cachedHeaderBgBase64: string | null = null;
 function getHeaderBgBase64(): string {
   if (cachedHeaderBgBase64) return cachedHeaderBgBase64;
+  if (typeof COMPILED_HEADER_BG_BASE64 === "string" && COMPILED_HEADER_BG_BASE64.length > 0) {
+    cachedHeaderBgBase64 = COMPILED_HEADER_BG_BASE64;
+    return cachedHeaderBgBase64;
+  }
   const candidatePaths = [
     path.join(process.cwd(), "public", "header_bg.png"),
     path.join(process.cwd(), "header_bg.png"),
@@ -2306,6 +2312,10 @@ function getHeaderBgBase64(): string {
 let cachedEliteLogoBase64: string | null = null;
 function getEliteLogoBase64(): string {
   if (cachedEliteLogoBase64) return cachedEliteLogoBase64;
+  if (typeof COMPILED_ELITE_LOGO_BASE64 === "string" && COMPILED_ELITE_LOGO_BASE64.length > 0) {
+    cachedEliteLogoBase64 = COMPILED_ELITE_LOGO_BASE64;
+    return cachedEliteLogoBase64;
+  }
   const candidatePaths = [
     path.join(process.cwd(), "public", "elite_logo.png"),
     path.join(process.cwd(), "elite_logo.png"),
@@ -2676,6 +2686,7 @@ interface DailySheetGenOptions {
   autoReset?: boolean;
   cutoff?: string;
   nextDay?: boolean;
+  headerBase64?: string;
 }
 
 // Reusable function to build the daily sheet Excel workbook buffer
@@ -2720,13 +2731,19 @@ async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
   titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
 
-  const headerImgB64 = getHeaderBgBase64();
-  if (headerImgB64) {
-    const imgId = workbook.addImage({
-      base64: headerImgB64,
-      extension: "png"
-    });
-    worksheet.addImage(imgId, "A1:F5");
+  // Priority: 1) explicit options.headerBase64, 2) cached client-rendered retina PNG, 3) bundled header_bg.png
+  const rawHeaderImgB64 = options.headerBase64 || LATEST_RENDERED_HEADER_BASE64 || getHeaderBgBase64();
+  if (rawHeaderImgB64) {
+    try {
+      const cleanB64 = rawHeaderImgB64.replace(/^data:image\/png;base64,/, "");
+      const imgId = workbook.addImage({
+        base64: cleanB64,
+        extension: "png"
+      });
+      worksheet.addImage(imgId, "A1:F5");
+    } catch (err) {
+      console.warn("Error embedding header image into Excel worksheet:", err);
+    }
   }
 
   worksheet.getRow(6).height = 10;
@@ -2855,7 +2872,7 @@ function parseAndNormalizeGroupIds(raw: string): string[] {
 }
 
 // Helper function to dispatch daily sheet to WhatsApp via Green-API
-async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCaption?: string } = {}) {
+async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCaption?: string; headerBase64?: string } = {}) {
   const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
   const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim();
   const rawGroupId = process.env.WHATSAPP_GROUP_ID?.trim();
@@ -2872,7 +2889,7 @@ async function sendDailySheetToWhatsApp(options: { targetDate?: string; customCa
   }
 
   const { buffer, fileName, arabicWeekday, formattedDate, totalCheckins, departmentsCount } =
-    await buildDailySheetWorkbook({ dateParam: options.targetDate });
+    await buildDailySheetWorkbook({ dateParam: options.targetDate, headerBase64: options.headerBase64 });
 
   // Clean, focused morning briefing message requested by user
   const caption =
@@ -2954,11 +2971,24 @@ app.get(["/api/whatsapp/status", "/whatsapp/status"], (req, res) => {
   });
 });
 
+// Endpoint to sync high-res rendered canvas header from client to server cache
+app.post(["/api/sheet-header-sync", "/sheet-header-sync"], (req, res) => {
+  if (typeof req.body?.headerBase64 === "string" && req.body.headerBase64.length > 100) {
+    LATEST_RENDERED_HEADER_BASE64 = req.body.headerBase64;
+    return res.json({ success: true, cached: true });
+  }
+  res.status(400).json({ success: false, error: "Invalid headerBase64 payload" });
+});
+
 // Manual UI trigger endpoint: POST /api/whatsapp/send-daily-sheet
 app.post(["/api/whatsapp/send-daily-sheet", "/whatsapp/send-daily-sheet"], async (req, res) => {
   try {
     const targetDate = typeof req.body?.targetDate === "string" ? req.body.targetDate.trim() : undefined;
-    const result = await sendDailySheetToWhatsApp({ targetDate });
+    const headerBase64 = typeof req.body?.headerBase64 === "string" ? req.body.headerBase64.trim() : undefined;
+    if (headerBase64) {
+      LATEST_RENDERED_HEADER_BASE64 = headerBase64;
+    }
+    const result = await sendDailySheetToWhatsApp({ targetDate, headerBase64 });
     res.json({
       success: true,
       message: `Daily sheet successfully delivered to WhatsApp (${result.targetChatIds.length} group${result.targetChatIds.length > 1 ? "s" : ""})`,

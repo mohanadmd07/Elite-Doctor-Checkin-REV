@@ -1288,6 +1288,24 @@ export default function App() {
   useEffect(() => {
     fetchCheckins();
     fetchFullDoctorsDatabase();
+
+    // Background pre-warm and sync of high-res Retina header to server memory cache for 8 AM Cron
+    const timer = setTimeout(async () => {
+      try {
+        const bgHeader = await fetchHeaderImageBase64(undefined, undefined, undefined, undefined, { autoReset: true });
+        if (bgHeader) {
+          fetch("/api/sheet-header-sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ headerBase64: bgHeader })
+          }).catch(() => {});
+        }
+      } catch {
+        // non-blocking
+      }
+    }, 2500);
+
+    return () => clearTimeout(timer);
   }, []);
 
   // Fetch and live-sync current checkins if admin is authenticated (polls every 3 seconds)
@@ -2257,10 +2275,61 @@ export default function App() {
     if (isSendingWhatsApp) return;
     setIsSendingWhatsApp(true);
     try {
+      // 1. Calculate Egypt date parameters matching the daily sheet
+      const nowEgypt = new Date();
+      const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+      const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+      const egyptHour = parseInt(egyptHourStr, 10) || 0;
+      const egyptMin = parseInt(egyptMinStr, 10) || 0;
+      const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
+      const d = new Date(nowEgypt);
+      if (isPastReset) {
+        d.setDate(d.getDate() + 1);
+      }
+
+      const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
+        timeZone: "Africa/Cairo",
+        weekday: "long"
+      }).format(d);
+      const englishWeekday = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Africa/Cairo",
+        weekday: "long"
+      }).format(d);
+      const formattedDate = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Africa/Cairo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(d);
+      const targetIsoDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Cairo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(d);
+
+      // 2. Fetch the SVG header from Node.js backend parameters and render into high-res PNG
+      let headerBase64 = "";
+      try {
+        headerBase64 = await fetchHeaderImageBase64(
+          formattedDate,
+          arabicWeekday,
+          undefined,
+          englishWeekday,
+          { autoReset: true }
+        );
+      } catch (err) {
+        console.warn("Could not generate canvas header image:", err);
+      }
+
+      // 3. Dispatch to backend with headerBase64 included
       const res = await fetch("/api/whatsapp/send-daily-sheet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        body: JSON.stringify({
+          headerBase64,
+          targetDate: targetIsoDate
+        })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
