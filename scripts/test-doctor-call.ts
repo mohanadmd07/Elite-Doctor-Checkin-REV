@@ -6,7 +6,9 @@ import {
   toWhatsAppPhone,
   saveDoctorCallRecord,
   getDoctorCallRecords,
-  DoctorCallRecord
+  DoctorCallRecord,
+  setAutomationPaused,
+  isAutomationPaused
 } from "../src/services/doctorCallDispatcher.js";
 
 async function runTests() {
@@ -141,6 +143,18 @@ Bed: Bed 325
   }
   console.log("  Retrieved saved record ID:", found.id, "Status:", found.status);
   console.log("  ✅ Persistence passed!\n");
+
+  // Test 5: Pause & Resume Toggle
+  console.log("▶ [Test 5] Testing Automation Pause & Resume...");
+  setAutomationPaused(true);
+  if (!isAutomationPaused()) {
+    throw new Error("Expected automation to be paused");
+  }
+  setAutomationPaused(false);
+  if (isAutomationPaused()) {
+    throw new Error("Expected automation to be resumed");
+  }
+  console.log("  ✅ Pause / Resume toggle passed!\n");
 
   console.log("🎉 ALL TESTS PASSED SUCCESSFULLY!");
 }

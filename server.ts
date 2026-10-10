@@ -14,7 +14,11 @@ import { COMPILED_HEADER_BG_BASE64, COMPILED_ELITE_LOGO_BASE64 } from "./src/dat
 import {
   processDoctorCallWebhook,
   getDoctorCallRecords,
-  reDispatchDoctorCall
+  reDispatchDoctorCall,
+  checkWhatsAppAutomationStatus,
+  sendTestDoctorCallAlert,
+  isAutomationPaused,
+  setAutomationPaused
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3099,6 +3103,44 @@ app.post(["/api/doctor-calls/:id/redispatch", "/doctor-calls/:id/redispatch"], a
     res.json(result);
   } catch (err: any) {
     console.error(`Error re-dispatching call ${req.params.id}:`, err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 4. Check Green-API Connection Status & Configuration
+app.get(["/api/doctor-calls/status", "/doctor-calls/status"], async (req, res) => {
+  try {
+    const status = await checkWhatsAppAutomationStatus();
+    res.json({ success: true, status });
+  } catch (err: any) {
+    console.error("Error checking doctor calls status:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 5. Toggle Automation Pause / Resume
+app.post(["/api/doctor-calls/toggle-pause", "/doctor-calls/toggle-pause"], async (req, res) => {
+  try {
+    const currentState = isAutomationPaused();
+    const newState = setAutomationPaused(!currentState);
+    res.json({
+      success: true,
+      isPaused: newState,
+      message: newState ? "Automation has been PAUSED." : "Automation has been RESUMED and is ACTIVE."
+    });
+  } catch (err: any) {
+    console.error("Error toggling automation pause:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 6. Send Test WhatsApp Alert to Target Group
+app.post(["/api/doctor-calls/test-message", "/doctor-calls/test-message"], async (req, res) => {
+  try {
+    const result = await sendTestDoctorCallAlert();
+    res.json(result);
+  } catch (err: any) {
+    console.error("Error sending test message:", err);
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });

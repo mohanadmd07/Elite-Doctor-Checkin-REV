@@ -41,7 +41,10 @@ import {
   Terminal,
   Server,
   Send,
-  PhoneCall
+  PhoneCall,
+  Play,
+  Pause,
+  Activity
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./data/specialties.js";
 
@@ -538,6 +541,22 @@ export default function App() {
   const [redispatchingCallId, setRedispatchingCallId] = useState<string | null>(null);
   const [callActionFeedback, setCallActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
 
+  // WhatsApp Automation Diagnostics & Controls
+  const [automationStatus, setAutomationStatus] = useState<{
+    configured: boolean;
+    hasInstanceId: boolean;
+    hasToken: boolean;
+    sourceGroup: string;
+    targetGroup: string;
+    stateInstance: string;
+    isPaused: boolean;
+    statusMessage: string;
+  } | null>(null);
+  const [isCheckingAutomation, setIsCheckingAutomation] = useState(false);
+  const [isSendingTestMessage, setIsSendingTestMessage] = useState(false);
+  const [isTogglingPause, setIsTogglingPause] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+
   // Supabase State & Operations
   const [supabaseStatus, setSupabaseStatus] = useState<{
     configured: boolean;
@@ -680,6 +699,68 @@ export default function App() {
       });
     } finally {
       setRedispatchingCallId(null);
+    }
+  };
+
+  const fetchAutomationStatus = async () => {
+    setIsCheckingAutomation(true);
+    try {
+      const res = await fetch("/api/doctor-calls/status");
+      const json = await res.json();
+      if (json.success && json.status) {
+        setAutomationStatus(json.status);
+      }
+    } catch (err) {
+      console.error("Failed to check automation status:", err);
+    } finally {
+      setIsCheckingAutomation(false);
+    }
+  };
+
+  const handleTogglePauseAutomation = async () => {
+    setIsTogglingPause(true);
+    try {
+      const res = await fetch("/api/doctor-calls/toggle-pause", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        setCallActionFeedback({
+          id: "pause_toggle",
+          success: true,
+          message: json.message
+        });
+        await fetchAutomationStatus();
+        fetchDoctorCalls();
+      }
+    } catch (err: any) {
+      setCallActionFeedback({
+        id: "pause_toggle",
+        success: false,
+        message: err?.message || "Failed to toggle pause state"
+      });
+    } finally {
+      setIsTogglingPause(false);
+    }
+  };
+
+  const handleSendTestMessage = async () => {
+    setIsSendingTestMessage(true);
+    setCallActionFeedback(null);
+    try {
+      const res = await fetch("/api/doctor-calls/test-message", { method: "POST" });
+      const json = await res.json();
+      setCallActionFeedback({
+        id: "test_msg",
+        success: Boolean(json.success),
+        message: json.message || (json.success ? "Test message delivered!" : "Failed to send test message")
+      });
+    } catch (err: any) {
+      setCallActionFeedback({
+        id: "test_msg",
+        success: false,
+        message: err?.message || "Error sending test message"
+      });
+    } finally {
+      setIsSendingTestMessage(false);
     }
   };
 
@@ -1409,6 +1490,7 @@ export default function App() {
     if (!isAdminAuthenticated || adminTab !== "calls") return;
 
     fetchDoctorCalls();
+    fetchAutomationStatus();
     const intervalId = setInterval(() => {
       fetchDoctorCalls();
     }, 4000);
@@ -3849,10 +3931,17 @@ export default function App() {
                         <div>
                           <div className="flex items-center gap-2">
                             <h3 className="text-lg font-bold text-slate-900">Inpatient Ward Doctor Calls</h3>
-                            <span className="bg-emerald-100 text-[#063b30] text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                              Green-API Automation Active
-                            </span>
+                            {automationStatus?.isPaused ? (
+                              <span className="bg-amber-100 text-amber-900 text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-amber-300 flex items-center gap-1.5 shadow-2xs">
+                                <Pause className="w-2.5 h-2.5 text-amber-600" />
+                                Automation Paused
+                              </span>
+                            ) : (
+                              <span className="bg-emerald-100 text-[#063b30] text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5 shadow-2xs">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Automation Active
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5">
                             Real-time inpatient call dispatcher, shift matching (Cairo timezone), and doctor WhatsApp mentions
@@ -3860,16 +3949,206 @@ export default function App() {
                         </div>
                       </div>
 
-                      <button
-                        onClick={fetchDoctorCalls}
-                        disabled={loadingDoctorCalls}
-                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${loadingDoctorCalls ? "animate-spin text-emerald-600" : ""}`} />
-                        <span>Refresh Calls</span>
-                      </button>
+                      {/* Header Actions: Check, Test, Pause, Refresh */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Check Status Button */}
+                        <button
+                          onClick={() => {
+                            setShowStatusModal(true);
+                            fetchAutomationStatus();
+                          }}
+                          disabled={isCheckingAutomation}
+                          className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          title="Check WhatsApp & Green-API connection state"
+                        >
+                          <Activity className={`w-3.5 h-3.5 text-emerald-600 ${isCheckingAutomation ? "animate-spin" : ""}`} />
+                          <span>Check Status</span>
+                        </button>
+
+                        {/* Send Test Message Button */}
+                        <button
+                          onClick={handleSendTestMessage}
+                          disabled={isSendingTestMessage}
+                          className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                          title="Send a sample test notification to target WhatsApp group"
+                        >
+                          {isSendingTestMessage ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Sending Test...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-3.5 h-3.5" />
+                              <span>Send Test Message</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Pause / Resume Automation Button */}
+                        <button
+                          onClick={handleTogglePauseAutomation}
+                          disabled={isTogglingPause}
+                          className={`px-3 py-2 font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 ${
+                            automationStatus?.isPaused
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700"
+                              : "bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300"
+                          }`}
+                          title={automationStatus?.isPaused ? "Resume automated dispatching" : "Pause automated dispatching"}
+                        >
+                          {isTogglingPause ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : automationStatus?.isPaused ? (
+                            <Play className="w-3.5 h-3.5 text-white" />
+                          ) : (
+                            <Pause className="w-3.5 h-3.5 text-amber-700" />
+                          )}
+                          <span>{automationStatus?.isPaused ? "Resume" : "Pause"}</span>
+                        </button>
+
+                        {/* Refresh Calls Button */}
+                        <button
+                          onClick={fetchDoctorCalls}
+                          disabled={loadingDoctorCalls}
+                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${loadingDoctorCalls ? "animate-spin text-emerald-600" : ""}`} />
+                          <span>Refresh</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Paused Warning Banner */}
+                  {automationStatus?.isPaused && (
+                    <div className="bg-amber-500/10 border-2 border-amber-500/40 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-950 shadow-xs">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-amber-500 text-white rounded-lg shrink-0">
+                          <Pause className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-xs uppercase tracking-wide text-amber-900">WhatsApp Automation is Currently PAUSED</h4>
+                          <p className="text-xs text-amber-800 mt-0.5">
+                            Calls are being logged in this dashboard, but outgoing WhatsApp messages are blocked until resumed.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleTogglePauseAutomation}
+                        disabled={isTogglingPause}
+                        className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-sm shrink-0"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        <span>Resume Automation</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* WhatsApp Automation Diagnostics Modal */}
+                  {showStatusModal && (
+                    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                      <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl p-6 space-y-4">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="p-2 bg-[#e6f2ee] text-[#063b30] rounded-lg">
+                              <Activity className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-slate-900 text-base">WhatsApp Automation Diagnostics</h3>
+                              <p className="text-[11px] text-slate-500">Green-API webhook & connection health check</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => setShowStatusModal(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+
+                        <div className="space-y-3 text-xs">
+                          {/* Connection state */}
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                            <span className="font-semibold text-slate-600">WhatsApp State:</span>
+                            {automationStatus?.stateInstance === "authorized" ? (
+                              <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                ✅ Authorized & Linked
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                ❌ {automationStatus?.stateInstance || "Not Connected"}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Dispatch Status */}
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                            <span className="font-semibold text-slate-600">Dispatcher Queue:</span>
+                            {automationStatus?.isPaused ? (
+                              <span className="px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                ⏸️ Paused by Admin
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                🟢 Active (Ready for Calls)
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Groups Configured */}
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5 font-mono text-[11px]">
+                            <div className="text-slate-500 font-sans font-bold text-xs">Group Routing:</div>
+                            <div className="text-slate-700">
+                              <span className="font-semibold text-slate-500">Monitored Group:</span>{" "}
+                              {automationStatus?.sourceGroup || "(Accepts all configured groups)"}
+                            </div>
+                            <div className="text-slate-700">
+                              <span className="font-semibold text-slate-500">Target Doctors Group:</span>{" "}
+                              {automationStatus?.targetGroup || "(Not configured in .env)"}
+                            </div>
+                          </div>
+
+                          {/* Webhook endpoint guidance */}
+                          <div className="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[11px] space-y-1">
+                            <div className="text-slate-400 font-sans font-bold text-xs">Your Webhook Endpoint:</div>
+                            <div className="text-emerald-400 select-all break-all">
+                              {window.location.origin}/api/whatsapp/webhook
+                            </div>
+                            <div className="text-slate-400 font-sans text-[10px] mt-1">
+                              Configure this exact URL in your Green-API console under Webhook settings.
+                            </div>
+                          </div>
+
+                          {automationStatus?.statusMessage && (
+                            <div className="p-3 bg-emerald-50 rounded-xl text-emerald-900 border border-emerald-200 text-xs">
+                              {automationStatus.statusMessage}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            onClick={handleSendTestMessage}
+                            disabled={isSendingTestMessage}
+                            className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {isSendingTestMessage ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Send className="w-3.5 h-3.5" />
+                            )}
+                            <span>Send Test Message</span>
+                          </button>
+                          <button
+                            onClick={() => setShowStatusModal(false)}
+                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Action Feedback Toast */}
                   {callActionFeedback && (

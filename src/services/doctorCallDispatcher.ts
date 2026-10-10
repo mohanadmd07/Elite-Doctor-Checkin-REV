@@ -55,7 +55,7 @@ export interface DoctorCallRecord {
   admittingPhysician: string;
   callerName: string;
   dispatchedDoctors: DispatchedDoctorInfo[];
-  status: "dispatched" | "no_doctor_present" | "failed";
+  status: "dispatched" | "no_doctor_present" | "failed" | "paused";
   rawMessage: string;
 }
 
@@ -272,6 +272,43 @@ export function getCairoDateString(date: Date = new Date()): string {
 }
 
 // =========================================================================
+// AUTOMATION PAUSE & STATE MANAGEMENT
+// =========================================================================
+
+const SETTINGS_FILE = path.join(DATA_DIR, "call_automation_settings.json");
+let isPausedMemory = false;
+
+// Initialize from disk if available
+try {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    const raw = fs.readFileSync(SETTINGS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.paused === "boolean") {
+      isPausedMemory = parsed.paused;
+    }
+  }
+} catch (_) {}
+
+export function isAutomationPaused(): boolean {
+  return isPausedMemory;
+}
+
+export function setAutomationPaused(paused: boolean): boolean {
+  isPausedMemory = paused;
+  try {
+    ensureDataFile();
+    fs.writeFileSync(
+      SETTINGS_FILE,
+      JSON.stringify({ paused: isPausedMemory, updatedAt: new Date().toISOString() }, null, 2),
+      "utf-8"
+    );
+  } catch (err) {
+    console.warn("[DoctorCall] Error saving automation settings to disk:", err);
+  }
+  return isPausedMemory;
+}
+
+// =========================================================================
 // LOCAL STORAGE & PERSISTENCE
 // =========================================================================
 
@@ -453,6 +490,118 @@ export async function sendGreenApiTextMessage(params: {
   }
 }
 
+/**
+ * Checks Green-API connection state and configuration parameters
+ */
+export async function checkWhatsAppAutomationStatus(): Promise<{
+  configured: boolean;
+  hasInstanceId: boolean;
+  hasToken: boolean;
+  sourceGroup: string;
+  targetGroup: string;
+  stateInstance: string;
+  isPaused: boolean;
+  statusMessage: string;
+}> {
+  const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim() || "";
+  const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim() || "";
+  const sourceGroup = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
+  const targetGroup = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim() || "";
+
+  const hasInstanceId = Boolean(idInstance);
+  const hasToken = Boolean(apiTokenInstance);
+  const isPaused = isAutomationPaused();
+
+  if (!hasInstanceId || !hasToken) {
+    return {
+      configured: false,
+      hasInstanceId,
+      hasToken,
+      sourceGroup,
+      targetGroup,
+      stateInstance: "missing_credentials",
+      isPaused,
+      statusMessage: "Green-API instance ID or API token missing in environment variables."
+    };
+  }
+
+  let stateInstance = "unknown";
+  try {
+    const url = `https://api.green-api.com/waInstance${idInstance}/getStateInstance/${apiTokenInstance}`;
+    const res = await fetch(url);
+    const data: any = await res.json().catch(() => ({}));
+    stateInstance = data?.stateInstance || "unknown";
+  } catch (err: any) {
+    stateInstance = `error: ${err?.message || "network error"}`;
+  }
+
+  const isConnected = stateInstance === "authorized";
+  const configured = isConnected && Boolean(targetGroup);
+
+  let statusMessage = "";
+  if (!isConnected) {
+    statusMessage = `WhatsApp is not connected (state: ${stateInstance}). Scan QR code in Green-API console.`;
+  } else if (!targetGroup) {
+    statusMessage = "Target WhatsApp group ID is missing in environment variables.";
+  } else {
+    statusMessage = `WhatsApp is connected & authorized (${stateInstance}) • Target Group Set.`;
+  }
+
+  return {
+    configured,
+    hasInstanceId,
+    hasToken,
+    sourceGroup,
+    targetGroup,
+    stateInstance,
+    isPaused,
+    statusMessage
+  };
+}
+
+/**
+ * Sends an instant test WhatsApp message to the target doctors group
+ */
+export async function sendTestDoctorCallAlert(): Promise<{
+  success: boolean;
+  message: string;
+  idMessage?: string;
+}> {
+  const targetGroupId = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim();
+  if (!targetGroupId) {
+    return {
+      success: false,
+      message: "Target WhatsApp group ID (WHATSAPP_DOCTORS_TARGET_GROUP_ID or WHATSAPP_GROUP_ID) is not configured."
+    };
+  }
+
+  const testAlertText =
+    `🧪 *TEST DOCTOR CALL ALERT* 🧪\n` +
+    `👨‍⚕️ *Elite Hospital Systems Check*\n\n` +
+    `📍 *Location:* Room *TEST-101*\n` +
+    `🩺 *Specialty:* Testing & Diagnostics\n` +
+    `📞 *Status:* Operational\n\n` +
+    `⚡ _This is a verified test dispatch confirming Green-API automation is working correctly._`;
+
+  const dispatchRes = await sendGreenApiTextMessage({
+    chatId: targetGroupId,
+    message: testAlertText
+  });
+
+  if (!dispatchRes.success) {
+    return {
+      success: false,
+      message: `Failed to deliver test message: ${dispatchRes.error}`
+    };
+  }
+
+  return {
+    success: true,
+    message: `Test message delivered successfully to WhatsApp group! (Message ID: ${dispatchRes.idMessage})`,
+    idMessage: dispatchRes.idMessage
+  };
+}
+
 // =========================================================================
 // PIPELINE WORKFLOW (WEBHOOK INGESTION & DISPATCH)
 // =========================================================================
@@ -530,10 +679,13 @@ export async function processDoctorCallWebhook(params: {
   }
 
   const callId = `call_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
-  let status: "dispatched" | "no_doctor_present" | "failed" = "no_doctor_present";
+  let status: "dispatched" | "no_doctor_present" | "failed" | "paused" = "no_doctor_present";
 
-  // 5. If no doctors present: silent log on server without sending WhatsApp message
-  if (matchingDoctors.length === 0) {
+  // 5. Check if automation is paused by admin
+  if (isAutomationPaused()) {
+    console.log(`[DoctorCall] ⏸️ Automation is currently PAUSED by admin. Recording call silently without dispatch.`);
+    status = "paused";
+  } else if (matchingDoctors.length === 0) {
     console.warn(`[DoctorCall] ⚠️ No doctor checked in for department "${parsed.canonicalDepartment}" during active shifts [${activeShifts.join(", ")}]. Logged silently.`);
     status = "no_doctor_present";
   } else {

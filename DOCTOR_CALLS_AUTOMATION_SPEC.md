@@ -124,3 +124,11 @@ GRANT ALL ON TABLE public.doctor_calls TO anon, authenticated, service_role;
 CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls
   FOR ALL TO public USING (true) WITH CHECK (true);
 ```
+
+---
+
+## 8. Diagnostic & Management Controls
+In the Admin Panel "Doctor Calls" Tab, three operational controls are available:
+1. **Check Status (`GET /api/doctor-calls/status`):** Checks Green-API connection authorization (`stateInstance`), verified source & target group configurations, and webhook URL guidance.
+2. **Send Test Message (`POST /api/doctor-calls/test-message`):** Instantly dispatches a sample test call notification to the target WhatsApp group with message ID confirmation.
+3. **Pause / Resume Automation (`POST /api/doctor-calls/toggle-pause`):** Toggles dispatching on and off. When paused, calls are silently logged on the dashboard as `paused` without dispatching messages to WhatsApp until resumed. State is persisted in `data/call_automation_settings.json`.
