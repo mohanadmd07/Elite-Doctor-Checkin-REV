@@ -40,7 +40,8 @@ import {
   ExternalLink,
   Terminal,
   Server,
-  Send
+  Send,
+  PhoneCall
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./data/specialties.js";
 
@@ -132,6 +133,26 @@ CREATE TABLE IF NOT EXISTS public.deleted_doctors (
     id TEXT PRIMARY KEY,
     deleted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+-- 7. Inpatient Ward Doctor Calls
+CREATE TABLE IF NOT EXISTS public.doctor_calls (
+    id TEXT PRIMARY KEY,
+    call_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    room TEXT NOT NULL,
+    department TEXT NOT NULL,
+    raw_department TEXT,
+    patient_name TEXT,
+    patient_barcode TEXT,
+    admitting_physician TEXT,
+    caller_name TEXT,
+    dispatched_doctors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL,
+    raw_message TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_date ON public.doctor_calls (call_date);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_dept ON public.doctor_calls (department);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_status ON public.doctor_calls (status);
 
 -- Indexes for fast querying, deduplication, and atomic operations
 CREATE INDEX IF NOT EXISTS idx_doctors_name ON public.doctors (name);
@@ -248,6 +269,7 @@ ALTER TABLE public.weekly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctor_phones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.deleted_doctors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.doctor_calls ENABLE ROW LEVEL SECURITY;
 
 -- Grant schema and table access permissions to anon, authenticated, and service_role roles
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
@@ -282,6 +304,9 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to deleted_doctors' AND tablename = 'deleted_doctors') THEN
     CREATE POLICY "Public access to deleted_doctors" ON public.deleted_doctors FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to doctor_calls' AND tablename = 'doctor_calls') THEN
+    CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;`;
 
@@ -498,8 +523,20 @@ export default function App() {
   const [editingCheckedInPhone, setEditingCheckedInPhone] = useState("");
   const [isUpdatingCheckedInPhone, setIsUpdatingCheckedInPhone] = useState(false);
 
-  // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase")
-  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "supabase">("roster");
+  // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase" | "calls")
+  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "supabase" | "calls">("roster");
+
+  // Inpatient Ward Doctor Calls states
+  const [doctorCalls, setDoctorCalls] = useState<any[]>([]);
+  const [loadingDoctorCalls, setLoadingDoctorCalls] = useState(false);
+  const [callsSearch, setCallsSearch] = useState("");
+  const [callsDeptFilter, setCallsDeptFilter] = useState("All");
+  const [callsStatusFilter, setCallsStatusFilter] = useState("All");
+  const [callsDateFilter, setCallsDateFilter] = useState(() => {
+    return new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
+  });
+  const [redispatchingCallId, setRedispatchingCallId] = useState<string | null>(null);
+  const [callActionFeedback, setCallActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
 
   // Supabase State & Operations
   const [supabaseStatus, setSupabaseStatus] = useState<{
@@ -599,6 +636,51 @@ export default function App() {
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA_TEXT);
     setCopiedSqlSchema(true);
     setTimeout(() => setCopiedSqlSchema(false), 2000);
+  };
+
+  // Inpatient Ward Doctor Calls data fetching & re-dispatch
+  const fetchDoctorCalls = async () => {
+    setLoadingDoctorCalls(true);
+    try {
+      const params = new URLSearchParams();
+      if (callsDateFilter) params.append("date", callsDateFilter);
+      if (callsDeptFilter && callsDeptFilter !== "All") params.append("department", callsDeptFilter);
+      if (callsStatusFilter && callsStatusFilter !== "All") params.append("status", callsStatusFilter);
+      if (callsSearch.trim()) params.append("search", callsSearch.trim());
+
+      const res = await fetch(`/api/doctor-calls?${params.toString()}`);
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setDoctorCalls(json.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch doctor calls:", err);
+    } finally {
+      setLoadingDoctorCalls(false);
+    }
+  };
+
+  const handleRedispatchCall = async (callId: string) => {
+    setRedispatchingCallId(callId);
+    setCallActionFeedback(null);
+    try {
+      const res = await fetch(`/api/doctor-calls/${encodeURIComponent(callId)}/redispatch`, { method: "POST" });
+      const json = await res.json();
+      setCallActionFeedback({
+        id: callId,
+        success: Boolean(json.success),
+        message: json.message || (json.success ? "Re-dispatched successfully" : "Failed to re-dispatch")
+      });
+      fetchDoctorCalls();
+    } catch (err: any) {
+      setCallActionFeedback({
+        id: callId,
+        success: false,
+        message: err?.message || "Failed to re-dispatch call"
+      });
+    } finally {
+      setRedispatchingCallId(null);
+    }
   };
 
   // Duplicated IDs Management State
@@ -1321,6 +1403,18 @@ export default function App() {
 
     return () => clearInterval(intervalId);
   }, [isAdminAuthenticated]);
+
+  // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 4 seconds)
+  useEffect(() => {
+    if (!isAdminAuthenticated || adminTab !== "calls") return;
+
+    fetchDoctorCalls();
+    const intervalId = setInterval(() => {
+      fetchDoctorCalls();
+    }, 4000);
+
+    return () => clearInterval(intervalId);
+  }, [isAdminAuthenticated, adminTab, callsDateFilter, callsDeptFilter, callsStatusFilter, callsSearch]);
 
   // Auto-lookup doctor as they type and fetch autocomplete suggestions
   useEffect(() => {
@@ -2867,6 +2961,26 @@ export default function App() {
                       </button>
                     </>
                   )}
+
+                  <button
+                    onClick={() => {
+                      setAdminTab("calls");
+                      fetchDoctorCalls();
+                    }}
+                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
+                      adminTab === "calls"
+                        ? "bg-[#063b30] text-emerald-300 shadow-sm border border-emerald-600"
+                        : "text-slate-600 hover:text-[#063b30] hover:bg-slate-50"
+                    }`}
+                  >
+                    <PhoneCall className="w-4 h-4 text-emerald-400" />
+                    <span>Doctor Calls</span>
+                    {doctorCalls.length > 0 && (
+                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                        {doctorCalls.length}
+                      </span>
+                    )}
+                  </button>
                 </div>
 
                 {adminTab === "database" && (
@@ -3717,6 +3831,303 @@ export default function App() {
                           Run <span className="font-mono font-bold text-slate-700">npm run migrate:supabase</span> in the terminal anytime for automated CLI migration.
                         </div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              ) : adminTab === "calls" ? (
+                /* ======================================================= */
+                /*               INPATIENT DOCTOR CALLS TAB                */
+                /* ======================================================= */
+                <div className="space-y-6">
+                  {/* Doctor Calls Header Banner */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 bg-[#e6f2ee] text-[#063b30] rounded-xl border border-emerald-200">
+                          <PhoneCall className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-bold text-slate-900">Inpatient Ward Doctor Calls</h3>
+                            <span className="bg-emerald-100 text-[#063b30] text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                              Green-API Automation Active
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Real-time inpatient call dispatcher, shift matching (Cairo timezone), and doctor WhatsApp mentions
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={fetchDoctorCalls}
+                        disabled={loadingDoctorCalls}
+                        className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingDoctorCalls ? "animate-spin text-emerald-600" : ""}`} />
+                        <span>Refresh Calls</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Action Feedback Toast */}
+                  {callActionFeedback && (
+                    <div className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-3 shadow-sm ${
+                      callActionFeedback.success
+                        ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+                        : "bg-rose-50 text-rose-900 border-rose-200"
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        {callActionFeedback.success ? (
+                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        )}
+                        <span className="font-medium">{callActionFeedback.message}</span>
+                      </div>
+                      <button
+                        onClick={() => setCallActionFeedback(null)}
+                        className="text-slate-400 hover:text-slate-600 p-1"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 3 KPI Metric Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Calls Recorded</p>
+                        <h4 className="text-2xl font-black text-slate-900 mt-1">{doctorCalls.length}</h4>
+                      </div>
+                      <div className="p-3 bg-slate-100 rounded-xl text-slate-700">
+                        <Phone className="w-5 h-5" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Dispatched to Doctor</p>
+                        <h4 className="text-2xl font-black text-emerald-700 mt-1">
+                          {doctorCalls.filter(c => c.status === "dispatched").length}
+                        </h4>
+                      </div>
+                      <div className="p-3 bg-emerald-50 rounded-xl text-emerald-700 border border-emerald-100">
+                        <CheckCircle className="w-5 h-5" />
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">No Doctor Present</p>
+                        <h4 className="text-2xl font-black text-amber-600 mt-1">
+                          {doctorCalls.filter(c => c.status === "no_doctor_present").length}
+                        </h4>
+                      </div>
+                      <div className="p-3 bg-amber-50 rounded-xl text-amber-600 border border-amber-100">
+                        <AlertTriangle className="w-5 h-5" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Filters & Search Control Bar */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-3 flex-1">
+                      {/* Date Filter */}
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-600">Date:</label>
+                        <input
+                          type="date"
+                          value={callsDateFilter}
+                          onChange={(e) => setCallsDateFilter(e.target.value)}
+                          className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Search Bar */}
+                      <div className="relative flex-1 min-w-[200px]">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          value={callsSearch}
+                          onChange={(e) => setCallsSearch(e.target.value)}
+                          placeholder="Search room, patient, doctor, barcode..."
+                          className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* Department Filter */}
+                      <select
+                        value={callsDeptFilter}
+                        onChange={(e) => setCallsDeptFilter(e.target.value)}
+                        className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                      >
+                        <option value="All">All Specialties</option>
+                        {CANONICAL_SPECIALTIES.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+
+                      {/* Status Filter */}
+                      <select
+                        value={callsStatusFilter}
+                        onChange={(e) => setCallsStatusFilter(e.target.value)}
+                        className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                      >
+                        <option value="All">All Statuses</option>
+                        <option value="dispatched">Dispatched</option>
+                        <option value="no_doctor_present">No Doctor Present</option>
+                        <option value="failed">Failed</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Doctor Calls Table */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-[#f0f6f4] border-b border-[#cbdad5] text-slate-700 font-bold uppercase tracking-wider text-[11px]">
+                          <tr>
+                            <th className="py-3 px-4">Time</th>
+                            <th className="py-3 px-4">Room & Bed</th>
+                            <th className="py-3 px-4">Specialty</th>
+                            <th className="py-3 px-4">Patient Information</th>
+                            <th className="py-3 px-4">Assigned / Mentioned Doctor</th>
+                            <th className="py-3 px-4">Status</th>
+                            <th className="py-3 px-4 text-center">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {doctorCalls.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-12 text-center text-slate-400">
+                                <PhoneCall className="w-8 h-8 mx-auto text-slate-300 mb-2 opacity-50" />
+                                <p className="font-semibold text-slate-600">No Doctor Calls Recorded</p>
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                  Incoming calls from WhatsApp group matching "Category: DoctorCall" will automatically appear here.
+                                </p>
+                              </td>
+                            </tr>
+                          ) : (
+                            doctorCalls.map((call) => {
+                              const createdDate = new Date(call.createdAt);
+                              const timeStr = isNaN(createdDate.getTime()) ? call.createdAt : createdDate.toLocaleTimeString("en-US", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                hour12: true
+                              });
+
+                              return (
+                                <tr key={call.id} className="hover:bg-slate-50/80 transition-colors">
+                                  {/* Time */}
+                                  <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
+                                    <div className="font-bold text-slate-800">{timeStr}</div>
+                                    <div className="text-[10px] text-slate-400">{call.callDate}</div>
+                                  </td>
+
+                                  {/* Room */}
+                                  <td className="py-3 px-4">
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-black bg-emerald-50 text-emerald-900 border border-emerald-200 font-mono shadow-2xs">
+                                      Room {call.room}
+                                    </span>
+                                  </td>
+
+                                  {/* Specialty */}
+                                  <td className="py-3 px-4">
+                                    <div className="font-bold text-slate-800">{call.department}</div>
+                                    {call.rawDepartment && call.rawDepartment !== call.department && (
+                                      <div className="text-[10px] text-slate-400 font-arabic">{call.rawDepartment}</div>
+                                    )}
+                                  </td>
+
+                                  {/* Patient */}
+                                  <td className="py-3 px-4">
+                                    <div className="font-bold text-slate-900">{call.patientName}</div>
+                                    <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1.5 mt-0.5">
+                                      <span>ID: {call.patientBarcode}</span>
+                                      {call.admittingPhysician && call.admittingPhysician !== "N/A" && (
+                                        <span>• Adm: {call.admittingPhysician}</span>
+                                      )}
+                                    </div>
+                                    {call.callerName && call.callerName !== "N/A" && (
+                                      <div className="text-[10px] text-slate-400">By: {call.callerName}</div>
+                                    )}
+                                  </td>
+
+                                  {/* Dispatched Doctors */}
+                                  <td className="py-3 px-4">
+                                    {call.dispatchedDoctors && call.dispatchedDoctors.length > 0 ? (
+                                      <div className="space-y-1">
+                                        {call.dispatchedDoctors.map((doc: any, dIdx: number) => (
+                                          <div key={dIdx} className="flex items-center gap-1.5">
+                                            <span className="font-bold text-slate-800">{doc.name}</span>
+                                            {doc.phone && (
+                                              <span className="font-mono text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                                {doc.phone}
+                                              </span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-amber-600 italic text-[11px] font-medium flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                                        No doctor checked in
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Status Badge */}
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    {call.status === "dispatched" ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                        <Check className="w-3 h-3 text-emerald-700" />
+                                        Dispatched
+                                      </span>
+                                    ) : call.status === "no_doctor_present" ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                        <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                        No Doctor Present
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                        <AlertCircle className="w-3 h-3 text-rose-600" />
+                                        Failed
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Actions */}
+                                  <td className="py-3 px-4 text-center whitespace-nowrap">
+                                    <button
+                                      onClick={() => handleRedispatchCall(call.id)}
+                                      disabled={redispatchingCallId === call.id}
+                                      className="px-2.5 py-1.5 bg-[#063b30] hover:bg-[#042d24] text-white text-[11px] font-bold rounded-lg transition-colors inline-flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer"
+                                      title="Re-check active doctors and re-send alert to WhatsApp group"
+                                    >
+                                      {redispatchingCallId === call.id ? (
+                                        <>
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                          <span>Sending...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Send className="w-3 h-3" />
+                                          <span>Re-dispatch</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>

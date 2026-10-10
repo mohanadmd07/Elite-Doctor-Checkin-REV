@@ -11,6 +11,11 @@ import { COMPILED_DOCTORS } from "./src/data/compiledDoctors.js";
 import { PRECOMPILED_CODE_PHONES, PRECOMPILED_NAME_PHONES } from "./src/data/compiledPhones.js";
 import { getSupabase, getSupabaseConfig, fetchAllRowsFromSupabase, resetSupabaseClient } from "./src/db/supabase.js";
 import { COMPILED_HEADER_BG_BASE64, COMPILED_ELITE_LOGO_BASE64 } from "./src/data/compiledAssets.js";
+import {
+  processDoctorCallWebhook,
+  getDoctorCallRecords,
+  reDispatchDoctorCall
+} from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
 let LATEST_RENDERED_HEADER_BASE64: string | null = null;
@@ -3036,6 +3041,67 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
   }
 });
 
+// =========================================================================
+// WHATSAPP DOCTOR CALL AUTOMATION & DISPATCH WEBHOOK
+// =========================================================================
+
+// 1. Green-API Webhook Ingestion endpoint
+app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
+  // Acknowledge immediately to Green-API to prevent timeout retries
+  res.status(200).json({ status: "received" });
+
+  try {
+    console.log("[DoctorCall Webhook] Received webhook payload from Green-API");
+    const result = await processDoctorCallWebhook({
+      rawBody: req.body,
+      getActiveCheckins: async () => {
+        const raw = await readCheckInsRaw();
+        return raw.map(c => enrichCheckIn(c));
+      }
+    });
+    if (result.handled) {
+      console.log(`[DoctorCall Webhook] Processed call ${result.callRecord?.id} with status: ${result.callRecord?.status}`);
+    } else {
+      console.log(`[DoctorCall Webhook] Skipped: ${result.reason}`);
+    }
+  } catch (err: any) {
+    console.error("[DoctorCall Webhook] Error processing incoming call:", err);
+  }
+});
+
+// 2. Fetch Doctor Calls List (with date, department, status, and search filters)
+app.get(["/api/doctor-calls", "/doctor-calls"], async (req, res) => {
+  try {
+    const date = typeof req.query.date === "string" ? req.query.date : undefined;
+    const department = typeof req.query.department === "string" ? req.query.department : undefined;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+
+    const records = await getDoctorCallRecords({ date, department, status, search });
+    res.json({ success: true, count: records.length, data: records });
+  } catch (err: any) {
+    console.error("Error retrieving doctor calls:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 3. Manual Re-dispatch Doctor Call from Admin Panel
+app.post(["/api/doctor-calls/:id/redispatch", "/doctor-calls/:id/redispatch"], async (req, res) => {
+  try {
+    const callId = req.params.id;
+    const result = await reDispatchDoctorCall({
+      callId,
+      getActiveCheckins: async () => {
+        const raw = await readCheckInsRaw();
+        return raw.map(c => enrichCheckIn(c));
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error(`Error re-dispatching call ${req.params.id}:`, err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
 
 // Helper for formatting timestamp in server
 function formatTimestampForDisplay(timestampStr: string): string {

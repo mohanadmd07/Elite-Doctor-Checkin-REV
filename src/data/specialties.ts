@@ -240,7 +240,14 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   }
 
   // Neurosurgery
-  if (lower.includes("neurosurgery") || lower.includes("spine surgeon")) {
+  if (
+    lower.includes("neurosurgery") ||
+    lower.includes("spine surgeon") ||
+    lower.includes("مخ") ||
+    lower.includes("جراحة المخ") ||
+    lower.includes("اعصاب") ||
+    lower.includes("أعصاب")
+  ) {
     return { active: true, department: "Neurosurgery" };
   }
 
