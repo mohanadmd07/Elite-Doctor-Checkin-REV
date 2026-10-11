@@ -338,7 +338,16 @@ WHERE (department ILIKE '%opd coordinator%' OR department = 'OPD Coordinator')
   AND id != '347'
   AND department NOT ILIKE '%rad%';
 
--- Ensure all physicians in the 20 canonical specialties are marked active
+-- Home Care (Independent Specialty - Home Visits & Care)
+UPDATE public.doctors
+SET department = 'Home Care', is_active = true, updated_at = now()
+WHERE department ILIKE '%home visit%'
+   OR department ILIKE '%home care%'
+   OR department ILIKE '%زيارات منزلية%'
+   OR department ILIKE '%رعاية منزلية%'
+   OR department IN ('Home Visit', 'Home Visits', 'Home Care');
+
+-- Ensure all physicians in the 21 canonical specialties are marked active
 UPDATE public.doctors
 SET is_active = true, updated_at = now()
 WHERE department IN (
@@ -361,7 +370,8 @@ WHERE department IN (
   'Physiotherapy',
   'Anesthesiology & Pain Therapy',
   'Clinical Pharmacy',
-  'OPD Coordinator'
+  'OPD Coordinator',
+  'Home Care'
 );
 
 -- ==============================================================================
@@ -370,8 +380,7 @@ WHERE department IN (
 
 UPDATE public.doctors
 SET is_active = false, updated_at = now()
-WHERE department ILIKE '%home visit%'
-   OR department ILIKE '%dental%'
+WHERE department ILIKE '%dental%'
    OR department ILIKE '%orthodontist%'
    OR department ILIKE '%dermatolog%'
    OR department ILIKE '%cosmotolog%'
@@ -403,7 +412,7 @@ UPDATE public.doctors
 SET is_active = false, updated_at = now()
 WHERE is_active IS NULL;
 
--- Any row not in canonical 20 is marked inactive
+-- Any row not in canonical 21 is marked inactive
 UPDATE public.doctors
 SET is_active = false, updated_at = now()
 WHERE department IS NULL
@@ -427,7 +436,8 @@ WHERE department IS NULL
     'Physiotherapy',
     'Anesthesiology & Pain Therapy',
     'Clinical Pharmacy',
-    'OPD Coordinator'
+    'OPD Coordinator',
+    'Home Care'
   );
 
 -- Sync custom_doctors table if it exists
@@ -531,6 +541,19 @@ WHERE doctor_id IN (
   '260522.05.46.18', '300925.10.01.27'
 );
 
+-- Explicitly guarantee Home Care physicians are in Home Care across all attendance tables
+UPDATE public.checkins
+SET department = 'Home Care'
+WHERE department ILIKE '%home visit%' OR department ILIKE '%home care%' OR department IN ('Home Visit', 'Home Visits');
+
+UPDATE public.weekly_checkins
+SET department = 'Home Care'
+WHERE department ILIKE '%home visit%' OR department ILIKE '%home care%' OR department IN ('Home Visit', 'Home Visits');
+
+UPDATE public.monthly_checkins
+SET department = 'Home Care'
+WHERE department ILIKE '%home visit%' OR department ILIKE '%home care%' OR department IN ('Home Visit', 'Home Visits');
+
 -- ==============================================================================
 -- 6. CREATE INDEXES & CONSTRAINTS SAFELY
 -- ==============================================================================
@@ -581,7 +604,8 @@ CHECK (
     'Physiotherapy',
     'Anesthesiology & Pain Therapy',
     'Clinical Pharmacy',
-    'OPD Coordinator'
+    'OPD Coordinator',
+    'Home Care'
   )
 );
 

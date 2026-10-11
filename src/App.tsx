@@ -192,7 +192,7 @@ BEGIN
     'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
     'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
     'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-    'Clinical Pharmacy', 'OPD Coordinator'
+    'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
   );
 
   UPDATE public.doctors
@@ -204,7 +204,7 @@ BEGIN
        'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-       'Clinical Pharmacy', 'OPD Coordinator'
+       'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
      );
 
   ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
@@ -216,7 +216,7 @@ BEGIN
       'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
       'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-      'Clinical Pharmacy', 'OPD Coordinator'
+      'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
     )
   );
 END $$;

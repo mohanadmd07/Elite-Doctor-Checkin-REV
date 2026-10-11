@@ -27,6 +27,7 @@ export const CANONICAL_SPECIALTIES = [
   "Anesthesiology & Pain Therapy",
   "Clinical Pharmacy",
   "OPD Coordinator",
+  "Home Care",
 ] as const;
 
 export type CanonicalSpecialty = (typeof CANONICAL_SPECIALTIES)[number];
@@ -55,7 +56,6 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // 1. FILTERED OUT / DEACTIVATED DEPARTMENTS (Non-inpatient / Allied / Administrative)
   // =========================================================================
   if (
-    lower.includes("home visit") ||
     lower.includes("dental") ||
     lower.includes("orthodontist") ||
     lower.includes("dermatolog") ||
@@ -108,6 +108,19 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     clean === "OPD Coordinator"
   ) {
     return { active: true, department: "OPD Coordinator" };
+  }
+
+  // Home Care (Independent Specialty - Home Visits & Care)
+  if (
+    lower.includes("home visit") ||
+    lower.includes("home care") ||
+    lower.includes("زيارات منزلية") ||
+    lower.includes("رعاية منزلية") ||
+    clean === "Home Visit" ||
+    clean === "Home Visits" ||
+    clean === "Home Care"
+  ) {
+    return { active: true, department: "Home Care" };
   }
 
   // Emergency Medicine (Independent Specialty)

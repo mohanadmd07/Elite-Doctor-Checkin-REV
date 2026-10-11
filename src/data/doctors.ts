@@ -2084,9 +2084,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "377",
     "name": "ElSaudi Zamzam",
     "arabicName": "السعودي زمزم",
-    "department": "Home Visits",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "378",
@@ -4196,9 +4196,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "800",
     "name": "Nermin Ahmed Abdelmonium Moustafa",
     "arabicName": "نرمين احمد عبدالمنعم مصطفى",
-    "department": "Home Visits",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "801",
@@ -4372,9 +4372,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "941",
     "name": "Fatima Gaber Ahmed Mohamed",
     "arabicName": "فاطمة جابر احمد محمد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "949",
@@ -6612,9 +6612,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "2546",
     "name": "Belal Ahmed Ebrahim Mohamed",
     "arabicName": "بلال احمد ابراهيم محمد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "2556",
@@ -8012,9 +8012,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "3566",
     "name": "Michael Abdelmalak Ebid Abdelmalak",
     "arabicName": "مايكل عبد الملاك عبيد عبد الملاك",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "01153138907",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "3573",
@@ -8988,9 +8988,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "010426.12.47.17",
     "name": "Mohamed Ramadan Abdelfattah Eladham (HC)",
     "arabicName": "محمد رمضان عبدالفتاح الادهم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010524.06.35.48",
@@ -9076,9 +9076,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "010726.11.56.06",
     "name": "Rufaida Ahmed Mohamed Mohamed (HC)",
     "arabicName": "رفيده احمد محمد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010822.11.40.49",
@@ -9108,41 +9108,41 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "010826.01.18.16",
     "name": "Eman Saad Kamel Ahmed (HC)",
     "arabicName": "Eman Saad Kamel Ahmed (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010826.01.20.47",
     "name": "Moustafa Mahmoud Mahmoud Moustafa (HC)",
     "arabicName": "Moustafa Mahmoud Mahmoud Moustafa (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010826.12.04.27",
     "name": "Moustafa Mohamed Moustafa Youssef Elbhoashi (HC)",
     "arabicName": "Moustafa Mohamed Moustafa Youssef Elbhoashi (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010826.12.07.12",
     "name": "Mohamed Ehab Elsayd Hassan (HC)",
     "arabicName": "Mohamed Ehab Elsayd Hassan (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010826.12.08.18",
     "name": "Mahmoud Essam Saber Mohamed (HC)",
     "arabicName": "Mahmoud Essam Saber Mohamed (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "010922.07.50.20",
@@ -9324,17 +9324,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "020626.04.39.09",
     "name": "Nada Mohamed Eid Mohamed(HC)",
     "arabicName": "ندي محمد عيد محمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "020626.04.41.15",
     "name": "Ebrahim Mohamed GabAllah Hemida(HC)",
     "arabicName": "ابراهيم محمد جاب الله حميده(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "020722.11.39.51",
@@ -9388,9 +9388,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "020826.01.16.37",
     "name": "Nada Mohamed Ahmed Mohamed (HC)",
     "arabicName": "Nada Mohamed Ahmed Mohamed (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "020922.03.39.11",
@@ -9500,9 +9500,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "030126.11.25.40",
     "name": "Doaa Ramadan Ghanim Mastor (HC)",
     "arabicName": "دعاء رمضان غانم مستور (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030224.11.47.04",
@@ -9524,9 +9524,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "030226.11.38.40",
     "name": "Abdelrhman Atef Anwer Abdelal (HC)",
     "arabicName": "عبدالرحمن عاطف انور عبدالعال (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030323.09.50.05",
@@ -9708,25 +9708,25 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "030626.03.04.11",
     "name": "Mohamed Elshahat Mohamed Mohamed (HC)",
     "arabicName": "محمد الشحات محمد محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030626.12.05.56",
     "name": "Hager Naeem Mohamed Mahmoud",
     "arabicName": "هاجر محمد محمد محمود",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030626.12.19.01",
     "name": "Hager Mohamed Naeem Mahmoud(HC)",
     "arabicName": "هاجر محمد نعيم محمود",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030723.09.23.26",
@@ -9772,9 +9772,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "030826.03.45.15",
     "name": "Abdullah Tarek Shehta Mohamed (HC)",
     "arabicName": "Abdullah Tarek Shehta Mohamed (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "030826.03.49.50",
@@ -9844,25 +9844,25 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "031125.04.09.30",
     "name": "Reem Elsayed Morsy Elsayed (HC)",
     "arabicName": "ريم السيد مرسي السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "031125.11.09.56",
     "name": "Dawa Maher Mohamed Mahmoud (HC)",
     "arabicName": "دعوه ماهر محمد محمود (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "031125.11.20.46",
     "name": "Mayar Shouky Ahmed Ahmed (HC)",
     "arabicName": "ميار شكري احمد احمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "031223.10.47.19",
@@ -9876,9 +9876,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "031225.11.16.16",
     "name": "Ebrahim Mohamed Abdelaziz Omar (HC)",
     "arabicName": "ابراهيم محمد عبدالعزيز عمر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040123.05.22.31",
@@ -9932,25 +9932,25 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "040226.04.42.14",
     "name": "Mohamed Fawazy Ateya Elemary(HC)",
     "arabicName": "محمد فوزى عطيه العمرى(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040226.04.45.31",
     "name": "Omar Mohamed Ezzat Mohamed(HC)",
     "arabicName": "عمر محمد عزت محمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040226.04.58.15",
     "name": "Mahmoud Mohamed Abdelfatah Mazhar(HC)",
     "arabicName": "محمود محمد عبدالفتاح مظهر(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040323.07.49.12",
@@ -10060,17 +10060,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "040726.01.31.22",
     "name": "Rehab Mohamed Abdelaziz Mohamed (HC)",
     "arabicName": "رحاب محمد عبدالعزيز محمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040726.01.33.10",
     "name": "Shahd Eid Abdelaziz Abdelghany (HC)",
     "arabicName": "شهد عيد عبدالعزيز عبدالغني(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040726.04.25.02",
@@ -10092,9 +10092,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "040726.12.17.34",
     "name": "Eatedal Shwaky Mohamed Taha (HC)",
     "arabicName": "اعتدال شوقي محمد طه (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "040822.04.00.52",
@@ -10364,9 +10364,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "050826.05.19.45",
     "name": "Mohamed Ahmed Mohamed Mohamed",
     "arabicName": "Mohamed Ahmed Mohamed Mohamed",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "050922.11.32.10",
@@ -10540,9 +10540,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "060626.11.53.48",
     "name": "Nermin khaled Saad Kotb (HC)",
     "arabicName": "نرمين خالد سعد قطب (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "060722.10.46.26",
@@ -10668,9 +10668,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "061225.01.01.27",
     "name": "Omnia Nasser Gaber Hesham (HC)",
     "arabicName": "امنية ناصر جابر هاشم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "070123.09.03.44",
@@ -10764,9 +10764,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "070526.02.31.23",
     "name": "Ahmed Sobhy ElSayed Sharaf(HC)",
     "arabicName": "احمد صبحي السيد شرف",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "070622.02.45.04",
@@ -10932,17 +10932,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "071225.04.54.11",
     "name": "Mohamed Hamdi Fathy Moustafa (HC)",
     "arabicName": "محمد حمدي فتحي مصطفى (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "071225.04.55.27",
     "name": "Moustafa Rabiaa Moustafa Omar (HC)",
     "arabicName": "مصطفى ربيع مصطفى عمر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080125.05.52.41",
@@ -10956,9 +10956,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "080126.01.28.38",
     "name": "Alaa Elsayed Mohamed Ali (HC)",
     "arabicName": "علاء السيد محمد علي (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080126.08.41.27",
@@ -11108,33 +11108,33 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "080626.01.27.29",
     "name": "Mohamed Ahmed DaifAllah Ahmed Shehata (HC)",
     "arabicName": "محمد احمد ضيف الله احمد شحاته (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080626.03.21.47",
     "name": "Aya Abdelmonium Osmaan Mohamed(HC)",
     "arabicName": "ايه عبدالمنعم عثمان محمد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080626.03.24.29",
     "name": "Donia Eid Massoud Ali(HC)",
     "arabicName": "Donia Eid Massoud Ali(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080626.03.28.11",
     "name": "Hadeer Ali Eid Shehata(HC)",
     "arabicName": "هدير علي عيد شحات",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "080626.11.22.37",
@@ -11268,17 +11268,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "090226.03.47.32",
     "name": "Roqaia Ahmed Mohamed Roshdy Ahmed (HC)",
     "arabicName": "رقيه احمد محمد رشدي احمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "090226.03.49.56",
     "name": "Sahar Ramzy Saad Abdelaziz (HC)",
     "arabicName": "سحر رمزى سعد عبدالعزيز (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "090323.07.57.29",
@@ -11412,17 +11412,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "090826.12.49.26",
     "name": "Ahmed Ashraf Ahmed Abdelhady (HC)",
     "arabicName": "Ahmed Ashraf Ahmed Abdelhady (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "090826.12.51.02",
     "name": "Ahmed Said Radwan El Naggar (HC)",
     "arabicName": "Ahmed Said Radwan El Naggar (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "090923.06.41.06",
@@ -11532,9 +11532,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "100126.11.03.58",
     "name": "Ramadan Abdullah Ali Hassan(HC)",
     "arabicName": "رمضان عبدالله علي حسن(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "100224.09.53.16",
@@ -11716,9 +11716,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "100826.03.19.21",
     "name": "Yousef Farg Mohamed Mohamed(HC)",
     "arabicName": "Yousef Farg Mohamed Mohamed(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "100922.09.41.43",
@@ -12060,33 +12060,33 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "110726.01.18.02",
     "name": "Esraa Elsayd Moustafa Elsayd (HC)",
     "arabicName": "Esraa Elsayd Moustafa Elsayd (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "110726.03.25.01",
     "name": "Roukya Adel Elsayd Hassan (HC)",
     "arabicName": "Roukya Adel Elsayd Hassan (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "110726.03.26.09",
     "name": "Mohamed Mahfoz Abdullah Abdullah (HC)",
     "arabicName": "Mohamed Mahfoz Abdullah Abdullah (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "110726.03.37.24",
     "name": "Roukya Sobhi Abdelgwad Abdelrhman (HC)",
     "arabicName": "Roukya Sobhi Abdelgwad Abdelrhman (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "110824.10.00.55",
@@ -12180,9 +12180,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "120126.03.36.50",
     "name": "Mohamed Mohamed Nazih Gouda (HC)",
     "arabicName": "محمد محمد نزيه جوده (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "120126.12.46.01",
@@ -12292,9 +12292,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "120526.04.29.36",
     "name": "Mahmoud Ali Abozayd Mohamed (HC)",
     "arabicName": "محمود علي ابوزيد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "120622.01.33.24",
@@ -12508,9 +12508,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "130526.03.15.53",
     "name": "Mahmoud Ashraf Mustafa Awad (HC)",
     "arabicName": "محمود اشرف مصطفي عوض (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "130622.03.31.07",
@@ -12620,9 +12620,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "131225.12.12.49",
     "name": "Passant Khamis Abdelhalim Abdelsalam (HC)",
     "arabicName": "بسنت خميس عبدالحليم عبدالسلام (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140123.12.30.45",
@@ -12748,9 +12748,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "140226.04.27.28",
     "name": "Eman Fathy Ahmed Mohamed (HC)",
     "arabicName": "ايمان فتحي احمد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140226.11.44.12",
@@ -12900,41 +12900,41 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "140626.03.30.42",
     "name": "Asyaa Hamdi Mohamed Abdelalem (HC)",
     "arabicName": "اسيا حمدي محمد عبدالعليم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140626.04.40.26",
     "name": "Aisaa Ebrahim Ahmed Mosaad (HC)",
     "arabicName": "عيسي ابراهيم احمد مسعد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140626.04.40.58",
     "name": "Fatma Mosaad Mohamed Mohamed Emara (HC)",
     "arabicName": "فاطمه مسعد محمد محمد عماره (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140626.05.30.10",
     "name": "Nada Mohamed Ahmed Ragab(HC)",
     "arabicName": "ندي محمد احمد رجب",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140626.05.34.57",
     "name": "Dina Eid Masoud Ali(HC)",
     "arabicName": "دينا عيد مسعود على",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "140726.01.54.19",
@@ -13196,65 +13196,65 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "150326.02.07.31",
     "name": "Abdullah Elshahat Mohamed Mohamed (HC)",
     "arabicName": "عبدالله الشحات محمد محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.02.09.32",
     "name": "Salim Said Farouk Mohamed (HC)",
     "arabicName": "سالم سعيد فاروق محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.02.10.59",
     "name": "Sameh Mohamed Flaifl Mohamed (HC)",
     "arabicName": "سامح محمد فلفل محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.02.16.34",
     "name": "Mohamed Emad Ahmed Mohamed (HC)",
     "arabicName": "محمد عماد احمد محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.03.02.03",
     "name": "Shahd Reda Ebrahim Elsayed (HC)",
     "arabicName": "شهد رضا ابراهيم السيد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.03.32.18",
     "name": "Ebrahim Mohamed Farag Arafa (HC)",
     "arabicName": "ابراهيم محمد فرج عرفه (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.11.22.35",
     "name": "Nourhan Ahmed Abdelghany Ali (HC)",
     "arabicName": "نورهان احمد عبدالغني علي (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150326.11.26.46",
     "name": "Ahmed Emad khaled Tawfiq (HC)",
     "arabicName": "احمد عماد خالد توفيق (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "150425.03.26.43",
@@ -13516,9 +13516,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "160226.03.27.55",
     "name": "Mostafa Ahmed Abdelaziz Ahmed(HC)",
     "arabicName": "مصطفي احمد عبدالعزيز احمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160226.11.12.54",
@@ -13564,33 +13564,33 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "160426.02.11.46",
     "name": "Nasr Kadry Nasr Khamis(HC)",
     "arabicName": "نصر قدري نصر خميس(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160426.02.56.24",
     "name": "Moustafa Ramadan Abdelfatah Eladham (HC)",
     "arabicName": "مصطفى رمضان عبدالفتاح الادهم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160426.03.45.43",
     "name": "Shimaa Said Ebrahim Mohamed(HC)",
     "arabicName": "شيماء سعيد ابراهيم محمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160426.03.46.48",
     "name": "Salma Mohamed Awad Mohamed(HC)",
     "arabicName": "سلمي محمد عوض محمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160426.09.26.54",
@@ -13676,9 +13676,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "160626.11.43.01",
     "name": "Hassan Ramadan Hassan Khalil (HC)",
     "arabicName": "حسن رمضان حسن خليل (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "160723.04.37.37",
@@ -13964,9 +13964,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "170626.11.28.25",
     "name": "Moustafa Mohamed Abdelwahid Abdelwahid (HC)",
     "arabicName": "مصطفى محمد عبدالواحد عبدالواحد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "170725.06.36.01",
@@ -14116,9 +14116,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "171125.06.04.17",
     "name": "Ali Ahmed Ebrahim Metwaly (HC)",
     "arabicName": "علي احمد ابراهيم متولي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "171125.08.39.54",
@@ -14132,9 +14132,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "171125.12.55.22",
     "name": "Mohamed Yasser Saad Ahmed (HC)",
     "arabicName": "محمد ياسر سعد احمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "171223.05.19.08",
@@ -14268,9 +14268,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "180526.05.22.40",
     "name": "Ahmed Gamal Hamada Ali (HC)",
     "arabicName": "احمد جمال حماده علي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "180625.06.21.17",
@@ -14420,33 +14420,33 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "181125.01.13.27",
     "name": "Mohamed Ebrahim Mohamed Mohamed (HC)",
     "arabicName": "محمد ابراهيم محمد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "181125.10.46.15",
     "name": "Aisha Fathy Mohamed Abdellatif (HC)",
     "arabicName": "عائشة فتحي محمد عبداللطيف (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "181125.10.47.57",
     "name": "Habiba Anwer Mohamed Mossa(HC)",
     "arabicName": "حبيبة انور محمد موسي(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "181125.10.50.37",
     "name": "Hager Mahmoud El Shahat Dsoky (HC)",
     "arabicName": "هاجر محمود الشحات دسوقي (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "181125.11.19.36",
@@ -14500,9 +14500,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "181225.03.03.12",
     "name": "Hamdi Sabry Abdelhamid Yousef (HC)",
     "arabicName": "حمدي صبري عبدالحميد يوسف (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "190123.07.21.48",
@@ -14804,17 +14804,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "191125.10.26.24",
     "name": "Esraa AbdelHay Mohamed Shohdy(HC)",
     "arabicName": "اسراء عبدالحي محمد شهدي(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "191125.10.52.00",
     "name": "Fatama ElSaied Mohamed ElSaied(HC)",
     "arabicName": "فاطمه السعيد محمد السعيد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "191222.11.35.23",
@@ -14868,9 +14868,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "200126.12.08.53",
     "name": "Mohamed hussein Mohamed Mahmoud (HC)",
     "arabicName": "محمد حسين محمد محمود (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "200223.01.42.32",
@@ -14980,9 +14980,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "200526.11.45.20",
     "name": "Mohamed Hamdi Osmaan Mohamed (HC)",
     "arabicName": "محمد حمدي عثمان محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "200623.11.49.26",
@@ -15012,9 +15012,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "200726.01.20.04",
     "name": "Nora Elsayd Ali Mohamed (HC)",
     "arabicName": "Nora Elsayd Ali Mohamed (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "200726.10.03.22",
@@ -15108,17 +15108,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "201125.01.37.20",
     "name": "Omnia Azmy Abdelsalam Abdelrahman(HC)",
     "arabicName": "امنيه عزمي عبدالسلام عبدالرحمن(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "201125.02.56.09",
     "name": "Mai Abdelkareem Abdelsalam Shoker(HC)",
     "arabicName": "مي عبدالكريم عبدالسلام شكر(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "201125.05.01.19",
@@ -15132,17 +15132,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "201125.10.57.47",
     "name": "Sherine Essam Shahat Abdullah(HC)",
     "arabicName": "شرين عصام شحات عبدالله(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "201125.11.25.35",
     "name": "Ahdaa Sabry Abbas Abdelsayed(HC)",
     "arabicName": "اهداء صبري عباس عبدالسيد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "201225.10.11.10",
@@ -15180,25 +15180,25 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "210126.01.08.09",
     "name": "Omar Ahmed Elsayed AbdelMagid (HC)",
     "arabicName": "عمر احمد السيد عبدالمجيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "210126.02.08.05",
     "name": "Elsayed Ramadan Elsayed Ali (HC)",
     "arabicName": "السيد رمضان السيد علي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "210126.11.02.15",
     "name": "Ahmed Mohamed Abd ElHay Hassan(HC)",
     "arabicName": "احمد محمد عبدالحي حسن(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "210223.01.53.28",
@@ -15236,9 +15236,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "210226.12.05.43",
     "name": "Omar Hamed Ragab Hamed (HC)",
     "arabicName": "عمر حامد رجب حامد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "210323.05.25.03",
@@ -15540,9 +15540,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "220126.02.27.27",
     "name": "Mohamed Hosni Mohamed Ismaiel (HC)",
     "arabicName": "محمد حسني محمد اسماعيل (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "220224.06.39.03",
@@ -15556,9 +15556,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "220226.10.46.22",
     "name": "Mohamed Nabil Elsayed Abdelrahman (HC)",
     "arabicName": "محمد نبيل السيد عبدالرحمن (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "220424.07.41.50",
@@ -15636,9 +15636,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "220726.02.43.05",
     "name": "Habiba Hossam Mohamed Hassan (HC)",
     "arabicName": "Habiba Hossam Mohamed Hassan (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "220726.05.59.04",
@@ -15676,377 +15676,377 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "221025.01.05.06",
     "name": "Eslam Metwally Abdelfatah Mohamed (HC)",
     "arabicName": "اسلام متولي عبدالفتاح محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.06.57",
     "name": "Shahd Abdullah Ashour Okasha (HC)",
     "arabicName": "شهد عبدالله عاشور عكشا (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.09.22",
     "name": "Hanan Saber Hamdy Mohamed (HC)",
     "arabicName": "حنان صابر حمدي محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.12.12",
     "name": "Rahma Yasser Mohamed Abdelsalam (HC)",
     "arabicName": "رحمة ياسر محمد عبدالسلام (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.14.10",
     "name": "Feryal Mohamed Morsy Nasr (HC)",
     "arabicName": "فريال محمد مرسي نصر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.15.42",
     "name": "Yasmine Ramdan Ganim Mastor (HC)",
     "arabicName": "ياسمين رمضان غانم مستور (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.19.27",
     "name": "Nourhan Kamal Khalifa Elsayed (HC)",
     "arabicName": "نورهان كمال خليفة السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.33.46",
     "name": "Aya allah Moustafa Darwish Mostafa (HC)",
     "arabicName": "آية الله مصطفى درويش مصطفى (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.35.15",
     "name": "Gehad Ashraf Badry Mohamed (HC)",
     "arabicName": "جهاد أشرف بدري محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.37.28",
     "name": "Badria Esmail Moustafa Ahmed (HC)",
     "arabicName": "بدرية إسماعيل مصطفى احمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.41.32",
     "name": "Alaa Abdelmonem Mohamed Gaber (HC)",
     "arabicName": "علاء عبد المنعم محمد جابر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.47.29",
     "name": "Sara Mohamed Sanad Aboelizaid (HC)",
     "arabicName": "ساره محمد سند ابواليزيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.48.48",
     "name": "Doaa Atef Mohamed Shehata (HC)",
     "arabicName": "دعاء عاطف محمد شحاتة (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.50.18",
     "name": "Amany Ramadan Saad Mohamed (HC)",
     "arabicName": "أماني رمضان سعد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.52.22",
     "name": "Manar Abdelbaset Mohamed Ali (HC)",
     "arabicName": "منار عبد الباسط محمد علي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.53.59",
     "name": "Aml Mohamed Ibrahium Mahmmoud (HC)",
     "arabicName": "امل محمد إبراهيم محمود (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.01.55.35",
     "name": "Rawan Mohamed Yahia Mohamed (HC)",
     "arabicName": "روان محمد يحيى محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.25.57",
     "name": "Mahmoud Ashraf Mahmoud Ayoub (HC)",
     "arabicName": "محمود أشرف محمود أيوب (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.27.49",
     "name": "Ahmed Yousry Mohamed Elshafei (HC)",
     "arabicName": "احمد يسري محمد الشافعي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.28.55",
     "name": "Ahmed khaled Mohamed Salem (HC)",
     "arabicName": "احمد خالد محمد سالم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.30.33",
     "name": "Mohamed Abdelhamid Sabra Elwahsh (HC)",
     "arabicName": "محمد عبد الحميد صبرة الوحش (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.32.39",
     "name": "Mohamed Walid Elsawy Mohmaed (HC)",
     "arabicName": "محمد وليد الساوي محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.34.10",
     "name": "Ahmed Aboelfotoh Abdellatif Elsayed (HC)",
     "arabicName": "احمد أبو الفتوح عبد اللطيف السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.35.23",
     "name": "Mohamed Ali Mohamed Ali (HC)",
     "arabicName": "محمد علي محمد علي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.36.42",
     "name": "Mohamed Saber Abdelgany Mostafa (HC)",
     "arabicName": "محمد صابر عبد الغني مصطفى (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.39.05",
     "name": "Fathy Elsayed Abdelrahman Elshenawy (HC)",
     "arabicName": "فتحي السيد عبد الرحمن الشناوي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.40.57",
     "name": "Mohamed Hamdi Abelmoneim Hamad (HC)",
     "arabicName": "محمد حمدي عبد المنعم حمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.42.21",
     "name": "Omar Mohamed Attia Mohamed (HC)",
     "arabicName": "عمر محمد عطية محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.43.54",
     "name": "Eslam Karam Said Abelkarim (HC)",
     "arabicName": "اسلام كرم سعيد عبدالكريم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.45.08",
     "name": "kareem Mahmoud Mohamed Ahmed (HC)",
     "arabicName": "كريم محمود محمد احمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.46.43",
     "name": "Atef Sami Atef Soliman (HC)",
     "arabicName": "عاطف سامي عاطف سليمان (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.49.21",
     "name": "Mohamed Ibrahium Fathy Gitany (HC)",
     "arabicName": "محمد إبراهيم فتحي جتاني (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.53.43",
     "name": "Ali Sherif Ali Elsawy (HC)",
     "arabicName": "علي شريف علي الصاوي (هوم كوير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.55.28",
     "name": "Ahmed Fares Ibrahium Abdelsalam (HC)",
     "arabicName": "احمد فارس إبراهيم عبدالسلام (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.02.58.39",
     "name": "Tamer Ayman Osmaan Elsayed (HC)",
     "arabicName": "تامر أيمن عثمان السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.02.15",
     "name": "Basat Mardy Saber Margy (HC)",
     "arabicName": "بساط مرضي صابر مارجي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.03.41",
     "name": "Mohamed Abdo Kamel Mahina (HC)",
     "arabicName": "محمد عبده كامل مهينة (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.05.52",
     "name": "Ashraf Badawy Mohamed Abelmoneim (HC)",
     "arabicName": "أشرف بدوي محمد عبد المنعم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.08.47",
     "name": "Mahmoud Said Saad Rafaie (HC)",
     "arabicName": "محمود سعيد سعد رفاعي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.10.35",
     "name": "Ahmed Hamada Elsayed Karawia (HC)",
     "arabicName": "احمد حمادة السيد قروية (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.11.55",
     "name": "Mohamed Nageib Adelazizz Shaker (HC)",
     "arabicName": "محمد نجيب عبدالعزيز شاكر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.13.15",
     "name": "Tarek khaled Elsayed Dewedar (HC)",
     "arabicName": "طارق خالد السيد دويدار (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.15.42",
     "name": "Ahmed Adel Ibrahium Elsayed (HC)",
     "arabicName": "احمد عادل إبراهيم السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.17.02",
     "name": "Mahmoud Ali Abelfatah Badr (HC)",
     "arabicName": "محمود علي عبدالفتاح بدر (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.03.18.32",
     "name": "Marawan Ahmed Soliman Hemdan (HC)",
     "arabicName": "مروان احمد سليمان حمدان (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.04.08.42",
     "name": "Mohamed Ahmed Abdelaziz Fadaly (HC)",
     "arabicName": "محمد احمد عبدالعزيز فضالي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221025.04.09.57",
     "name": "Ahmed Mohamed Attia Mohamed (HC)",
     "arabicName": "احمد محمد عطية محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221123.08.06.05",
@@ -16060,17 +16060,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "221125.02.13.57",
     "name": "Esraa Mohamed Zaki Morsi (HC)",
     "arabicName": "اسراء محمد زكي مرسي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221125.02.15.54",
     "name": "Ahmed Mohamed Mohamed Abdelhalim Elghazwi (HC)",
     "arabicName": "احمد محمد محمد عبدالحليم الغزاوي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "221125.11.09.53",
@@ -16212,9 +16212,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "230526.06.22.44",
     "name": "Menna allah Ebrahim hussein Mohamed Hussein (HC)",
     "arabicName": "منه الله ابراهيم حسين محمد حسين (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "230526.08.48.24",
@@ -16396,17 +16396,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "231125.11.25.45",
     "name": "Hadeer Adel Abdelaty Bassiony(HC)",
     "arabicName": "هدير عادل عبدالعاطى بسيونى (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "231125.12.36.27",
     "name": "Mohamed Wageeh Helmy Abdelrhman (HC)",
     "arabicName": "محمد وجيه حلمي عبدالرحمن (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "231222.11.45.19",
@@ -16508,9 +16508,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "240526.02.34.44",
     "name": "Mahmoud Yaser Abdelnaser Saadallah(HC)",
     "arabicName": "محمود ياسر عبدالناصر سعد الله",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "240526.12.47.09",
@@ -16660,17 +16660,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "241225.02.57.58",
     "name": "Ziyad Eslam Moustafa Ebrahim (HC)",
     "arabicName": "زياد اسلام مصطفى ابراهيم (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "241225.03.31.57",
     "name": "Abdelhamid Said Abdelhamid Mahmoud (HC)",
     "arabicName": "عبدالحميد سعيد عبدالحميد محمود (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "250126.12.44.44",
@@ -16772,17 +16772,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "250526.02.36.16",
     "name": "Rowida Yousry Mohamed Ramadan(HC)",
     "arabicName": "رويدا يسري محمد رمضان(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "250526.03.53.07",
     "name": "Hazem Elsaid Mohamed Elsayed (HC)",
     "arabicName": "حازم السعيد محمد السيد ( هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "250622.02.51.01",
@@ -16804,9 +16804,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "250626.07.21.19",
     "name": "Asmaa Sabri Naeem Foaad (HC)",
     "arabicName": "اسماء صبري نعيم فؤاد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "250723.07.10.44",
@@ -16940,17 +16940,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "251125.11.40.58",
     "name": "Rahma Ayman Gamal Mohamed (HC)",
     "arabicName": "رحمة ايمن جمال محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "251125.11.42.55",
     "name": "Mennatallah khaled Ansaari Ali (HC)",
     "arabicName": "منه الله خالد انصاري علي (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "251222.08.10.25",
@@ -17260,17 +17260,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "270626.02.01.17",
     "name": "Salma Eslam Ali Abdelhalim (HC)",
     "arabicName": "سلمي اسلام علي عبدالحليم (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "270626.03.56.40",
     "name": "Hanan Abdelaziz Abdelwahid Shoaaib (HC)",
     "arabicName": "حنان عبدالعزيز عبدالواحد شعيب (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "270723.05.07.55",
@@ -17372,113 +17372,113 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "271025.01.02.04",
     "name": "Esraa Ali Fouad Ahmed Hessien (HC)",
     "arabicName": "اسراء علي فؤاد احمد حسين (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.01.26.13",
     "name": "Osama Nagy Zaki Mohamed (HC)",
     "arabicName": "اسامه ناجي زكي محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.01.31.18",
     "name": "Ahmed Mahmoud Said Abdelhafez (HC)",
     "arabicName": "احمد محمود سعيد عبدالحفيظ (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.01.34.22",
     "name": "Mohamed Kamal Fathallah Diqnis (HC)",
     "arabicName": "محمد كمال فتح الله دينيس (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.01.35.25",
     "name": "Saleh Gamal Mohamed Mohamed (HC)",
     "arabicName": "صالح جمال محمد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.44.12",
     "name": "Fatima Elsayed Mohamed Elsayed (HC)",
     "arabicName": "فاطمة السيد محمد السيد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.47.03",
     "name": "Shahenda Hamdi Shehata Mohamed (HC)",
     "arabicName": "شِاهندة حمدي شحاته محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.48.35",
     "name": "Nada Medhat Ebrahim Abdelmohesien (HC)",
     "arabicName": "ندي مدحت ابراهيم عبدالمحسن (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.50.09",
     "name": "Mona Mohamed Fathy Zahari (HC)",
     "arabicName": "مني محمد فتحي ظاهري (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.51.40",
     "name": "Nada Mohamed Elhosseny Abdelmaasood (HC)",
     "arabicName": "ندي محمد الحسيني عبدالمقصود (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.53.53",
     "name": "Manar Mohamed Bassiony Abdelhamid (HC)",
     "arabicName": "منار محمد بسيوني عبدالحميد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.55.11",
     "name": "Doaa maher Mohamed Mahmoud (HC)",
     "arabicName": "دعاء ماهر محمد محمود (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.56.48",
     "name": "Shimaa Said Khalifa Abdelwanis (HC)",
     "arabicName": "شيماء سعيد خليفه عبدالونس (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271025.12.59.35",
     "name": "Dina Mohamed Fahmy Abdelhamid (HC)",
     "arabicName": "دينا محمد فاهمي عبدالحميد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271122.09.35.36",
@@ -17500,9 +17500,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "271125.11.30.59",
     "name": "Nancy Nabil Ali Ahmed(HC)",
     "arabicName": "نانسي نبيل علي احمد(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271224.04.25.32",
@@ -17524,9 +17524,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "271225.11.36.30",
     "name": "Marim Ahmed Abdelrasik Mohamed (HC)",
     "arabicName": "مريم احمد عبدالرازق محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "271225.11.45.46",
@@ -17628,9 +17628,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "280626.11.43.01",
     "name": "Amr Mohamed Helmy Obeid(HC)",
     "arabicName": "عمرو محمد حلمى عبيد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "280722.04.24.41",
@@ -17788,9 +17788,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "281225.04.30.15",
     "name": "Mohamed Ragab Mohamed Elafify (HC)",
     "arabicName": "محمد رجب محمد العفيفى (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "290224.07.51.58",
@@ -17988,9 +17988,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "291125.12.54.37",
     "name": "Asmaa Mahmoud Mohamed Mohamed (HC)",
     "arabicName": "اسماء محمود محمد محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "291222.04.04.17",
@@ -18004,9 +18004,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "291225.04.34.10",
     "name": "Ahmed Elsayed Fathy Hagag (HC)",
     "arabicName": "احمد السيد فتحي حجاج (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "291225.10.11.38",
@@ -18060,41 +18060,41 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "300426.01.02.20",
     "name": "Golsen Adel Abdelfatah Mahmoud (HC)",
     "arabicName": "جولسن عادل عبدالفتاح محمود (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300426.01.04.01",
     "name": "Eman Masoud Ahmed Masoud(HC)",
     "arabicName": "ايمان مسعود احمد مسعود(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300426.11.58.26",
     "name": "Rasha Masoud Mohamed Abdelghafar (HC)",
     "arabicName": "رشا مسعود محمد عبدالغفار",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300426.12.00.08",
     "name": "Aya Ashraf Hamed Abdelghany (HC)",
     "arabicName": "ايه اشرف حامد عبدالغنى",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300426.12.31.34",
     "name": "Mahmoud Atef Mahmoud khalf (HC)",
     "arabicName": "محمود عاطف محمود خلف",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300522.08.05.08",
@@ -18124,9 +18124,9 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "300726.02.15.25",
     "name": "Ahmed Ashraf Abas Ramadan(HC)",
     "arabicName": "Ahmed Ashraf Abas Ramadan(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "300726.02.53.03",
@@ -18212,17 +18212,17 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "301125.11.48.17",
     "name": "Nada Ragab Aboelalla Mohamed (HC)",
     "arabicName": "ندي رجب ابوالعلا محمد (هوم كير)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "301225.10.52.15",
     "name": "Mayar Said hussein Hegazy (HC)",
     "arabicName": "ميار سعيد حسين حجازي (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "310123.02.28.54",
@@ -18252,33 +18252,33 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "310526.03.48.57",
     "name": "Saad Galal Saad Abdelghaffar(HC)",
     "arabicName": "Saad Galal Saad Abdelghaffar(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "310526.03.57.39",
     "name": "Waleed Mansour Farhat Basiouny(HC)",
     "arabicName": "Waleed Mansour Farhat Basiouny(HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "310526.04.20.01",
     "name": "Amira Essam El Shehat Ahmed",
     "arabicName": "اميره عصام الشحات احمد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "310526.04.21.58",
     "name": "Nancy Nabil Ali Ahmed",
     "arabicName": "نانسي نبيل علي احمد",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "310526.05.39.42",
@@ -18380,25 +18380,25 @@ export const DOCTORS_DATABASE: Doctor[] = [
     "id": "311225.02.30.03",
     "name": "youssef Mohamed soliman Mohamed (HC)",
     "arabicName": "يوسف محمد سليمان محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "311225.10.58.27",
     "name": "Ahmed Alaa Abdelkreem Marei (HC)",
     "arabicName": "احمد علاء عبدلكريم مرعي (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "311225.11.41.34",
     "name": "Omar Adel Abdella Mohamed (HC)",
     "arabicName": "عمر عادل عبداللاه محمد (HC)",
-    "department": "Home Visit",
+    "department": "Home Care",
     "mobileNumber": "",
-    "isActive": false
+    "isActive": true
   },
   {
     "id": "E.472",
