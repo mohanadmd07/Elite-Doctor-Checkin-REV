@@ -555,8 +555,8 @@ export default function App() {
             }
             return item.id !== id;
           }));
-          setSelectedDbDoctorIds((prev) => prev.filter((item) => item !== id));
           await fetchFullDoctorsDatabase(true);
+          toast.success("Physician Removed", `Doctor "${targetName || id}" deleted successfully.`);
           setDeleteModalState({ isOpen: false, type: "single" });
         } else {
           const data = await res.json().catch(() => ({}));
@@ -566,6 +566,7 @@ export default function App() {
           }));
         }
       } else if (deleteModalState.type === "batch") {
+        const count = selectedDbDoctorIds.length;
         const items = selectedDbDoctorIds.map((id) => {
           const doc = fullDoctorList.find((d) => d.id === id);
           return { id, name: doc?.name };
@@ -580,6 +581,7 @@ export default function App() {
           setFullDoctorList((prev) => prev.filter((item) => !idSet.has(item.id)));
           setSelectedDbDoctorIds([]);
           await fetchFullDoctorsDatabase(true);
+          toast.success("Batch Delete Complete", `Removed ${count} physician(s) successfully.`);
           setDeleteModalState({ isOpen: false, type: "batch" });
         } else {
           const data = await res.json().catch(() => ({}));

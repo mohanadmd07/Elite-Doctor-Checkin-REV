@@ -1150,15 +1150,19 @@ async function loadDeletedDoctorsKeys(): Promise<Set<string>> {
   return keysSet;
 }
 
-async function markDoctorAsDeleted(id: string, name?: string) {
+async function markDoctorAsDeleted(id: string, name?: string, araName?: string) {
   const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
   const idKey = normalizeId(cleanId);
   const nameKey = name ? normalizeName(name) : "";
+  const araKey = araName ? normalizeArabic(araName) : "";
 
   const keysToAdd = new Set<string>();
   if (nameKey) keysToAdd.add(nameKey);
+  if (araKey) keysToAdd.add(araKey);
   if (idKey && nameKey) keysToAdd.add(`${idKey}_${nameKey}`);
   if (cleanId && nameKey) keysToAdd.add(`${cleanId}_${nameKey}`);
+  if (idKey && araKey) keysToAdd.add(`${idKey}_${araKey}`);
+  if (cleanId && araKey) keysToAdd.add(`${cleanId}_${araKey}`);
 
   // Only add bare ID tombstone if NO OTHER active doctor in the system has a different name
   const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
@@ -1194,17 +1198,21 @@ async function markDoctorAsDeleted(id: string, name?: string) {
   }
 }
 
-async function unmarkDoctorAsDeleted(id: string, name?: string) {
+async function unmarkDoctorAsDeleted(id: string, name?: string, araName?: string) {
   const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
   const idKey = normalizeId(cleanId);
   const nameKey = name ? normalizeName(name) : "";
+  const araKey = araName ? normalizeArabic(araName) : "";
 
   const keysToRemove = new Set<string>();
   if (cleanId) keysToRemove.add(cleanId);
   if (idKey) keysToRemove.add(idKey);
   if (nameKey) keysToRemove.add(nameKey);
+  if (araKey) keysToRemove.add(araKey);
   if (idKey && nameKey) keysToRemove.add(`${idKey}_${nameKey}`);
   if (cleanId && nameKey) keysToRemove.add(`${cleanId}_${nameKey}`);
+  if (idKey && araKey) keysToRemove.add(`${idKey}_${araKey}`);
+  if (cleanId && araKey) keysToRemove.add(`${cleanId}_${araKey}`);
 
   const localList = readDeletedDoctorsLocal();
   const updatedList = localList.filter((k) => !keysToRemove.has(k));
@@ -1234,19 +1242,24 @@ async function loadCustomDoctors(deletedKeysArg?: Set<string>): Promise<CustomDo
   const doctorsMap = new Map<string, CustomDoctorRecord>();
   const localList = readCustomDoctorsLocal();
 
-  const isDoctorTombstoned = (id: string, name: string) => {
+  const isDoctorTombstoned = (id: string, name: string, araName?: string) => {
     const cleanId = (id || "").trim().replace(/^(emp\.|emp)/i, "");
     const idKey = normalizeId(cleanId);
     const nameKey = normalizeName(name);
+    const araKey = araName ? normalizeArabic(araName) : "";
     if (idKey && deletedKeys.has(idKey)) return true;
     if (cleanId && deletedKeys.has(cleanId)) return true;
     if (nameKey && deletedKeys.has(nameKey)) return true;
+    if (araKey && deletedKeys.has(araKey)) return true;
     if (idKey && nameKey && deletedKeys.has(`${idKey}_${nameKey}`)) return true;
+    if (cleanId && nameKey && deletedKeys.has(`${cleanId}_${nameKey}`)) return true;
+    if (idKey && araKey && deletedKeys.has(`${idKey}_${araKey}`)) return true;
+    if (cleanId && araKey && deletedKeys.has(`${cleanId}_${araKey}`)) return true;
     return false;
   };
 
   localList.forEach((d) => {
-    if (isDoctorTombstoned(d.id, d.name) || (d.originalId && isDoctorTombstoned(d.originalId, d.name))) {
+    if (isDoctorTombstoned(d.id, d.name, d.arabicName) || (d.originalId && isDoctorTombstoned(d.originalId, d.name, d.arabicName))) {
       return;
     }
     const key = normalizeId(d.id) || normalizeName(d.name);
@@ -1269,7 +1282,7 @@ async function loadCustomDoctors(deletedKeysArg?: Set<string>): Promise<CustomDo
             originalId: row.original_id || "",
             updatedAt: row.updated_at || new Date().toISOString(),
           };
-          if (isDoctorTombstoned(docRec.id, docRec.name) || (docRec.originalId && isDoctorTombstoned(docRec.originalId, docRec.name))) {
+          if (isDoctorTombstoned(docRec.id, docRec.name, docRec.arabicName) || (docRec.originalId && isDoctorTombstoned(docRec.originalId, docRec.name, docRec.arabicName))) {
             idsToDeleteFromSupabase.push(row.id);
             return;
           }
@@ -1507,62 +1520,98 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
 }
 
 async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void> {
-  const cleanId = id.trim().replace(/^(emp\.|emp)/i, "");
+  const cleanId = (id || "").trim().replace(/^(emp\.|emp)/i, "");
   const idKey = normalizeId(cleanId);
+  const inputNameKey = name ? normalizeName(name) : normalizeName(cleanId);
 
+  // Robust doctor resolution: search in-memory database AND local custom doctors
+  let targetId = cleanId;
   let targetName = name;
   let targetArabicName: string | undefined;
-  if (!targetName) {
-    const existing = NORMALIZED_DOCTORS_DATABASE.find(d => normalizeId(d.id) === idKey || d.id === cleanId);
-    if (existing) {
-      targetName = existing.name;
-      targetArabicName = existing.arabicName;
-    }
+
+  const localCustom = readCustomDoctorsLocal();
+  const existingDoc = NORMALIZED_DOCTORS_DATABASE.find(d => 
+    normalizeId(d.id) === idKey || d.id === cleanId || 
+    (name && normalizeName(d.name) === normalizeName(name)) ||
+    normalizeName(d.name) === idKey || normalizeName(d.name) === inputNameKey ||
+    (d.arabicName && normalizeArabic(d.arabicName) === inputNameKey)
+  ) || localCustom.find(d => 
+    normalizeId(d.id) === idKey || d.id === cleanId ||
+    (name && normalizeName(d.name) === normalizeName(name)) ||
+    normalizeName(d.name) === idKey || normalizeName(d.name) === inputNameKey ||
+    (d.arabicName && normalizeArabic(d.arabicName) === inputNameKey)
+  );
+
+  if (existingDoc) {
+    targetId = existingDoc.id ? String(existingDoc.id).trim().replace(/^(emp\.|emp)/i, "") : cleanId;
+    targetName = targetName || existingDoc.name;
+    targetArabicName = existingDoc.arabicName;
   }
 
+  const effectiveId = targetId || cleanId;
+  const effectiveIdKey = normalizeId(effectiveId);
   const nameKey = targetName ? normalizeName(targetName) : "";
+  const araKey = targetArabicName ? normalizeArabic(targetArabicName) : "";
 
   // Check if other active doctors share this ID (duplicate conflict case)
   const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
     const dIdKey = normalizeId(d.id);
     const dNameKey = normalizeName(d.name);
-    return (dIdKey === idKey || d.id === cleanId) && nameKey && dNameKey !== nameKey;
+    return (dIdKey === effectiveIdKey || d.id === effectiveId) && nameKey && dNameKey !== nameKey;
   });
 
   // 1. Mark as deleted in tombstones (both locally and Supabase)
-  await markDoctorAsDeleted(cleanId, targetName);
+  await markDoctorAsDeleted(effectiveId, targetName, targetArabicName);
+  if (cleanId && cleanId !== effectiveId) {
+    await markDoctorAsDeleted(cleanId, targetName, targetArabicName);
+  }
 
   // 2. Remove from in-memory NORMALIZED_DOCTORS_DATABASE targeting this specific doctor
   NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dNameKey = normalizeName(d.name);
-    if (nameKey) {
-      if ((dIdKey === idKey || d.id === cleanId) && dNameKey === nameKey) return false;
-      return true;
+    const dAraKey = d.arabicName ? normalizeArabic(d.arabicName) : "";
+
+    if (nameKey && (dIdKey === effectiveIdKey || d.id === effectiveId || dIdKey === idKey || d.id === cleanId)) {
+      if (dNameKey === nameKey || (araKey && dAraKey === araKey)) return false;
+      if (!otherDoctorsShareId) return false;
     }
-    return dIdKey !== idKey && d.id !== cleanId;
+    if (!otherDoctorsShareId && (dIdKey === effectiveIdKey || d.id === effectiveId || dIdKey === idKey || d.id === cleanId)) {
+      return false;
+    }
+    if (nameKey && dNameKey === nameKey && (!d.id || dIdKey === effectiveIdKey || d.id === effectiveId || !otherDoctorsShareId)) {
+      return false;
+    }
+    return true;
   });
 
   // 3. Clean up custom_doctors.json
-  const localList = readCustomDoctorsLocal();
-  const updatedList = localList.filter(d => {
+  const currentCustom = readCustomDoctorsLocal();
+  const updatedCustom = currentCustom.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dOrigKey = normalizeId(d.originalId || "");
     const dNameKey = normalizeName(d.name);
-    if (nameKey) {
-      if ((dIdKey === idKey || dOrigKey === idKey || d.id === cleanId) && dNameKey === nameKey) return false;
-      return true;
-    }
-    if (dIdKey === idKey || dOrigKey === idKey || d.id === cleanId) return false;
+    const dAraKey = d.arabicName ? normalizeArabic(d.arabicName) : "";
+
+    const matchesId = dIdKey === effectiveIdKey || dIdKey === idKey || dOrigKey === effectiveIdKey || dOrigKey === idKey || d.id === effectiveId || d.id === cleanId;
+    const matchesName = nameKey && dNameKey === nameKey;
+    const matchesAra = araKey && dAraKey === araKey;
+
+    if (matchesId && (matchesName || matchesAra || !otherDoctorsShareId)) return false;
+    if (matchesName && (!otherDoctorsShareId || matchesId)) return false;
+    if (matchesAra && (!otherDoctorsShareId || matchesId)) return false;
     return true;
   });
-  writeCustomDoctorsLocal(updatedList);
+  writeCustomDoctorsLocal(updatedCustom);
 
   // 4. Clean up custom_doctors_phones.json and phone maps only if no other doctor shares this ID
-  if (idKey && !otherDoctorsShareId) {
-    mobileNumbersByCodeMap.delete(idKey);
+  if (effectiveIdKey && !otherDoctorsShareId) {
+    mobileNumbersByCodeMap.delete(effectiveIdKey);
+    if (idKey) mobileNumbersByCodeMap.delete(idKey);
     const localPhones = readCustomPhonesLocal();
-    if (localPhones[idKey] || localPhones[cleanId]) {
+    if (localPhones[effectiveIdKey] || localPhones[effectiveId] || localPhones[idKey] || localPhones[cleanId]) {
+      delete localPhones[effectiveIdKey];
+      delete localPhones[effectiveId];
       delete localPhones[idKey];
       delete localPhones[cleanId];
       writeCustomPhonesLocal(localPhones);
@@ -1574,41 +1623,63 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
   if (supabase) {
     try {
       const tombstones: { id: string; deleted_at: string }[] = [];
+      const keys = new Set<string>();
       if (!otherDoctorsShareId) {
-        tombstones.push({ id: cleanId, deleted_at: new Date().toISOString() });
-        if (idKey && idKey !== cleanId) tombstones.push({ id: idKey, deleted_at: new Date().toISOString() });
+        if (effectiveId) keys.add(effectiveId);
+        if (effectiveIdKey) keys.add(effectiveIdKey);
+        if (cleanId) keys.add(cleanId);
+        if (idKey) keys.add(idKey);
       }
-      if (idKey && nameKey) tombstones.push({ id: `${idKey}_${nameKey}`, deleted_at: new Date().toISOString() });
-      if (cleanId && nameKey && `${cleanId}_${nameKey}` !== `${idKey}_${nameKey}`) {
-        tombstones.push({ id: `${cleanId}_${nameKey}`, deleted_at: new Date().toISOString() });
+      if (nameKey) keys.add(nameKey);
+      if (araKey) keys.add(araKey);
+      if (effectiveIdKey && nameKey) keys.add(`${effectiveIdKey}_${nameKey}`);
+      if (effectiveId && nameKey) keys.add(`${effectiveId}_${nameKey}`);
+      if (effectiveIdKey && araKey) keys.add(`${effectiveIdKey}_${araKey}`);
+      if (idKey && nameKey) keys.add(`${idKey}_${nameKey}`);
+      if (cleanId && nameKey) keys.add(`${cleanId}_${nameKey}`);
+
+      for (const k of keys) {
+        tombstones.push({ id: k, deleted_at: new Date().toISOString() });
       }
 
-      const results = await Promise.all([
-        !otherDoctorsShareId
-          ? supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", cleanId)
-          : Promise.resolve({ error: null }),
-        tombstones.length > 0
-          ? supabase.from("deleted_doctors").upsert(tombstones, { onConflict: "id" })
-          : Promise.resolve({ error: null }),
-        !otherDoctorsShareId
-          ? supabase.from("custom_doctors").delete().or(`id.eq.${cleanId},original_id.eq.${cleanId}`)
-          : (nameKey && targetName
-              ? supabase.from("custom_doctors").delete().match({ id: cleanId, name: targetName })
-              : supabase.from("custom_doctors").delete().eq("id", cleanId)),
-        !otherDoctorsShareId
-          ? supabase.from("custom_doctor_phones").delete().eq("id", cleanId)
-          : Promise.resolve({ error: null }),
-        nameKey && targetName
-          ? supabase.from("checkins").delete().match({ doctor_id: cleanId, doctor_name: targetName })
-          : supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
-      ]);
+      const promises: any[] = [];
+      if (tombstones.length > 0) {
+        promises.push(supabase.from("deleted_doctors").upsert(tombstones, { onConflict: "id" }));
+      }
+      if (!otherDoctorsShareId) {
+        promises.push(
+          supabase.from("doctors").update({ is_active: false, updated_at: new Date().toISOString() })
+            .or(`id.eq.${effectiveId},id.eq.${cleanId}` + (targetName ? `,name.eq.${targetName}` : ""))
+        );
+        promises.push(
+          supabase.from("custom_doctors").delete()
+            .or(`id.eq.${effectiveId},id.eq.${cleanId},original_id.eq.${effectiveId},original_id.eq.${cleanId}` + (targetName ? `,name.eq.${targetName}` : ""))
+        );
+        promises.push(
+          supabase.from("custom_doctor_phones").delete().in("id", [effectiveId, effectiveIdKey, cleanId, idKey].filter(Boolean))
+        );
+      } else {
+        if (targetName) {
+          promises.push(supabase.from("custom_doctors").delete().match({ id: effectiveId, name: targetName }));
+        } else {
+          promises.push(supabase.from("custom_doctors").delete().eq("id", effectiveId));
+        }
+      }
+
+      if (targetName) {
+        promises.push(supabase.from("checkins").delete().match({ doctor_id: effectiveId, doctor_name: targetName }));
+      } else {
+        promises.push(supabase.from("checkins").delete().or(`doctor_id.eq.${effectiveId},doctor_id.eq.${cleanId}`));
+      }
+
+      const results = await Promise.all(promises);
       for (const res of results) {
         if (res?.error) {
           console.error(`[Supabase delete error]:`, res.error.message);
         }
       }
-    } catch (err) {
-      console.error("[Supabase] deleteCustomDoctorRecord failed:", err);
+    } catch (err: any) {
+      console.error("[Supabase] deleteCustomDoctorRecord failed:", err.message);
     }
   }
 
@@ -1618,9 +1689,9 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
     const cIdKey = normalizeId(c.id);
     const cNameKey = normalizeName(c.doctorName);
     if (nameKey) {
-      return !((cIdKey === idKey || c.id === cleanId) && cNameKey === nameKey);
+      return !((cIdKey === effectiveIdKey || c.id === effectiveId || cIdKey === idKey || c.id === cleanId) && cNameKey === nameKey);
     }
-    return cIdKey !== idKey && c.id !== cleanId;
+    return cIdKey !== effectiveIdKey && c.id !== effectiveId && cIdKey !== idKey && c.id !== cleanId;
   });
   if (filteredDaily.length !== dailyCheckins.length) {
     writeCheckInsLocal(filteredDaily);
@@ -1637,22 +1708,41 @@ async function deleteCustomDoctorRecord(id: string, name?: string): Promise<void
 async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string } | string>): Promise<number> {
   if (!items || items.length === 0) return 0;
 
-  const parsedItems: { cleanId: string; idKey: string; nameKey: string; name?: string }[] = [];
+  const parsedItems: { cleanId: string; idKey: string; nameKey: string; araKey: string; name?: string }[] = [];
   const keysToAdd: string[] = [];
   const cleanIdsToDeactivate: string[] = [];
+  const localCustom = readCustomDoctorsLocal();
 
   for (const item of items) {
     const rawId = typeof item === "object" && item !== null ? item.id : String(item);
     let rawName = typeof item === "object" && item !== null ? item.name : undefined;
-    const cleanId = rawId.trim().replace(/^(emp\.|emp)/i, "");
-    const idKey = normalizeId(cleanId);
+    let cleanId = rawId.trim().replace(/^(emp\.|emp)/i, "");
+    let idKey = normalizeId(cleanId);
+    const inputNameKey = rawName ? normalizeName(rawName) : normalizeName(cleanId);
 
-    if (!rawName) {
-      const existing = NORMALIZED_DOCTORS_DATABASE.find(d => normalizeId(d.id) === idKey || d.id === cleanId);
-      if (existing) rawName = existing.name;
+    let rawAraName: string | undefined;
+
+    const existing = NORMALIZED_DOCTORS_DATABASE.find(d => 
+      normalizeId(d.id) === idKey || d.id === cleanId ||
+      (rawName && normalizeName(d.name) === normalizeName(rawName)) ||
+      normalizeName(d.name) === idKey || normalizeName(d.name) === inputNameKey ||
+      (d.arabicName && normalizeArabic(d.arabicName) === inputNameKey)
+    ) || localCustom.find(d => 
+      normalizeId(d.id) === idKey || d.id === cleanId ||
+      (rawName && normalizeName(d.name) === normalizeName(rawName)) ||
+      normalizeName(d.name) === idKey || normalizeName(d.name) === inputNameKey ||
+      (d.arabicName && normalizeArabic(d.arabicName) === inputNameKey)
+    );
+
+    if (existing) {
+      cleanId = existing.id ? String(existing.id).trim().replace(/^(emp\.|emp)/i, "") : cleanId;
+      idKey = normalizeId(cleanId);
+      rawName = rawName || existing.name;
+      rawAraName = existing.arabicName;
     }
 
     const nameKey = rawName ? normalizeName(rawName) : "";
+    const araKey = rawAraName ? normalizeArabic(rawAraName) : "";
 
     const otherDoctorsShareId = NORMALIZED_DOCTORS_DATABASE.some(d => {
       const dIdKey = normalizeId(d.id);
@@ -1671,8 +1761,11 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
     if (idKey && nameKey) keysToAdd.push(`${idKey}_${nameKey}`);
     if (cleanId && nameKey && `${cleanId}_${nameKey}` !== `${idKey}_${nameKey}`) keysToAdd.push(`${cleanId}_${nameKey}`);
     if (nameKey) keysToAdd.push(nameKey);
+    if (araKey) keysToAdd.push(araKey);
+    if (idKey && araKey) keysToAdd.push(`${idKey}_${araKey}`);
+    if (cleanId && araKey && `${cleanId}_${araKey}` !== `${idKey}_${araKey}`) keysToAdd.push(`${cleanId}_${araKey}`);
 
-    parsedItems.push({ cleanId, idKey, nameKey, name: rawName });
+    parsedItems.push({ cleanId, idKey, nameKey, araKey, name: rawName });
   }
 
   // 1. Update local deleted list
@@ -1682,17 +1775,20 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   updateCachedDeletedKeys(updatedDeletedSet);
 
   // 2. Filter local custom doctors targeting specific records
-  const localCustom = readCustomDoctorsLocal();
   const updatedCustom = localCustom.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dOrigKey = normalizeId(d.originalId || "");
     const dNameKey = normalizeName(d.name);
+    const dAraKey = d.arabicName ? normalizeArabic(d.arabicName) : "";
+
     for (const p of parsedItems) {
-      if (p.nameKey) {
-        if ((dIdKey === p.idKey || dOrigKey === p.idKey || d.id === p.cleanId) && dNameKey === p.nameKey) return false;
-      } else {
-        if (dIdKey === p.idKey || dOrigKey === p.idKey || d.id === p.cleanId) return false;
-      }
+      const matchesId = dIdKey === p.idKey || dOrigKey === p.idKey || d.id === p.cleanId;
+      const matchesName = p.nameKey && dNameKey === p.nameKey;
+      const matchesAra = p.araKey && dAraKey === p.araKey;
+
+      if (matchesId && (matchesName || matchesAra || !p.nameKey)) return false;
+      if (matchesName && matchesId) return false;
+      if (matchesAra && matchesId) return false;
     }
     return true;
   });
@@ -1719,12 +1815,16 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   NORMALIZED_DOCTORS_DATABASE = NORMALIZED_DOCTORS_DATABASE.filter(d => {
     const dIdKey = normalizeId(d.id);
     const dNameKey = normalizeName(d.name);
+    const dAraKey = d.arabicName ? normalizeArabic(d.arabicName) : "";
+
     for (const p of parsedItems) {
-      if (p.nameKey) {
-        if ((dIdKey === p.idKey || d.id === p.cleanId) && dNameKey === p.nameKey) return false;
-      } else {
-        if (dIdKey === p.idKey || d.id === p.cleanId) return false;
-      }
+      const matchesId = dIdKey === p.idKey || d.id === p.cleanId;
+      const matchesName = p.nameKey && dNameKey === p.nameKey;
+      const matchesAra = p.araKey && dAraKey === p.araKey;
+
+      if (matchesId && (matchesName || matchesAra || !p.nameKey)) return false;
+      if (matchesName && matchesId) return false;
+      if (matchesAra && matchesId) return false;
     }
     return true;
   });
@@ -1750,8 +1850,8 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
         }
       }
       await Promise.all(promises);
-    } catch (err) {
-      console.error("[Supabase] deleteCustomDoctorsBatch failed:", err);
+    } catch (err: any) {
+      console.error("[Supabase] deleteCustomDoctorsBatch failed:", err.message);
     }
   }
 
@@ -1774,6 +1874,7 @@ async function deleteCustomDoctorsBatch(items: Array<{ id: string; name?: string
   }
 
   // 7. Re-index in memory once!
+  updateCachedDeletedKeys(readDeletedDoctorsLocal());
   indexDoctorsList(NORMALIZED_DOCTORS_DATABASE);
   lastDoctorsRefreshTime = 0;
   doctorsRefreshPromise = null;
@@ -3673,14 +3774,15 @@ app.post("/api/doctors/upsert", async (req, res) => {
 app.delete("/api/doctors/delete/:id", async (req, res) => {
   const { id } = req.params;
   const name = typeof req.query.name === "string" ? req.query.name : undefined;
-  if (!id) {
+  if (!id || !id.trim()) {
     return res.status(400).json({ error: "Doctor ID is required." });
   }
   try {
-    await deleteCustomDoctorRecord(id, name);
+    await deleteCustomDoctorRecord(id.trim(), name?.trim());
     res.json({ success: true, message: "Doctor removed from persistent database." });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete doctor record." });
+  } catch (err: any) {
+    console.error(`[Doctor Delete Error] ID ${id}:`, err);
+    res.status(500).json({ error: err.message || "Failed to delete doctor record." });
   }
 });
 
@@ -3694,8 +3796,9 @@ app.post("/api/doctors/delete-batch", async (req, res) => {
   try {
     const deletedCount = await deleteCustomDoctorsBatch(listToDelete);
     res.json({ success: true, message: `${deletedCount} physician(s) removed from database successfully.` });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to delete selected doctor records." });
+  } catch (err: any) {
+    console.error("[Doctor Batch Delete Error]:", err);
+    res.status(500).json({ error: err.message || "Failed to delete selected doctor records." });
   }
 });
 

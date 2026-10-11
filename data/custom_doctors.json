@@ -270,24 +270,6 @@
     "updatedAt": "2026-09-12T12:29:36.633944+00:00"
   },
   {
-    "id": "test2",
-    "name": "test2",
-    "arabicName": "test2",
-    "department": "General Surgery",
-    "mobileNumber": "",
-    "originalId": "",
-    "updatedAt": "2026-09-12T12:41:34.481+00:00"
-  },
-  {
-    "id": "12345",
-    "name": "test",
-    "arabicName": "test",
-    "department": "General Surgery",
-    "mobileNumber": "test",
-    "originalId": "",
-    "updatedAt": "2026-09-12T13:06:29.09+00:00"
-  },
-  {
     "originalId": "3807",
     "originalName": "Adham Medhat Momtaz Elsawy",
     "id": "3807",

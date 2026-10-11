@@ -7529,13 +7529,6 @@ export const COMPILED_DOCTORS: CompiledDoctor[] = [
     "mobileNumber": ""
   },
   {
-    "id": "12345",
-    "name": "test",
-    "arabicName": "test",
-    "department": "General",
-    "mobileNumber": "test"
-  },
-  {
     "id": "14092",
     "name": "khaled Rezk Elsayed Abo elenin",
     "arabicName": "خالد رزق السيد ابو العينين",
@@ -16123,12 +16116,5 @@ export const COMPILED_DOCTORS: CompiledDoctor[] = [
     "arabicName": "محمد صبحى عيسي عبدالغني",
     "department": "Obstetrics and gynecology",
     "mobileNumber": "01019934210"
-  },
-  {
-    "id": "test2",
-    "name": "test2",
-    "arabicName": "test2",
-    "department": "General",
-    "mobileNumber": ""
   }
 ];
