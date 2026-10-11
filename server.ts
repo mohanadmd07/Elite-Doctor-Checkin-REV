@@ -793,14 +793,12 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      // Direct single query with limit 200 (sub-100ms response vs pagination)
-      const { data, error } = await supabase
-        .from("checkins")
-        .select("*")
-        .order("checkin_timestamp", { ascending: false })
-        .limit(200);
+      // Fetch all active checkins safely across pagination limits
+      const data = await fetchAllRowsFromSupabase("checkins", (q) =>
+        q.order("checkin_timestamp", { ascending: false })
+      );
 
-      if (!error && Array.isArray(data)) {
+      if (Array.isArray(data)) {
         const mapped: CheckIn[] = data.map((row: any) => ({
           id: row.doctor_id,
           doctorName: row.doctor_name,
@@ -810,10 +808,21 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
           timestamp: row.checkin_timestamp,
           mobileNumber: row.mobile_number || "",
         }));
-        writeCheckInsLocal(mapped);
-        checkinsCache = mapped;
+
+        // Merge with local records so local checkins are never lost if Supabase is partially synced
+        const local = readCheckInsLocal();
+        const mergedMap = new Map<string, CheckIn>();
+        for (const c of local) {
+          if (c && c.id) mergedMap.set(c.id.toLowerCase().trim(), c);
+        }
+        for (const c of mapped) {
+          if (c && c.id) mergedMap.set(c.id.toLowerCase().trim(), c);
+        }
+        const merged = Array.from(mergedMap.values());
+        writeCheckInsLocal(merged);
+        checkinsCache = merged;
         lastCheckinsFetchTime = Date.now();
-        return mapped;
+        return merged;
       }
     } catch (err: any) {
       console.error("[Supabase] readCheckInsRaw failed, falling back to local:", err);
@@ -1855,22 +1864,32 @@ async function pruneMonthlyCheckInsTo30Days(checkins: CheckIn[]): Promise<CheckI
   const datesToDelete = sortedDates.slice(0, excessCount);
   const datesToKeep = new Set(sortedDates.slice(excessCount));
 
-  console.log(`[Elite Server] 30-Day Rolling Window: Pruning ${datesToDelete.length} oldest dates (${datesToDelete.join(", ")}). Keeping newest 30 days.`);
+  console.log(`[Elite Server] 30-Day Rolling Window: Archiving ${datesToDelete.length} oldest dates (${datesToDelete.join(", ")}). Preserving in Supabase & archive file.`);
 
-  // 1. Purge oldest dates from Supabase
-  const supabase = getSupabase();
-  if (supabase) {
-    try {
-      await Promise.all([
-        supabase.from("monthly_checkins").delete().in("checkin_date", datesToDelete),
-        supabase.from("weekly_checkins").delete().in("checkin_date", datesToDelete),
-      ]);
-    } catch (err) {
-      console.error("[Supabase] Failed to prune oldest dates in monthly_checkins:", err);
+  // 1. Safely archive older records locally so no data is ever lost
+  try {
+    const archivePath = path.join(DATA_DIR, "historical_checkins_archive.json");
+    let existingArchive: CheckIn[] = [];
+    if (fs.existsSync(archivePath)) {
+      try {
+        existingArchive = JSON.parse(fs.readFileSync(archivePath, "utf-8")) || [];
+      } catch (_) {}
     }
+    const archivedItems = checkins.filter(c => !datesToKeep.has(getEgyptDateStr(c.timestamp)));
+    const archiveMap = new Map<string, CheckIn>();
+    for (const item of existingArchive) {
+      archiveMap.set(`${item.id}_${getEgyptDateStr(item.timestamp)}`, item);
+    }
+    for (const item of archivedItems) {
+      archiveMap.set(`${item.id}_${getEgyptDateStr(item.timestamp)}`, item);
+    }
+    fs.writeFileSync(archivePath, JSON.stringify(Array.from(archiveMap.values()), null, 2), "utf-8");
+  } catch (archiveErr) {
+    console.error("[Elite Server] Failed to archive older check-ins to disk:", archiveErr);
   }
 
-  // 2. Retain only the newest 30 days in local memory/file
+  // 2. Retain only the active 30 days for the rolling monthly view in local active file
+  // Note: We deliberately do NOT delete from Supabase so historical reports remain available
   const pruned = checkins.filter(c => datesToKeep.has(getEgyptDateStr(c.timestamp)));
   return pruned;
 }

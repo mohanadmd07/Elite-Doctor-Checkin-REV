@@ -115,8 +115,8 @@ export function parseDoctorCallMessage(messageText: string): ParsedDoctorCall | 
     room = "N/A";
   }
 
-  const patientBarcode = getField(/patient\s*barcode:\s*([^\r\n]+)/i);
-  const patientName = getField(/patient\s*name:\s*([^\r\n]+)/i);
+  const patientBarcode = getField(/patient\s*barcode:\s*([^\r\n]+)/i) || getField(/barcode:\s*([^\r\n]+)/i);
+  const patientName = getField(/patient\s*name:\s*([^\r\n]+)/i) || getField(/patient:\s*([^\r\n]+)/i);
   const admittingPhysician = getField(/admitting\s*phys(?:ician)?:\s*([^\r\n]+)/i);
   const bed = getField(/bed:\s*([^\r\n]+)/i);
 

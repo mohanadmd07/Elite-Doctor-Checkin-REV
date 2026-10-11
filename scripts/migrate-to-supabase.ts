@@ -187,18 +187,19 @@ async function runMigration() {
           });
         }
         const entries = Array.from(uniqueDaily.values());
-        // Clean delete existing daily checkins to ensure fresh sync without orphaned IDs
-        await supabase.from("checkins").delete().neq("doctor_id", "__none__");
-        const { error } = await supabase.from("checkins").upsert(entries, { onConflict: "doctor_id" });
-        if (error) console.error("⚠️ Error upserting checkins:", error.message);
-        else console.log(`✅ Completed checkins: ${entries.length} records.`);
+        // Safe atomic upsert to preserve existing records without blind table wipe
+        if (entries.length > 0) {
+          const { error } = await supabase.from("checkins").upsert(entries, { onConflict: "doctor_id" });
+          if (error) console.error("⚠️ Error upserting checkins:", error.message);
+          else console.log(`✅ Completed checkins: ${entries.length} records.`);
+        }
       }
     } catch (e) {
       console.error("Error reading checkins.json:", e);
     }
   }
 
-  // 6. Migrate Monthly Cumulative Check-ins (30-day FIFO sliding window)
+  // 6. Migrate Monthly Cumulative Check-ins (Preserve all historical records)
   const monthlyPath = path.join(process.cwd(), "data", "monthly_checkins.json");
   const weeklyPath = path.join(process.cwd(), "data", "weekly_checkins.json");
   const sourcePath = fs.existsSync(monthlyPath) ? monthlyPath : weeklyPath;
@@ -206,23 +207,8 @@ async function runMigration() {
     try {
       const records = JSON.parse(fs.readFileSync(sourcePath, "utf-8"));
       if (Array.isArray(records) && records.length > 0) {
-        console.log(`📦 [6/6] Migrating ${records.length} check-in records to monthly 30-day rolling roster...`);
-        
-        // 30-day window enforcement:
-        const dateMap = new Map<string, any[]>();
-        for (const r of records) {
-          const ts = r.timestamp || new Date().toISOString();
-          const d = getEgyptDateStr(ts);
-          if (!dateMap.has(d)) dateMap.set(d, []);
-          dateMap.get(d)!.push(r);
-        }
-        const sortedDates = Array.from(dateMap.keys()).sort();
-        let recordsToMigrate = records;
-        if (sortedDates.length > 30) {
-          const keepDates = new Set(sortedDates.slice(sortedDates.length - 30));
-          console.log(`   Pruning ${sortedDates.length - 30} oldest days to maintain 30-day sliding window.`);
-          recordsToMigrate = records.filter(r => keepDates.has(getEgyptDateStr(r.timestamp || new Date().toISOString())));
-        }
+        console.log(`📦 [6/6] Migrating ${records.length} check-in records to monthly cumulative roster...`);
+        const recordsToMigrate = records;
 
         const uniqueMonthly = new Map<string, any>();
         for (const w of recordsToMigrate) {

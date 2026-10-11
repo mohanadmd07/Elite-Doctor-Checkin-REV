@@ -47,272 +47,9 @@ import {
   Activity
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./data/specialties.js";
-
-export const SUPABASE_SQL_SCHEMA_TEXT = `-- ==============================================================================
--- ELITE HOSPITAL ATTENDANCE & PHYSICIAN SYSTEM - SUPABASE DATABASE MIGRATION
--- Run this complete script in the Supabase SQL Editor (SQL Editor -> New query -> Run)
--- ==============================================================================
-
--- 1. Master Doctors Database
-CREATE TABLE IF NOT EXISTS public.doctors (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    arabic_name TEXT,
-    department TEXT NOT NULL DEFAULT 'General',
-    mobile_number TEXT,
-    is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- 2. Daily Active Check-ins (Attendance Roster)
-CREATE TABLE IF NOT EXISTS public.checkins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    doctor_id TEXT NOT NULL,
-    doctor_name TEXT NOT NULL,
-    doctor_arabic_name TEXT,
-    department TEXT NOT NULL,
-    shifts TEXT[] NOT NULL DEFAULT '{}',
-    mobile_number TEXT,
-    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- 3. Monthly Cumulative Check-ins (Rolling 30-day attendance roster with FIFO sliding window)
-CREATE TABLE IF NOT EXISTS public.monthly_checkins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    doctor_id TEXT NOT NULL,
-    doctor_name TEXT NOT NULL,
-    doctor_arabic_name TEXT,
-    department TEXT NOT NULL,
-    shifts TEXT[] NOT NULL DEFAULT '{}',
-    mobile_number TEXT,
-    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- Ensure checkin_date exists on monthly_checkins
-ALTER TABLE public.monthly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
-
--- Backward compatibility for weekly_checkins table
-CREATE TABLE IF NOT EXISTS public.weekly_checkins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    doctor_id TEXT NOT NULL,
-    doctor_name TEXT NOT NULL,
-    doctor_arabic_name TEXT,
-    department TEXT NOT NULL,
-    shifts TEXT[] NOT NULL DEFAULT '{}',
-    mobile_number TEXT,
-    checkin_timestamp TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    checkin_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-ALTER TABLE public.weekly_checkins ADD COLUMN IF NOT EXISTS checkin_date DATE NOT NULL DEFAULT CURRENT_DATE;
-
--- 4. Custom Doctor Overrides (Persisted custom added or edited physicians)
-CREATE TABLE IF NOT EXISTS public.custom_doctors (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    arabic_name TEXT,
-    department TEXT NOT NULL DEFAULT 'General',
-    mobile_number TEXT,
-    original_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- 5. Custom Doctor Phone Overrides
-CREATE TABLE IF NOT EXISTS public.custom_doctor_phones (
-    id TEXT PRIMARY KEY,
-    mobile_number TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- 6. Deleted Doctors (Blacklist of deleted master records)
-CREATE TABLE IF NOT EXISTS public.deleted_doctors (
-    id TEXT PRIMARY KEY,
-    deleted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
-);
-
--- 7. Inpatient Ward Doctor Calls
-CREATE TABLE IF NOT EXISTS public.doctor_calls (
-    id TEXT PRIMARY KEY,
-    call_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    room TEXT NOT NULL,
-    department TEXT NOT NULL,
-    raw_department TEXT,
-    patient_name TEXT,
-    patient_barcode TEXT,
-    admitting_physician TEXT,
-    caller_name TEXT,
-    dispatched_doctors JSONB NOT NULL DEFAULT '[]'::jsonb,
-    status TEXT NOT NULL,
-    raw_message TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_doctor_calls_date ON public.doctor_calls (call_date);
-CREATE INDEX IF NOT EXISTS idx_doctor_calls_dept ON public.doctor_calls (department);
-CREATE INDEX IF NOT EXISTS idx_doctor_calls_status ON public.doctor_calls (status);
-
--- Indexes for fast querying, deduplication, and atomic operations
-CREATE INDEX IF NOT EXISTS idx_doctors_name ON public.doctors (name);
-CREATE INDEX IF NOT EXISTS idx_doctors_active ON public.doctors (is_active);
-CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_fast ON public.doctors (department) WHERE is_active = true;
-CREATE INDEX IF NOT EXISTS idx_doctors_active_dept_name ON public.doctors (department, name) WHERE is_active = true;
-
--- Enforce canonical medical specialties on active records
-DO $$
-BEGIN
-  -- Pre-sanitization: Ensure all 31 Nephrology physicians are explicitly set to Nephrology
-  UPDATE public.doctors
-  SET department = 'Nephrology', is_active = true
-  WHERE department ILIKE '%nephro%'
-     OR department ILIKE '%كلي%'
-     OR department ILIKE '%كلى%'
-     OR department = 'طبيب باطن وكلي'
-     OR department = 'طبيب باطن وكلى'
-     OR id IN (
-       '55', '56', '57', '58', '251', '252', '348', '401', '724', '1177',
-       '2300', '2542', '2631', '2649', '3255', '3536', '030723.09.23.26',
-       '030822.11.20.21', '030822.11.21.36', '041123.12.39.10', '041124.05.24.17',
-       '051123.02.59.41', '070225.11.20.37', '100824.10.08.23', '110225.01.59.17',
-       '160726.01.40.36', '180126.03.03.04', '180726.02.44.44', '200123.04.03.57',
-       '260522.05.46.18', '300925.10.01.27'
-     );
-
-  -- Pre-sanitization: Activate canonical specialties and deactivate non-canonical
-  UPDATE public.doctors
-  SET is_active = true
-  WHERE department IN (
-    'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
-    'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
-    'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
-    'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-    'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-    'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
-  );
-
-  UPDATE public.doctors
-  SET is_active = false
-  WHERE is_active IS NULL 
-     OR department NOT IN (
-       'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
-       'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
-       'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
-       'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-       'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
-     );
-
-  ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
-  ALTER TABLE public.doctors ADD CONSTRAINT chk_active_canonical_dept
-  CHECK (
-    is_active = false OR department IN (
-      'Internal Medicine', 'General Surgery', 'ICU', 'Emergency Medicine',
-      'Cardiology', 'Pediatrics', 'Nephrology', 'Nutrition',
-      'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
-      'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
-      'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-      'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
-    )
-  );
-END $$;
-
--- 1. Daily checkins: Deduplicate keeping newest record per doctor, then create unique index
-DELETE FROM public.checkins
-WHERE id IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY doctor_id ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
-    ) AS rn FROM public.checkins
-  ) dupes WHERE dupes.rn > 1
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_checkins_doctor_id_unique ON public.checkins (doctor_id);
-CREATE INDEX IF NOT EXISTS idx_checkins_date ON public.checkins (checkin_date);
-CREATE INDEX IF NOT EXISTS idx_checkins_timestamp ON public.checkins (checkin_timestamp);
-
--- 2. Monthly checkins: Deduplicate keeping newest record per (doctor_id, checkin_date), then create unique index
-DELETE FROM public.monthly_checkins
-WHERE id IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY doctor_id, checkin_date ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
-    ) AS rn FROM public.monthly_checkins
-  ) dupes WHERE dupes.rn > 1
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_date ON public.monthly_checkins (doctor_id, checkin_date);
-CREATE INDEX IF NOT EXISTS idx_monthly_checkins_doctor_id ON public.monthly_checkins (doctor_id);
-CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date ON public.monthly_checkins (checkin_date ASC);
-CREATE INDEX IF NOT EXISTS idx_monthly_checkins_date_ts ON public.monthly_checkins (checkin_date, checkin_timestamp DESC);
-
--- 3. Weekly checkins: Deduplicate keeping newest record per (doctor_id, checkin_date), then create unique index
-DELETE FROM public.weekly_checkins
-WHERE id IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY doctor_id, checkin_date ORDER BY checkin_timestamp DESC, created_at DESC, id DESC
-    ) AS rn FROM public.weekly_checkins
-  ) dupes WHERE dupes.rn > 1
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_date ON public.weekly_checkins (doctor_id, checkin_date);
-CREATE INDEX IF NOT EXISTS idx_weekly_checkins_doctor_id ON public.weekly_checkins (doctor_id);
-CREATE INDEX IF NOT EXISTS idx_weekly_checkins_timestamp ON public.weekly_checkins (checkin_timestamp);
-CREATE INDEX IF NOT EXISTS idx_weekly_checkins_date_ts ON public.weekly_checkins (checkin_date, checkin_timestamp DESC);
-
-CREATE INDEX IF NOT EXISTS idx_custom_doctors_name ON public.custom_doctors (name);
-
--- Enable Row Level Security (RLS) on all tables
-ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.checkins ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.monthly_checkins ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.weekly_checkins ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.custom_doctors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.custom_doctor_phones ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.deleted_doctors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.doctor_calls ENABLE ROW LEVEL SECURITY;
-
--- Grant schema and table access permissions to anon, authenticated, and service_role roles
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
-
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role;
-
--- Allow public / anon / authenticated full read & write access
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to doctors' AND tablename = 'doctors') THEN
-    CREATE POLICY "Public access to doctors" ON public.doctors FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to checkins' AND tablename = 'checkins') THEN
-    CREATE POLICY "Public access to checkins" ON public.checkins FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to monthly_checkins' AND tablename = 'monthly_checkins') THEN
-    CREATE POLICY "Public access to monthly_checkins" ON public.monthly_checkins FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to weekly_checkins' AND tablename = 'weekly_checkins') THEN
-    CREATE POLICY "Public access to weekly_checkins" ON public.weekly_checkins FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to custom_doctors' AND tablename = 'custom_doctors') THEN
-    CREATE POLICY "Public access to custom_doctors" ON public.custom_doctors FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to custom_doctor_phones' AND tablename = 'custom_doctor_phones') THEN
-    CREATE POLICY "Public access to custom_doctor_phones" ON public.custom_doctor_phones FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to deleted_doctors' AND tablename = 'deleted_doctors') THEN
-    CREATE POLICY "Public access to deleted_doctors" ON public.deleted_doctors FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to doctor_calls' AND tablename = 'doctor_calls') THEN
-    CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-END $$;`;
-
+import { useToast } from "./components/common/Toast.tsx";
+import { EmptyState } from "./components/common/EmptyState.tsx";
+import { TableSkeleton, CardGridSkeleton } from "./components/common/TableSkeleton.tsx";
 
 // Shift definition
 interface ShiftOption {
@@ -477,6 +214,8 @@ function LiveClock() {
 }
 
 export default function App() {
+  const toast = useToast();
+
   // Navigation & Screen states
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [adminPasscode, setAdminPasscode] = useState("");
@@ -506,6 +245,11 @@ export default function App() {
 
   // Admin Data states
   const [checkins, setCheckins] = useState<CheckIn[]>([]);
+  const [loadingCheckins, setLoadingCheckins] = useState(false);
+  const [checkinsError, setCheckinsError] = useState<string | null>(null);
+  const [isDeletingCheckin, setIsDeletingCheckin] = useState(false);
+  const [isClearingAllCheckins, setIsClearingAllCheckins] = useState(false);
+  const [isClearingMonthlyCheckins, setIsClearingMonthlyCheckins] = useState(false);
   const [adminSearch, setAdminSearch] = useState("");
   const [adminDeptFilter, setAdminDeptFilter] = useState("All");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -527,7 +271,7 @@ export default function App() {
   const [isUpdatingCheckedInPhone, setIsUpdatingCheckedInPhone] = useState(false);
 
   // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase" | "calls")
-  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "supabase" | "calls">("roster");
+  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "calls">("roster");
 
   // Inpatient Ward Doctor Calls states
   const [doctorCalls, setDoctorCalls] = useState<any[]>([]);
@@ -557,105 +301,7 @@ export default function App() {
   const [isTogglingPause, setIsTogglingPause] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
 
-  // Supabase State & Operations
-  const [supabaseStatus, setSupabaseStatus] = useState<{
-    configured: boolean;
-    url?: string;
-    connected?: boolean;
-    errors?: any;
-    counts?: Record<string, number>;
-    message?: string;
-  } | null>(null);
-  const [isCheckingSupabase, setIsCheckingSupabase] = useState(false);
-  const [isMigratingSupabase, setIsMigratingSupabase] = useState(false);
-  const [supabaseMigrateResult, setSupabaseMigrateResult] = useState<{
-    success: boolean;
-    message: string;
-    results?: any;
-    error?: string;
-  } | null>(null);
-  const [copiedSqlSchema, setCopiedSqlSchema] = useState(false);
-  const [supabaseConfigForm, setSupabaseConfigForm] = useState({
-    url: "",
-    key: "",
-    serviceRoleKey: ""
-  });
-  const [isSavingSupabaseConfig, setIsSavingSupabaseConfig] = useState(false);
-  const [supabaseConfigMsg, setSupabaseConfigMsg] = useState("");
 
-  const fetchSupabaseStatus = async () => {
-    setIsCheckingSupabase(true);
-    try {
-      const res = await fetch("/api/supabase/status");
-      const data = await res.json();
-      setSupabaseStatus(data);
-      if (data.url && !supabaseConfigForm.url) {
-        setSupabaseConfigForm(prev => ({ ...prev, url: data.url }));
-      }
-    } catch (err) {
-      console.error("Error checking Supabase status:", err);
-      setSupabaseStatus({ configured: false, connected: false, message: "Network error connecting to API" });
-    } finally {
-      setIsCheckingSupabase(false);
-    }
-  };
-
-  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supabaseConfigForm.url.trim() || !supabaseConfigForm.key.trim()) {
-      setSupabaseConfigMsg("Supabase URL and Key are required.");
-      return;
-    }
-    setIsSavingSupabaseConfig(true);
-    setSupabaseConfigMsg("");
-    try {
-      const res = await fetch("/api/supabase/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(supabaseConfigForm)
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSupabaseConfigMsg(data.warning || "Supabase credentials saved and verified successfully!");
-        await fetchSupabaseStatus();
-        await fetchFullDoctorsDatabase(true);
-      } else {
-        setSupabaseConfigMsg(data.error || "Failed to save Supabase config.");
-      }
-    } catch (err: any) {
-      setSupabaseConfigMsg("Network error saving Supabase config.");
-    } finally {
-      setIsSavingSupabaseConfig(false);
-    }
-  };
-
-  const handleRunSupabaseMigration = async () => {
-    setIsMigratingSupabase(true);
-    setSupabaseMigrateResult(null);
-    try {
-      const res = await fetch("/api/supabase/migrate", { method: "POST" });
-      const data = await res.json();
-      setSupabaseMigrateResult(data);
-      if (res.ok && data.success) {
-        await fetchSupabaseStatus();
-      }
-    } catch (err: any) {
-      console.error("Migration error:", err);
-      setSupabaseMigrateResult({
-        success: false,
-        message: "Migration request failed",
-        error: err.message || "Network error",
-      });
-    } finally {
-      setIsMigratingSupabase(false);
-    }
-  };
-
-  const handleCopySqlSchema = () => {
-    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA_TEXT);
-    setCopiedSqlSchema(true);
-    setTimeout(() => setCopiedSqlSchema(false), 2000);
-  };
 
   // Inpatient Ward Doctor Calls data fetching & re-dispatch
   const fetchDoctorCalls = async () => {
@@ -771,6 +417,8 @@ export default function App() {
 
   // Persistent Doctor Database Management State
   const [fullDoctorList, setFullDoctorList] = useState<Doctor[]>([]);
+  const [loadingDatabase, setLoadingDatabase] = useState(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [dbSearch, setDbSearch] = useState("");
   const [dbDeptFilter, setDbDeptFilter] = useState("All");
   const [selectedDbDoctorIds, setSelectedDbDoctorIds] = useState<string[]>([]);
@@ -953,6 +601,8 @@ export default function App() {
   };
 
   const fetchFullDoctorsDatabase = async (forceRefresh = false) => {
+    setLoadingDatabase(true);
+    setDatabaseError(null);
     try {
       const url = `/api/doctors?_t=${Date.now()}${forceRefresh ? "&refresh=true" : ""}`;
       const res = await fetch(url, {
@@ -962,9 +612,18 @@ export default function App() {
         const data = await res.json();
         const sorted = data.sort((a: Doctor, b: Doctor) => compareDoctorIds(a.id, b.id));
         setFullDoctorList(sorted);
+      } else {
+        const errMsg = `Failed to load doctors database (Status ${res.status})`;
+        setDatabaseError(errMsg);
+        toast.error("Database Error", errMsg);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error fetching full doctors database:", err);
+      const msg = err instanceof Error ? err.message : "Connection failed";
+      setDatabaseError(msg);
+      toast.error("Network Error", "Unable to load physician database.");
+    } finally {
+      setLoadingDatabase(false);
     }
   };
 
@@ -1159,9 +818,10 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
+      toast.success("Database Exported", "Physicians database spreadsheet downloaded successfully.");
     } catch (err) {
       console.error("Error exporting database:", err);
-      alert("Failed to export database.");
+      toast.error("Export Failed", "Failed to export physicians database.");
     } finally {
       setIsDownloadingDatabase(false);
     }
@@ -1269,12 +929,14 @@ export default function App() {
           });
           if (res.ok) {
             await fetchFullDoctorsDatabase(true);
+            toast.success("Duplicate Records Cleaned", "Retained designated doctor and removed duplicates.");
           } else {
             const data = await res.json().catch(() => ({}));
-            alert(data.error || "Failed to delete duplicate records.");
+            toast.error("Operation Failed", data.error || "Failed to delete duplicate records.");
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Keep doctor error:", err);
+          toast.error("Network Error", "Failed to delete duplicate records. Check connection.");
         } finally {
           setIsDeletingDoctor(false);
         }
@@ -1297,12 +959,14 @@ export default function App() {
           if (res.ok) {
             setFullDoctorList((prev) => prev.filter((item) => !(item.id === doc.id && item.name === doc.name)));
             await fetchFullDoctorsDatabase(true);
+            toast.success("Physician Removed", `Deleted ${doc.name} from the database.`);
           } else {
             const data = await res.json().catch(() => ({}));
-            alert(data.error || "Failed to delete doctor.");
+            toast.error("Delete Failed", data.error || "Failed to delete doctor.");
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Delete error:", err);
+          toast.error("Network Error", "Failed to delete doctor. Check connection.");
         } finally {
           setIsDeletingDoctor(false);
         }
@@ -1333,12 +997,14 @@ export default function App() {
           if (res.ok) {
             setSelectedDupItemKeys([]);
             await fetchFullDoctorsDatabase(true);
+            toast.success("Batch Delete Complete", `Removed ${itemsToDelete.length} selected duplicate record(s).`);
           } else {
             const data = await res.json().catch(() => ({}));
-            alert(data.error || "Failed to delete selected duplicate records.");
+            toast.error("Batch Delete Failed", data.error || "Failed to delete selected duplicate records.");
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Batch delete error:", err);
+          toast.error("Network Error", "Failed to delete selected duplicate records.");
         } finally {
           setIsDeletingDoctor(false);
         }
@@ -1364,13 +1030,14 @@ export default function App() {
         // Refresh checkins
         fetchCheckins();
         setEditingCheckedInDoctorId(null);
+        toast.success("Phone Updated", "Doctor phone number saved successfully.");
       } else {
         const err = await res.json();
-        alert(err.error || "Failed to update phone number.");
+        toast.error("Update Failed", err.error || "Failed to update phone number.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error updating phone number:", err);
-      alert("Failed to update phone number. Check connection.");
+      toast.error("Network Error", "Failed to update phone number. Check connection.");
     } finally {
       setIsUpdatingCheckedInPhone(false);
     }
@@ -1559,14 +1226,25 @@ export default function App() {
 
   // Fetch check-ins list from Express backend
   const fetchCheckins = async () => {
+    setLoadingCheckins(true);
+    setCheckinsError(null);
     try {
       const res = await fetch("/api/checkins");
       if (res.ok) {
         const data = await res.json();
         setCheckins(data);
+      } else {
+        const errorText = `Failed to load check-ins (Status: ${res.status})`;
+        setCheckinsError(errorText);
+        toast.error("Roster Error", errorText);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error fetching checkins:", err);
+      const msg = err instanceof Error ? err.message : "Connection failed";
+      setCheckinsError(msg);
+      toast.error("Network Error", "Unable to load active roster. Please check connection.");
+    } finally {
+      setLoadingCheckins(false);
     }
   };
 
@@ -1746,16 +1424,30 @@ export default function App() {
 
   const confirmDeleteCheckin = async () => {
     if (!deleteConfirmId) return;
+    setIsDeletingCheckin(true);
+    const targetId = deleteConfirmId;
+    const prevCheckins = [...checkins];
+    // Optimistic UI update: instantly remove from list
+    setCheckins((prev) => prev.filter((c) => c.id !== targetId));
     try {
-      const res = await fetch(`/api/checkins/${encodeURIComponent(deleteConfirmId)}`, {
+      const res = await fetch(`/api/checkins/${encodeURIComponent(targetId)}`, {
         method: "DELETE"
       });
       if (res.ok) {
-        fetchCheckins();
+        toast.success("Check-In Removed", "Doctor check-in deleted from the active roster.");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        // Revert optimistic update
+        setCheckins(prevCheckins);
+        toast.error("Delete Failed", data.error || "Failed to delete check-in.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error deleting checkin:", err);
+      // Revert optimistic update
+      setCheckins(prevCheckins);
+      toast.error("Network Error", "Unable to delete check-in. Please check connection.");
     } finally {
+      setIsDeletingCheckin(false);
       setDeleteConfirmId(null);
     }
   };
@@ -1766,16 +1458,23 @@ export default function App() {
   };
 
   const confirmClearAllCheckins = async () => {
+    setIsClearingAllCheckins(true);
     try {
       const res = await fetch("/api/checkins/clear", {
         method: "POST"
       });
       if (res.ok) {
         setCheckins([]);
+        toast.success("Roster Reset", "All daily check-ins cleared successfully.");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error("Reset Failed", data.error || "Failed to clear check-ins.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error clearing checkins:", err);
+      toast.error("Network Error", "Unable to clear check-ins. Please check connection.");
     } finally {
+      setIsClearingAllCheckins(false);
       setShowResetConfirm(false);
     }
   };
@@ -1787,16 +1486,22 @@ export default function App() {
   const handleClearWeeklyCheckins = handleClearMonthlyCheckins;
 
   const confirmClearMonthlyCheckins = async () => {
+    setIsClearingMonthlyCheckins(true);
     try {
       const res = await fetch("/api/checkins/clear-monthly", {
         method: "POST"
       });
       if (res.ok) {
-        alert("Cumulative 30-day monthly check-ins database cleared successfully.");
+        toast.success("Monthly Database Cleared", "Cumulative 30-day check-ins database cleared.");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error("Clear Failed", data.error || "Failed to clear monthly check-ins.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error clearing monthly checkins:", err);
+      toast.error("Network Error", "Unable to clear monthly check-ins.");
     } finally {
+      setIsClearingMonthlyCheckins(false);
       setShowMonthlyResetConfirm(false);
     }
   };
@@ -1971,7 +1676,7 @@ export default function App() {
     try {
       const res = await fetch("/api/monthly-checkins");
       if (!res.ok) {
-        alert("Failed to fetch cumulative monthly data.");
+        toast.error("Fetch Failed", "Failed to fetch cumulative monthly data.");
         return;
       }
       const monthlyData: CheckIn[] = await res.json();
@@ -2230,9 +1935,10 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      toast.success("Monthly Roster Exported", "30-day cumulative roster sheet downloaded successfully.");
     } catch (err) {
       console.error("Error exporting monthly excel:", err);
-      alert("Failed to export styled monthly Excel sheet.");
+      toast.error("Export Failed", "Failed to export styled monthly Excel sheet.");
     } finally {
       setIsDownloadingMonthly(false);
     }
@@ -2267,7 +1973,7 @@ export default function App() {
   // Download Excel Sheet (.xlsx) with separators and custom color theme matching the template
   const downloadCSVReport = async () => {
     if (checkins.length === 0) {
-      alert("No check-ins available to export.");
+      toast.warning("No Check-Ins", "No check-ins available to export.");
       return;
     }
 
@@ -2439,9 +2145,10 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      toast.success("Daily Roster Exported", "Styled physician check-in spreadsheet downloaded successfully.");
     } catch (err) {
       console.error("Error exporting styled excel:", err);
-      alert("Failed to export styled Excel sheet. Please try again.");
+      toast.error("Export Failed", "Failed to export styled Excel sheet. Please try again.");
     } finally {
       setIsDownloadingDaily(false);
     }
@@ -2511,10 +2218,10 @@ export default function App() {
       if (!res.ok || !data.success) {
         throw new Error(data.message || data.error || "Failed to send to WhatsApp");
       }
-      alert(`✅ ${data.message || "Daily sheet successfully sent to the WhatsApp group!"}`);
+      toast.success("WhatsApp Sheet Delivered", data.message || "Daily sheet successfully sent to the WhatsApp group!");
     } catch (err: any) {
       console.error("Error sending daily sheet to WhatsApp:", err);
-      alert(`❌ WhatsApp delivery failed: ${err.message || err}\n\nPlease check GREEN_API_ID_INSTANCE, GREEN_API_API_TOKEN_INSTANCE, and WHATSAPP_GROUP_ID in .env or Vercel Environment Variables.`);
+      toast.error("WhatsApp Delivery Failed", err.message || "Please check Green-API credentials in your environment.");
     } finally {
       setIsSendingWhatsApp(false);
     }
@@ -3023,24 +2730,6 @@ export default function App() {
                           </span>
                         )}
                       </button>
-
-                      <button
-                        onClick={() => {
-                          setAdminTab("supabase");
-                          fetchSupabaseStatus();
-                        }}
-                        className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
-                          adminTab === "supabase"
-                            ? "bg-[#063b30] text-emerald-300 shadow-sm border border-emerald-600"
-                            : "text-slate-600 hover:text-[#063b30] hover:bg-slate-50"
-                        }`}
-                      >
-                        <Server className="w-4 h-4 text-emerald-500" />
-                        <span>Supabase Migration</span>
-                        {supabaseStatus?.configured ? (
-                          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                        ) : null}
-                      </button>
                     </>
                   )}
 
@@ -3167,6 +2856,22 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Database Error Banner */}
+                  {databaseError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-xl flex items-center justify-between text-xs font-semibold shadow-xs">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{databaseError}</span>
+                      </div>
+                      <button
+                        onClick={() => fetchFullDoctorsDatabase(true)}
+                        className="px-3 py-1 bg-white border border-rose-300 rounded-lg font-bold hover:bg-rose-100 transition-colors cursor-pointer text-xs"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
                   {/* Database Physicians Table */}
                   <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden">
                     <div className="overflow-x-auto">
@@ -3195,10 +2900,30 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
-                          {filteredDbDoctors.length === 0 ? (
+                          {loadingDatabase && fullDoctorList.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="text-center py-12 text-slate-400">
-                                No physicians found matching search criteria.
+                              <td colSpan={7} className="p-0">
+                                <TableSkeleton rows={8} cols={7} />
+                              </td>
+                            </tr>
+                          ) : filteredDbDoctors.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-6">
+                                <EmptyState
+                                  icon={Search}
+                                  title={dbSearch || dbDeptFilter !== "All" ? "No Matching Physicians" : "No Physicians Registered"}
+                                  description={
+                                    dbSearch || dbDeptFilter !== "All"
+                                      ? "No physicians matched your search query or department filter."
+                                      : "No physicians currently exist in the database catalog."
+                                  }
+                                  actionLabel={dbSearch || dbDeptFilter !== "All" ? "Clear Filters" : "+ Add Physician"}
+                                  onAction={
+                                    dbSearch || dbDeptFilter !== "All"
+                                      ? () => { setDbSearch(""); setDbDeptFilter("All"); }
+                                      : handleOpenAddDoctor
+                                  }
+                                />
                               </td>
                             </tr>
                           ) : (
@@ -3399,7 +3124,11 @@ export default function App() {
                   )}
 
                   {/* List of Duplicate Groups */}
-                  {filteredDuplicateGroups.length === 0 ? (
+                  {loadingDatabase && fullDoctorList.length === 0 ? (
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm">
+                      <TableSkeleton rows={4} cols={5} />
+                    </div>
+                  ) : filteredDuplicateGroups.length === 0 ? (
                     <div className="bg-white rounded-xl border border-[#cbdad5] p-12 text-center space-y-3 shadow-sm">
                       <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mx-auto">
                         <CheckCircle className="w-6 h-6" />
@@ -3410,6 +3139,17 @@ export default function App() {
                           ? "No duplicated ID conflict groups match your current filter criteria."
                           : "All physician records in the database currently have unique Employee IDs!"}
                       </p>
+                      {(dupSearch || dupDeptFilter !== "All") && (
+                        <button
+                          onClick={() => {
+                            setDupSearch("");
+                            setDupDeptFilter("All");
+                          }}
+                          className="mt-2 px-3.5 py-1.5 bg-[#063b30] hover:bg-[#042d24] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Clear Filters
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-4">
@@ -3531,25 +3271,7 @@ export default function App() {
 
                                             {/* Delete Single Entry */}
                                             <button
-                                              onClick={async () => {
-                                                if (!window.confirm(`Delete "${doc.name}" (ID: ${doc.id}) from database?`)) return;
-                                                setIsDeletingDoctor(true);
-                                                try {
-                                                  const res = await fetch(`/api/doctors/delete/${encodeURIComponent(doc.id)}?name=${encodeURIComponent(doc.name)}`, {
-                                                    method: "DELETE"
-                                                  });
-                                                  if (res.ok) {
-                                                    await fetchFullDoctorsDatabase(true);
-                                                  } else {
-                                                    const data = await res.json().catch(() => ({}));
-                                                    alert(data.error || "Failed to delete doctor.");
-                                                  }
-                                                } catch (err) {
-                                                  console.error("Delete error:", err);
-                                                } finally {
-                                                  setIsDeletingDoctor(false);
-                                                }
-                                              }}
+                                              onClick={() => handleDeleteSingleDupDoctor(doc)}
                                               className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded transition-colors cursor-pointer"
                                               title="Delete this single duplicate entry"
                                             >
@@ -3568,353 +3290,6 @@ export default function App() {
                       })}
                     </div>
                   )}
-                </div>
-              ) : adminTab === "supabase" ? (
-                /* ======================================================= */
-                /*               SUPABASE DATABASE MIGRATION TAB           */
-                /* ======================================================= */
-                <div className="space-y-6">
-                  {/* Supabase Status Banner */}
-                  <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-200">
-                          <Server className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-bold text-slate-900">Supabase Database Connection & Migration</h3>
-                            {supabaseStatus?.configured ? (
-                              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                                Configured
-                              </span>
-                            ) : (
-                              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-amber-200 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
-                                Setup Required
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {supabaseStatus?.url ? (
-                              <span className="font-mono text-emerald-900 font-medium">Target Project: {supabaseStatus.url}</span>
-                            ) : (
-                              "Connect your Supabase project using environment variables or run the automated migration."
-                            )}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={fetchSupabaseStatus}
-                          disabled={isCheckingSupabase}
-                          className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${isCheckingSupabase ? "animate-spin" : ""}`} />
-                          <span>Check Status</span>
-                        </button>
-
-                        <button
-                          onClick={handleCopySqlSchema}
-                          className="px-3.5 py-2 bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-                        >
-                          {copiedSqlSchema ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>SQL Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy SQL Schema</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Supabase Live Table Counts Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">doctors</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.doctors : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">Master Roster</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">checkins</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.checkins : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">Active Daily</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">monthly</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? (supabaseStatus.counts.monthly_checkins ?? supabaseStatus.counts.weekly_checkins ?? "—") : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">30-Day Rolling</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">custom_docs</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.custom_doctors : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">Custom Added</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">phones</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.custom_doctor_phones : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">Phone Overrides</span>
-                      </div>
-
-                      <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-center">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">deleted_docs</span>
-                        <span className="text-xl font-black text-[#063b30] mt-1 block font-mono">
-                          {supabaseStatus?.counts ? supabaseStatus.counts.deleted_doctors : "—"}
-                        </span>
-                        <span className="text-[9px] text-slate-400">Blacklisted</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Supabase Connection Configuration Box */}
-                  <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
-                    <div className="border-b border-slate-100 pb-3">
-                      <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <Database className="w-4 h-4 text-emerald-700" />
-                        <span>Supabase Credentials & Live Connection</span>
-                      </h4>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Configure or update your Supabase project URL and API keys. Any doctor addition, edit, or deletion will immediately synchronize with Supabase with zero fallback to previous state.
-                      </p>
-                    </div>
-
-                    <form onSubmit={handleSaveSupabaseConfig} className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block">
-                            Supabase URL *
-                          </label>
-                          <input
-                            type="url"
-                            required
-                            placeholder="https://your-project.supabase.co"
-                            value={supabaseConfigForm.url}
-                            onChange={(e) => setSupabaseConfigForm({ ...supabaseConfigForm, url: e.target.value })}
-                            className="w-full px-3 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-xs font-mono focus:bg-white focus:border-[#063b30] outline-none"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block">
-                            Anon Key / Service Role Key *
-                          </label>
-                          <input
-                            type="password"
-                            required
-                            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-                            value={supabaseConfigForm.key}
-                            onChange={(e) => setSupabaseConfigForm({ ...supabaseConfigForm, key: e.target.value })}
-                            className="w-full px-3 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-xs font-mono focus:bg-white focus:border-[#063b30] outline-none"
-                          />
-                        </div>
-                      </div>
-
-                      {supabaseConfigMsg && (
-                        <p className={`text-xs font-bold p-2.5 rounded border ${
-                          supabaseConfigMsg.includes("successfully") || supabaseConfigMsg.includes("verified")
-                            ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                            : "bg-rose-50 text-rose-800 border-rose-200"
-                        }`}>
-                          {supabaseConfigMsg}
-                        </p>
-                      )}
-
-                      <div className="flex items-center justify-between pt-1">
-                        <span className="text-[11px] text-slate-500">
-                          Credentials are saved securely to your server environment for permanent synchronization.
-                        </span>
-                        <button
-                          type="submit"
-                          disabled={isSavingSupabaseConfig}
-                          className="px-5 py-2.5 bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs uppercase tracking-wider rounded-lg shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                        >
-                          {isSavingSupabaseConfig ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Testing & Connecting...</span>
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Save & Connect to Supabase</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-
-                  {/* Migration Trigger Card */}
-                  <div className="bg-gradient-to-r from-[#063b30] to-[#0b4d40] rounded-xl p-6 text-white shadow-md space-y-4">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="space-y-1 max-w-xl">
-                        <h4 className="text-lg font-bold flex items-center gap-2">
-                          <Sparkles className="w-5 h-5 text-emerald-300" />
-                          <span>One-Click Full Database Migration</span>
-                        </h4>
-                        <p className="text-xs text-emerald-100 leading-relaxed">
-                          Pushes all physician records ({fullDoctorList.length} total), custom physician modifications, phone overrides, active daily check-ins, and 30-day rolling monthly check-ins to Supabase with automatic deduplication.
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={handleRunSupabaseMigration}
-                        disabled={isMigratingSupabase || !supabaseStatus?.configured}
-                        className="px-6 py-3.5 bg-emerald-400 hover:bg-emerald-300 text-[#063b30] font-black text-xs uppercase tracking-wider rounded-lg shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                      >
-                        {isMigratingSupabase ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin text-[#063b30]" />
-                            <span>Migrating All Tables...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Database className="w-4 h-4" />
-                            <span>Migrate Now to Supabase</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    {/* Migration Feedback Result Toast */}
-                    {supabaseMigrateResult && (
-                      <div
-                        className={`p-4 rounded-lg text-xs font-semibold border ${
-                          supabaseMigrateResult.success
-                            ? "bg-emerald-950/70 border-emerald-400/50 text-emerald-200"
-                            : "bg-rose-950/70 border-rose-400/50 text-rose-200"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 font-bold text-sm">
-                          {supabaseMigrateResult.success ? (
-                            <CheckCircle className="w-4 h-4 text-emerald-400" />
-                          ) : (
-                            <AlertCircle className="w-4 h-4 text-rose-400" />
-                          )}
-                          <span>{supabaseMigrateResult.message}</span>
-                        </div>
-                        {supabaseMigrateResult.results && (
-                          <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-[11px] font-mono">
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Doctors:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.doctors}</span>
-                            </div>
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Check-ins:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.checkins}</span>
-                            </div>
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Monthly:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.monthly_checkins ?? supabaseMigrateResult.results.weekly_checkins ?? 0}</span>
-                            </div>
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Custom:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.custom_doctors}</span>
-                            </div>
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Phones:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.custom_doctor_phones}</span>
-                            </div>
-                            <div className="bg-black/30 p-2 rounded">
-                              <span className="text-slate-400 block text-[9px]">Deleted:</span>
-                              <span className="text-white font-bold">{supabaseMigrateResult.results.deleted_doctors}</span>
-                            </div>
-                          </div>
-                        )}
-                        {supabaseMigrateResult.error && (
-                          <div className="mt-2 text-rose-300 font-mono text-[11px]">
-                            {supabaseMigrateResult.error}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* SQL Schema Viewer Box */}
-                  <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                          <Terminal className="w-4 h-4 text-emerald-700" />
-                          <span>Supabase SQL Editor Schema (One-Chunk SQL)</span>
-                        </h4>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Paste this in your Supabase project's SQL Editor to instantiate all tables, indices, and RLS policies at once.
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={handleCopySqlSchema}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded border border-slate-300 transition-colors flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {copiedSqlSchema ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Copied!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy SQL</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    <div className="relative">
-                      <pre className="p-4 bg-slate-900 text-emerald-300 rounded-lg text-xs font-mono overflow-x-auto max-h-80 select-all border border-slate-800">
-                        <code>{SUPABASE_SQL_SCHEMA_TEXT}</code>
-                      </pre>
-                    </div>
-                  </div>
-
-                  {/* Setup & Environment Variables Quick Guide */}
-                  <div className="bg-slate-50 rounded-xl border border-slate-200 p-6 space-y-3">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">Quick Configuration Guide</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-600">
-                      <div className="space-y-2">
-                        <div className="font-bold text-slate-800">1. Setup in Supabase Dashboard:</div>
-                        <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-600">
-                          <li>Create a new Supabase project at <span className="font-mono text-emerald-700">supabase.com</span>.</li>
-                          <li>Open the <strong>SQL Editor</strong>, paste the schema above, and click <strong>Run</strong>.</li>
-                          <li>Navigate to <strong>Project Settings → API</strong>.</li>
-                          <li>Copy the <strong>Project URL</strong> and <strong>service_role</strong> / <strong>anon</strong> key.</li>
-                        </ol>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="font-bold text-slate-800">2. Configure Environment:</div>
-                        <div className="bg-slate-900 text-slate-200 p-3 rounded font-mono text-[11px] space-y-1 border border-slate-800">
-                          <div>SUPABASE_URL=https://your-project.supabase.co</div>
-                          <div>SUPABASE_ANON_KEY=eyJhbGciOi...</div>
-                          <div>SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...</div>
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          Run <span className="font-mono font-bold text-slate-700">npm run migrate:supabase</span> in the terminal anytime for automated CLI migration.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               ) : adminTab === "calls" ? (
                 /* ======================================================= */
@@ -4281,14 +3656,34 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {doctorCalls.length === 0 ? (
+                          {loadingDoctorCalls && doctorCalls.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="py-12 text-center text-slate-400">
-                                <PhoneCall className="w-8 h-8 mx-auto text-slate-300 mb-2 opacity-50" />
-                                <p className="font-semibold text-slate-600">No Doctor Calls Recorded</p>
-                                <p className="text-[11px] text-slate-400 mt-0.5">
-                                  Incoming calls from WhatsApp group matching "Category: DoctorCall" will automatically appear here.
-                                </p>
+                              <td colSpan={7} className="p-0">
+                                <TableSkeleton rows={5} cols={7} />
+                              </td>
+                            </tr>
+                          ) : doctorCalls.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-6">
+                                <EmptyState
+                                  icon={PhoneCall}
+                                  title="No Doctor Calls Recorded"
+                                  description={
+                                    callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
+                                      ? "No recorded calls match current filter criteria."
+                                      : "Incoming calls from WhatsApp group matching \"Category: DoctorCall\" will automatically appear here."
+                                  }
+                                  actionLabel={
+                                    callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
+                                      ? "Clear Filters"
+                                      : undefined
+                                  }
+                                  onAction={() => {
+                                    setCallsSearch("");
+                                    setCallsDeptFilter("All");
+                                    setCallsStatusFilter("All");
+                                  }}
+                                />
                               </td>
                             </tr>
                           ) : (
@@ -4778,6 +4173,22 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Check-ins Error Banner */}
+              {checkinsError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-xl flex items-center justify-between text-xs font-semibold shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{checkinsError}</span>
+                  </div>
+                  <button
+                    onClick={fetchCheckins}
+                    className="px-3 py-1 bg-white border border-rose-300 rounded-lg font-bold hover:bg-rose-100 transition-colors cursor-pointer text-xs"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
               {/* Live Roster Summary List matching Geometric border style */}
               <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden p-6 space-y-6">
                 
@@ -4797,13 +4208,27 @@ export default function App() {
                     grouped[c.department].push(c);
                   });
 
+                  if (loadingCheckins && checkins.length === 0) {
+                    return <CardGridSkeleton cards={4} />;
+                  }
+
                   const groupKeys = Object.keys(grouped);
                   if (groupKeys.length === 0) {
                     return (
-                      <div className="text-center py-12 text-slate-400">
-                        <Users className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                        <p className="text-sm">No personnel checked in yet matching criteria.</p>
-                      </div>
+                      <EmptyState
+                        icon={Users}
+                        title={adminSearch || adminDeptFilter !== "All" ? "No Matching Personnel" : "No Active Check-Ins"}
+                        description={
+                          adminSearch || adminDeptFilter !== "All"
+                            ? "No personnel match your search query or department filter."
+                            : "No doctors have checked in yet today. The roster will populate automatically as physicians check in."
+                        }
+                        actionLabel={adminSearch || adminDeptFilter !== "All" ? "Clear Filters" : undefined}
+                        onAction={() => {
+                          setAdminSearch("");
+                          setAdminDeptFilter("All");
+                        }}
+                      />
                     );
                   }
 
@@ -5004,9 +4429,17 @@ export default function App() {
                   <button
                     type="button"
                     onClick={confirmDeleteCheckin}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer"
+                    disabled={isDeletingCheckin}
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    Delete Record
+                    {isDeletingCheckin ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Deleting...</span>
+                      </>
+                    ) : (
+                      <span>Delete Record</span>
+                    )}
                   </button>
                 </div>
               </div>
@@ -5067,9 +4500,17 @@ export default function App() {
                   <button
                     type="button"
                     onClick={confirmClearAllCheckins}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer"
+                    disabled={isClearingAllCheckins}
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    Yes, Reset All
+                    {isClearingAllCheckins ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Resetting...</span>
+                      </>
+                    ) : (
+                      <span>Yes, Reset All</span>
+                    )}
                   </button>
                 </div>
               </div>
@@ -5129,9 +4570,17 @@ export default function App() {
                   </button>
                   <button
                     onClick={confirmClearMonthlyCheckins}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm"
+                    disabled={isClearingMonthlyCheckins}
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-xs uppercase transition-all shadow-sm disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    Yes, Reset Monthly
+                    {isClearingMonthlyCheckins ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Resetting...</span>
+                      </>
+                    ) : (
+                      <span>Yes, Reset Monthly</span>
+                    )}
                   </button>
                 </div>
               </div>

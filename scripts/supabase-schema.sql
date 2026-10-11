@@ -87,6 +87,26 @@ CREATE TABLE IF NOT EXISTS public.deleted_doctors (
     deleted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 7. Inpatient Ward Doctor Calls
+CREATE TABLE IF NOT EXISTS public.doctor_calls (
+    id TEXT PRIMARY KEY,
+    call_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    room TEXT NOT NULL,
+    department TEXT NOT NULL,
+    raw_department TEXT,
+    patient_name TEXT,
+    patient_barcode TEXT,
+    admitting_physician TEXT,
+    caller_name TEXT,
+    dispatched_doctors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL,
+    raw_message TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_date ON public.doctor_calls (call_date);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_dept ON public.doctor_calls (department);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_status ON public.doctor_calls (status);
+
 -- Indexes for fast querying, deduplication, and atomic operations
 CREATE INDEX IF NOT EXISTS idx_doctors_name ON public.doctors (name);
 CREATE INDEX IF NOT EXISTS idx_doctors_active ON public.doctors (is_active);
@@ -106,7 +126,7 @@ BEGIN
        'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
        'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
        'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-       'Clinical Pharmacy', 'OPD Coordinator'
+       'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
      ));
 
   ALTER TABLE public.doctors DROP CONSTRAINT IF EXISTS chk_active_canonical_dept;
@@ -118,7 +138,7 @@ BEGIN
       'Cardiothoracic Surgery', 'Urology', 'Orthopedic Surgery',
       'Neurosurgery', 'Oncology', 'ENT', 'Obstetrics and gynecology',
       'Radiology', 'Physiotherapy', 'Anesthesiology & Pain Therapy',
-      'Clinical Pharmacy', 'OPD Coordinator'
+      'Clinical Pharmacy', 'OPD Coordinator', 'Home Care'
     )
   );
 END $$;
@@ -174,6 +194,7 @@ ALTER TABLE public.weekly_checkins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.custom_doctor_phones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.deleted_doctors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.doctor_calls ENABLE ROW LEVEL SECURITY;
 
 -- Grant schema and table access permissions to anon, authenticated, and service_role roles
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
@@ -208,5 +229,8 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to deleted_doctors' AND tablename = 'deleted_doctors') THEN
     CREATE POLICY "Public access to deleted_doctors" ON public.deleted_doctors FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public access to doctor_calls' AND tablename = 'doctor_calls') THEN
+    CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;
