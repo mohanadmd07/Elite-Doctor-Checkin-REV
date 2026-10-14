@@ -634,7 +634,8 @@ const app = express();
 const PORT = 3000;
 
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Local fallback data initialization
 function ensureLocalData() {
@@ -4287,6 +4288,20 @@ async function startServer() {
       console.error("[Elite Server] Background cleanup check-ins failed:", err);
     });
   }, 30000);
+
+  // Global JSON error response handler (ensures API never responds with raw HTML <!DOCTYPE>)
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err) {
+      console.error(`[API Error] ${req.method} ${req.url}:`, err);
+      const status = err.status || err.statusCode || 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message || "Internal Server Error",
+        status
+      });
+    }
+    next();
+  });
 
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import("vite");

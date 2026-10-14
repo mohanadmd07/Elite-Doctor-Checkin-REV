@@ -2329,7 +2329,16 @@ export default function App() {
           targetDate: targetIsoDate
         })
       });
-      const data = await res.json();
+
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const cleanMsg = rawText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+        throw new Error(`Server returned (${res.status} ${res.statusText}): ${cleanMsg || "Invalid response format"}`);
+      }
+
       if (!res.ok || !data.success) {
         throw new Error(data.message || data.error || "Failed to send to WhatsApp");
       }
