@@ -843,10 +843,11 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
-  // Extract raw text from Green-API variations (including image/file captions & quoted messages)
+  // Extract raw text from Green-API variations (including image/file captions, quoted & edited messages)
   const messageText =
     rawBody.messageData?.textMessageData?.textMessage ||
     rawBody.messageData?.extendedTextMessageData?.text ||
+    rawBody.messageData?.editedMessageData?.textMessage ||
     rawBody.messageData?.fileMessageData?.caption ||
     rawBody.messageData?.imageMessageData?.caption ||
     rawBody.messageData?.caption ||
@@ -898,6 +899,16 @@ export async function processDoctorCallWebhook(params: {
   }
 
   if (!messageText) {
+    const typeMsg = rawBody.messageData?.typeMessage || typeWebhook;
+    let skipReason = "No text content found in webhook payload";
+    if (typeMsg === "reactionMessage") skipReason = "Ignored reaction emoji";
+    else if (typeMsg === "deletedMessage") skipReason = "Ignored deleted message";
+    else if (typeMsg === "stickerMessage") skipReason = "Ignored sticker";
+    else if (typeMsg === "audioMessage") skipReason = "Ignored audio message";
+    else if (typeMsg === "pollMessage" || typeMsg === "pollUpdateMessage") skipReason = "Ignored poll message";
+    else if (typeMsg === "locationMessage") skipReason = "Ignored location message";
+    else if (typeMsg === "contactMessage" || typeMsg === "contactsArrayMessage") skipReason = "Ignored contact card";
+
     recordWebhookAuditLog({
       source,
       senderChatId,
@@ -905,9 +916,9 @@ export async function processDoctorCallWebhook(params: {
       typeWebhook,
       textSnippet: "",
       handled: false,
-      reason: "No text content found in webhook payload"
+      reason: skipReason
     });
-    return { handled: false, reason: "No text content found in webhook payload" };
+    return { handled: false, reason: skipReason };
   }
 
   // 2. Parse DoctorCall format
