@@ -23,7 +23,8 @@ import {
   pollGreenApiNotifications,
   getRecentWebhookAuditLogs,
   previewCustomDoctorCall,
-  sendCustomDoctorCall
+  sendCustomDoctorCall,
+  getHospitalDutyDate
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3178,22 +3179,23 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
 /**
  * Retrieves attending physicians matching the exact calendar/duty date from the
  * 30-day cumulative monthly sheet (monthly_checkins), rather than the daily sheet.
- * Includes both 7 PM hospital duty day cutoff matching and local Cairo calendar matching.
+ * Includes 8:00 AM hospital duty day cutoff matching, local Cairo calendar matching, and checkin date.
  */
 async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckIn[]> {
   const monthlyList = await readMonthlyCheckIns();
-  const todayEgyptStr = getEgyptDateStr(new Date().toISOString());
-  const dateToMatch = targetDateStr || todayEgyptStr;
+  const defaultDutyDate = getHospitalDutyDate(new Date());
+  const dateToMatch = targetDateStr || defaultDutyDate;
 
-  console.log(`[DoctorCall Roster] Querying monthly sheet for exact day date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
+  console.log(`[DoctorCall Roster] Querying monthly sheet for exact duty date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
 
-  // Match checkins for this exact day date
+  // Match checkins for this exact duty date
   const matched = monthlyList.filter(c => {
     const egyptDate = getEgyptDateStr(c.timestamp);
     const cairoCalDate = new Date(c.timestamp).toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
     const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
+    const dutyDate = getHospitalDutyDate(new Date(c.timestamp));
 
-    return egyptDate === dateToMatch || cairoCalDate === dateToMatch || directDate === dateToMatch;
+    return egyptDate === dateToMatch || cairoCalDate === dateToMatch || directDate === dateToMatch || dutyDate === dateToMatch;
   });
 
   // Deduplicate by normalized doctor ID/name to return unique attending physicians for this day

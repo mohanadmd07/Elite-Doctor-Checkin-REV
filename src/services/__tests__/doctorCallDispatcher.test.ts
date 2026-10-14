@@ -7,7 +7,9 @@ import {
   processDoctorCallWebhook,
   parseDoctorCallDate,
   previewCustomDoctorCall,
-  sendCustomDoctorCall
+  sendCustomDoctorCall,
+  resolveHospitalDutyDate,
+  getHospitalDutyDate
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -352,5 +354,131 @@ describe('Custom Doctor Call Preview & Dispatch Workflow', () => {
     expect(preview.formattedMessage).toBe(customText);
   });
 });
+
+describe('8:00 AM Egypt Hospital Duty Date Boundary Rule', () => {
+  it('resolves calls before 8:00 AM Cairo time to previous day duty roster', () => {
+    // 02:15:00 AM Cairo on Oct 15 -> duty date must be Oct 14
+    expect(resolveHospitalDutyDate('15/10/2026 02:15:00 ص')).toBe('2026-10-14');
+    expect(resolveHospitalDutyDate('10/15/2026, 2:15:00 AM')).toBe('2026-10-14');
+    // 07:59:00 AM Cairo on Oct 15 -> duty date must be Oct 14
+    expect(resolveHospitalDutyDate('15/10/2026 07:59:00 ص')).toBe('2026-10-14');
+  });
+
+  it('resolves calls at or after 8:00 AM Cairo time to current day duty roster', () => {
+    // 08:00:00 AM Cairo on Oct 15 -> duty date must be Oct 15
+    expect(resolveHospitalDutyDate('15/10/2026 08:00:00 ص')).toBe('2026-10-15');
+    expect(resolveHospitalDutyDate('10/15/2026, 8:00:00 AM')).toBe('2026-10-15');
+    // 09:30:00 PM Cairo on Oct 15 -> duty date must be Oct 15
+    expect(resolveHospitalDutyDate('15/10/2026 09:30:00 م')).toBe('2026-10-15');
+    expect(resolveHospitalDutyDate('10/15/2026, 9:30:00 PM')).toBe('2026-10-15');
+  });
+
+  it('getHospitalDutyDate calculates previous day when current Cairo time is before 8:00 AM', () => {
+    // 04:00 AM Cairo is 01:00 UTC
+    const earlyMorningUtc = new Date('2026-10-15T01:00:00Z');
+    expect(getHospitalDutyDate(earlyMorningUtc)).toBe('2026-10-14');
+
+    // 11:00 AM Cairo is 08:00 UTC
+    const daytimeUtc = new Date('2026-10-15T08:00:00Z');
+    expect(getHospitalDutyDate(daytimeUtc)).toBe('2026-10-15');
+  });
+
+  it('webhook correctly matches previous day doctors for calls arriving before 8:00 AM', async () => {
+    let queriedDate = "";
+    const callMessageAtNight =
+      "Type: Request\n" +
+      "Category: DoctorCall\n" +
+      "Group: الجراحة العامة\n" +
+      "By: Night Nurse\n" +
+      "Date: 15/10/2026 03:45:00 ص\n" +
+      "Location: Elite 4th Floor\n" +
+      "Sub.Location: Room 409\n" +
+      "Patient Name: احمد سعيد\n" +
+      "Bed: Bed 409";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "msg_night_call_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: {
+          textMessage: callMessageAtNight
+        }
+      }
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async (dutyDate?: string) => {
+        queriedDate = dutyDate || "";
+        return [
+          {
+            id: "201",
+            doctorName: "Dr. On-Duty Night Surgeon",
+            department: "General Surgery",
+            shifts: ["Night shift", "24 shift"],
+            mobileNumber: "01000000001"
+          }
+        ];
+      }
+    });
+
+    expect(queriedDate).toBe("2026-10-14");
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.callDate).toBe("2026-10-14");
+    expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. On-Duty Night Surgeon");
+  });
+});
+
+describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
+  it('parses messages with WhatsApp bold asterisks and markdown formatting', () => {
+    const formattedMsg =
+      "*Type:* *Request*\n\n" +
+      "*Category:* *DoctorCall*\n\n" +
+      "*Group:* *الجراحة العامة*\n\n" +
+      "*By:* Ahmed Fathy\n\n" +
+      "*Date:* 14‏/10‏/2026 9:23:12 م\n\n" +
+      "*Location:* Elite 4th Floor\n\n" +
+      "*Sub.Location:* *Room 409*\n\n" +
+      "*Patient Barcode:* *0000263656*\n" +
+      "*Patient Name:* *مصطفي عبدالوهاب*\n" +
+      "*Admitting Phys:* Akram Assem\n" +
+      "*Bed:* *Bed 409*";
+
+    const parsed = parseDoctorCallMessage(formattedMsg);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.canonicalDepartment).toBe("General Surgery");
+    expect(parsed?.room).toBe("409");
+    expect(parsed?.patientName).toBe("مصطفي عبدالوهاب");
+    expect(parsed?.patientBarcode).toBe("0000263656");
+  });
+
+  it('parses structured nurse requests even when Category: DoctorCall header is omitted', () => {
+    const msgWithoutCategory =
+      "Type: Request\n\n" +
+      "Group:  النساء وتوليد\n\n" +
+      "By: Hadeer Ahmed\n\n" +
+      "Date: 10/14/2026, 7:16:39 PM\n\n" +
+      "Location: Elite 3rd Floor - Elite\n\n" +
+      "Sub.Location: Room 302\n\n" +
+      "Patient Barcode: 0000085801\n" +
+      "Patient Name: حنان مصطفى\n" +
+      "Admitting Phys: Mahmoud Elsayed\n" +
+      "Bed: Bed 302\n\n" +
+      "المرور على الحالة";
+
+    const parsed = parseDoctorCallMessage(msgWithoutCategory);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.canonicalDepartment).toBe("Obstetrics and gynecology");
+    expect(parsed?.room).toBe("302");
+    expect(parsed?.patientName).toBe("حنان مصطفى");
+    expect(parsed?.notes).toBe("المرور على الحالة");
+  });
+});
+
 
 

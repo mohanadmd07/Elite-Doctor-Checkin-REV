@@ -124,15 +124,21 @@ export function getRecentWebhookAuditLogs(): WebhookAuditLog[] {
 }
 
 /**
- * Clean invisible unicode formatting characters common in WhatsApp and Arabic text
+ * Clean invisible unicode formatting characters common in WhatsApp and Arabic text,
+ * as well as WhatsApp markdown formatting characters (*, ~, `, _)
  */
 export function cleanWhatsAppText(text: string): string {
   if (!text || typeof text !== "string") return "";
   return text
-    // Strip invisible zero-width chars and bidirectional marks
-    .replace(/[\u200B-\u200F\uFEFF\u00A0\u202A-\u202E]/g, " ")
+    // Strip invisible zero-width chars and bidirectional marks with EMPTY STRING
+    .replace(/[\u200B-\u200F\u061C\uFEFF\u202A-\u202E]/g, "")
+    // Normalize line endings
     .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
+    .replace(/\r/g, "\n")
+    // Strip WhatsApp markdown formatting delimiters (*bold*, ~strike~, `code`)
+    .replace(/[*~`]/g, "")
+    // Strip markdown formatting underscores around words (_italic_)
+    .replace(/(^|[\s:：\-])_+([^_]+)_+($|[\s:：\-])/g, "$1$2$3");
 }
 
 /**
@@ -143,14 +149,25 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
 
   const messageText = cleanWhatsAppText(rawMessageText);
 
-  // Flexible trigger: "Category: DoctorCall", "Category: Doctor Call", "Doctor_Call", or Arabic "استدعاء طبيب"
-  const hasDoctorCall =
-    /category\s*[:：-]?\s*doctor[\s_-]*call/i.test(messageText) ||
+  // Flexible triggers:
+  // 1. Explicit doctor call keywords (English & Arabic)
+  const hasDoctorCallKeyword =
     /doctor[\s_-]*call/i.test(messageText) ||
-    /طلب\s*استدعاء\s*طبيب/i.test(messageText) ||
-    /استدعاء\s*طبيب/i.test(messageText);
+    /(?:category|الفئة)\s*[:：-]?\s*doctor/i.test(messageText) ||
+    /(?:طلب\s*)?استدعاء(?:\s*(?:طبيب|دكتور|أخصائي|اخصائي|استشاري))?/i.test(messageText) ||
+    /مرور\s*على\s*الحالة/i.test(messageText) ||
+    /(?:طلب\s*)?مرور(?:\s*(?:طبيب|دكتور))?/i.test(messageText) ||
+    /(?:طلب\s*)?مناظرة(?:\s*(?:حالة|مريض))?/i.test(messageText) ||
+    /كول\s*(?:طبيب|دكتور)/i.test(messageText) ||
+    /طلب\s*استشارة/i.test(messageText);
 
-  if (!hasDoctorCall) return null;
+  // 2. Structured hospital nurse request: "Type: Request" + department/group header + location/patient
+  const isStructuredNurseRequest =
+    /(?:type|نوع)\s*[:：-]?\s*(?:request|طلب)/i.test(messageText) &&
+    /(?:group|specialty|speciality|department|dept|القسم|قسم|التخصص|تخصص|المجموعة)\s*[:：-]/i.test(messageText) &&
+    /(?:room|bed|sub\.?\s*location|location|patient|غرفة|سرير|مريض|المريض|الدور)\s*[:：-]/i.test(messageText);
+
+  if (!hasDoctorCallKeyword && !isStructuredNurseRequest) return null;
 
   const getField = (regex: RegExp): string => {
     const m = messageText.match(regex);
@@ -158,12 +175,27 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
   };
 
   const category = getField(/(?:category|الفئة)\s*[:：-]\s*([^\r\n]+)/i) || "DoctorCall";
-  const departmentRaw =
-    getField(/(?:group|specialty|speciality|department|القسم|قسم|التخصص)\s*[:：-]\s*([^\r\n]+)/i);
+  let departmentRaw =
+    getField(/(?:group|specialty|speciality|department|dept|service|القسم|قسم|التخصص|تخصص|المجموعة)\s*[:：-]\s*([^\r\n]+)/i);
+
+  // Fallback: If department header was not explicitly labelled, search text against known specialties
+  if (!departmentRaw) {
+    for (const opt of SPECIALTY_OPTIONS) {
+      if (opt.labelAr && messageText.includes(opt.labelAr)) {
+        departmentRaw = opt.labelAr;
+        break;
+      }
+      if (opt.labelEn && new RegExp(`\\b${opt.labelEn}\\b`, "i").test(messageText)) {
+        departmentRaw = opt.labelEn;
+        break;
+      }
+    }
+  }
+
   const callerName =
     getField(/(?:by|caller|from|بواسطة|التمريض|ممرض|ممرضة)\s*[:：-]\s*([^\r\n]+)/i);
   const callDate =
-    getField(/(?:date|التاريخ)\s*[:：-]\s*([^\r\n]+)/i);
+    getField(/(?:date|التاريخ|وقت)\s*[:：-]\s*([^\r\n]+)/i);
   const location =
     getField(/(?:location|المكان|الدور)\s*[:：-]\s*([^\r\n]+)/i);
 
@@ -174,6 +206,12 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
   }
   if (!room) {
     room = getField(/(?:bed|سرير)\s*[:：-]\s*(?:bed\s*)?([^\r\n]+)/i);
+  }
+  if (!room) {
+    const freeRoomMatch = messageText.match(/(?:غرفة|room|سرير|bed)\s*([A-Za-z0-9\-]+)/i);
+    if (freeRoomMatch) {
+      room = freeRoomMatch[1].trim();
+    }
   }
   if (room) {
     room = room.replace(/^(?:room|غرفة|bed|سرير)\s*/i, "").trim();
@@ -197,6 +235,8 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
     if (afterBed) {
       notes = afterBed;
     }
+  } else if (/مرور\s*على\s*الحالة/i.test(messageText)) {
+    notes = "المرور على الحالة";
   }
 
   // Normalize Department to canonical hospital specialty
@@ -232,11 +272,11 @@ export function parseDoctorCallDate(dateStr?: string): string | null {
 
   // Convert Arabic numerals to ASCII
   const asciiStr = dateStr.replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-  // Strip RTL/LTR marks and zero-width characters
-  const cleaned = asciiStr.replace(/[\u200e\u200f\u202a-\u202e\uFEFF]/g, "").trim();
+  // Strip RTL/LTR marks, zero-width characters, and BOM (replace with EMPTY STRING, NOT SPACE)
+  const cleaned = asciiStr.replace(/[\u200B-\u200F\u061C\uFEFF\u202A-\u202E]/g, "").trim();
 
   // 1. Check for standard ISO format: YYYY-MM-DD
-  const isoMatch = cleaned.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  const isoMatch = cleaned.match(/(\d{4})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{1,2})/);
   if (isoMatch) {
     const y = isoMatch[1];
     const m = isoMatch[2].padStart(2, "0");
@@ -245,7 +285,7 @@ export function parseDoctorCallDate(dateStr?: string): string | null {
   }
 
   // 2. Check for DD/MM/YYYY or MM/DD/YYYY
-  const partsMatch = cleaned.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
   if (partsMatch) {
     const first = parseInt(partsMatch[1], 10);
     const second = parseInt(partsMatch[2], 10);
@@ -264,6 +304,110 @@ export function parseDoctorCallDate(dateStr?: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * Returns hospital operational duty date in Africa/Cairo (YYYY-MM-DD).
+ * Hospital shift boundary rule:
+ * A hospital day's shifts (including Night and 24-hr shifts) conclude at 08:00 AM the following morning.
+ * Therefore, any time between 00:00:00 and 07:59:59 Egypt time belongs to the PREVIOUS day's duty roster.
+ * From 08:00:00 onward belongs to CURRENT day's duty roster.
+ */
+export function getHospitalDutyDate(date: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    hourCycle: "h23"
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find(p => p.type === "year")?.value || "";
+  const month = parts.find(p => p.type === "month")?.value || "";
+  const day = parts.find(p => p.type === "day")?.value || "";
+  const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+
+  const d = new Date(`${year}-${month}-${day}T12:00:00Z`);
+  if (hour < 8) {
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return d.toISOString().split("T")[0];
+}
+
+/**
+ * Resolves the operational hospital roster date from a call message.
+ * Extracts the calendar date and the time from the message string.
+ * If the time is before 08:00 AM Egypt time (or if no time is in the message and referenceTime is before 08:00 AM),
+ * the duty date is resolved to the PREVIOUS day (calendar date minus 1 day).
+ * This ensures night shifts and early morning calls (00:00 - 08:00 AM) match the active on-duty doctors.
+ */
+export function resolveHospitalDutyDate(callDateStr?: string, referenceTime: Date = new Date()): string {
+  if (!callDateStr || typeof callDateStr !== "string") {
+    return getHospitalDutyDate(referenceTime);
+  }
+
+  const asciiStr = callDateStr.replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+  const cleaned = asciiStr.replace(/[\u200B-\u200F\u061C\uFEFF\u202A-\u202E]/g, "").trim();
+
+  let year = "";
+  let month = "";
+  let day = "";
+
+  const isoMatch = cleaned.match(/(\d{4})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{1,2})/);
+  if (isoMatch) {
+    year = isoMatch[1];
+    month = isoMatch[2].padStart(2, "0");
+    day = isoMatch[3].padStart(2, "0");
+  } else {
+    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
+    if (partsMatch) {
+      const first = parseInt(partsMatch[1], 10);
+      const second = parseInt(partsMatch[2], 10);
+      year = partsMatch[3];
+      if (first > 12 && second <= 12) {
+        day = String(first).padStart(2, "0");
+        month = String(second).padStart(2, "0");
+      } else if (second > 12 && first <= 12) {
+        month = String(first).padStart(2, "0");
+        day = String(second).padStart(2, "0");
+      } else {
+        day = String(first).padStart(2, "0");
+        month = String(second).padStart(2, "0");
+      }
+    }
+  }
+
+  if (!year || !month || !day) {
+    return getHospitalDutyDate(referenceTime);
+  }
+
+  // Extract time from the string if present (e.g. "9:23:12 م", "02:15:00 ص", "7:16:39 PM", "14:30")
+  let callHour: number | null = null;
+  const timeMatch = cleaned.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([^\d\s\r\n]+)?/);
+  if (timeMatch) {
+    let h = parseInt(timeMatch[1], 10);
+    const meridian = (timeMatch[3] || "").trim().toLowerCase();
+    const isPM = meridian === "م" || meridian === "pm" || meridian === "مساء" || meridian.startsWith("p");
+    const isAM = meridian === "ص" || meridian === "am" || meridian === "صباح" || meridian.startsWith("a");
+
+    if (isPM && h < 12) h += 12;
+    if (isAM && h === 12) h = 0;
+    callHour = h;
+  }
+
+  // If time was not specified in the date string, assume noon (12:00) so the explicit date is preserved as-is
+  if (callHour === null) {
+    callHour = 12;
+  }
+
+  const d = new Date(`${year}-${month}-${day}T12:00:00Z`);
+  // If before 08:00 AM, operational duty date belongs to the PREVIOUS day
+  if (callHour < 8) {
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+
+  return d.toISOString().split("T")[0];
 }
 
 /**
@@ -880,7 +1024,7 @@ export async function processDoctorCallWebhook(params: {
 
   // 1. Extract message ID and check deduplication
   const idMessage = rawBody.idMessage || rawBody.messageData?.idMessage || "";
-  const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || "").trim().toLowerCase();
+  const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || rawBody.messageData?.chatId || rawBody.chat || rawBody.from || "").trim().toLowerCase();
   const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || rawBody.senderName || "";
   const typeWebhook = rawBody.typeWebhook || rawBody.typeMessage || rawBody.messageData?.typeMessage || "incomingMessage";
 
@@ -890,15 +1034,19 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
-  // Extract raw text from Green-API variations (including flat payload, image/file captions, quoted & edited messages)
+  // Extract raw text from all Green-API payload variations (flat payload, extended text, quoted, captions, buttons)
   const messageText =
     rawBody.messageData?.textMessageData?.textMessage ||
     rawBody.messageData?.extendedTextMessageData?.text ||
+    rawBody.messageData?.extendedTextMessageData?.description ||
     rawBody.messageData?.editedMessageData?.textMessage ||
     rawBody.messageData?.fileMessageData?.caption ||
     rawBody.messageData?.imageMessageData?.caption ||
     rawBody.messageData?.caption ||
     rawBody.messageData?.quotedMessage?.textMessage ||
+    rawBody.messageData?.quotedMessage?.text ||
+    rawBody.messageData?.buttonsResponseMessageData?.selectedDisplayText ||
+    rawBody.messageData?.listResponseMessageData?.title ||
     rawBody.messageData?.text ||
     rawBody.textMessage ||
     rawBody.text ||
@@ -921,30 +1069,60 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: "Duplicate message ID (already processed within TTL)" };
   }
 
-  // Check source group if specified (supports comma-separated list of monitored groups)
+  // Candidate chat IDs associated with this message
+  const candidateChatIds = [
+    rawBody.senderData?.chatId,
+    rawBody.chatId,
+    rawBody.messageData?.chatId,
+    rawBody.chat,
+    rawBody.from,
+    senderChatId
+  ].filter(Boolean).map(s => String(s).trim().toLowerCase());
+
+  // Prevent infinite loops: Never process messages originating from the target doctors alerts group
+  const targetGroupId = (process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim() || "").toLowerCase();
+  if (targetGroupId) {
+    const cleanTargetId = targetGroupId.replace(/@(g|c)\.us$/i, "");
+    const isFromTargetGroup = candidateChatIds.some(cid => {
+      const cleanCid = cid.replace(/@(g|c)\.us$/i, "");
+      return cid === targetGroupId || cleanCid === cleanTargetId;
+    });
+    if (isFromTargetGroup) {
+      return { handled: false, reason: "Ignored message originating from the target doctors group" };
+    }
+  }
+
+  // Check source group if specified (supports comma/semicolon/space separated list of monitored groups)
   const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
 
-  if (monitoredGroupRaw && senderChatId && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
+  if (monitoredGroupRaw && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
     const monitoredGroups = monitoredGroupRaw
-      .split(",")
+      .split(/[,;\s]+/)
       .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
-      .filter(Boolean)
-      .map(g => (g.includes("@") ? g : `${g}@g.us`));
+      .filter(Boolean);
 
-    const normalizedSender = senderChatId.includes("@") ? senderChatId : `${senderChatId}@g.us`;
-
-    if (monitoredGroups.length > 0 && !monitoredGroups.includes(normalizedSender)) {
-      const skipReason = `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`;
-      recordWebhookAuditLog({
-        source,
-        senderChatId,
-        senderName,
-        typeWebhook,
-        textSnippet,
-        handled: false,
-        reason: skipReason
+    if (monitoredGroups.length > 0) {
+      const matchesMonitored = candidateChatIds.some(cid => {
+        const cleanCid = cid.replace(/@(g|c)\.us$/i, "");
+        return monitoredGroups.some(mg => {
+          const cleanMg = mg.replace(/@(g|c)\.us$/i, "");
+          return cid === mg || cleanCid === cleanMg || cleanCid.includes(cleanMg) || cleanMg.includes(cleanCid);
+        });
       });
-      return { handled: false, reason: skipReason };
+
+      if (!matchesMonitored) {
+        const skipReason = `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`;
+        recordWebhookAuditLog({
+          source,
+          senderChatId,
+          senderName,
+          typeWebhook,
+          textSnippet,
+          handled: false,
+          reason: skipReason
+        });
+        return { handled: false, reason: skipReason };
+      }
     }
   }
 
@@ -987,13 +1165,13 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: skipReason };
   }
 
-  // 3. Resolve active shift and call date in Cairo
+  // 3. Resolve active shift and call date in Cairo using 8:00 AM hospital shift cutoff
+  // Calls occurring between 00:00 and 07:59:59 AM belong to the previous day's roster
   const now = new Date();
   const activeShifts = getCairoActiveShifts(now);
-  const cairoDate = getCairoDateString(now);
-  const targetCallDate = parseDoctorCallDate(parsed.callDate) || cairoDate;
+  const targetCallDate = resolveHospitalDutyDate(parsed.callDate, now);
 
-  console.log(`[DoctorCall] Received call for Room ${parsed.room}, Dept: "${parsed.departmentRaw}" -> "${parsed.canonicalDepartment}". Date: "${targetCallDate}". Active Cairo Shifts: [${activeShifts.join(", ")}]`);
+  console.log(`[DoctorCall] Received call for Room ${parsed.room}, Dept: "${parsed.departmentRaw}" -> "${parsed.canonicalDepartment}". Resolved Duty Date: "${targetCallDate}". Active Cairo Shifts: [${activeShifts.join(", ")}]`);
 
   // 4. Match checked-in doctors for this exact date from monthly roster
   const allCheckins = await getActiveCheckins(targetCallDate);
@@ -1323,8 +1501,7 @@ export async function previewCustomDoctorCall(params: {
   const { department: canonicalDepartment } = normalizeSpecialty(rawDept);
 
   const now = new Date();
-  const cairoDate = getCairoDateString(now);
-  const targetDate = parseDoctorCallDate(payload.date) || payload.date || cairoDate;
+  const targetDate = resolveHospitalDutyDate(payload.date, now);
   const activeShifts = getCairoActiveShifts(now);
 
   const allCheckins = await getActiveCheckins(targetDate);
