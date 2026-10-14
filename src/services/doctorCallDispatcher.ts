@@ -820,10 +820,20 @@ export async function processDoctorCallWebhook(params: {
   const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || "";
   const typeWebhook = rawBody.typeWebhook || rawBody.messageData?.typeMessage || "incomingMessage";
 
-  // Extract raw text from Green-API variations
+  // Fast skip for non-message notifications (delivery/read receipts, authorization state changes)
+  const nonMessageTypes = ["outgoingmessagestatus", "stateinstancechanged", "deviceinfo", "incomingcall", "outgoingcall"];
+  if (nonMessageTypes.includes(typeWebhook.toLowerCase())) {
+    return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
+  }
+
+  // Extract raw text from Green-API variations (including image/file captions & quoted messages)
   const messageText =
     rawBody.messageData?.textMessageData?.textMessage ||
     rawBody.messageData?.extendedTextMessageData?.text ||
+    rawBody.messageData?.fileMessageData?.caption ||
+    rawBody.messageData?.imageMessageData?.caption ||
+    rawBody.messageData?.caption ||
+    rawBody.messageData?.quotedMessage?.textMessage ||
     rawBody.messageData?.text ||
     rawBody.message ||
     "";
