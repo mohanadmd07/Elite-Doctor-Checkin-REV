@@ -4,6 +4,7 @@ import {
   parseDoctorCallMessage,
   formatDoctorCallAlert,
   isDuplicateMessage,
+  processDoctorCallWebhook,
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -183,5 +184,45 @@ describe('Deduplication Cache', () => {
     const id = 'msg_unique_12345';
     expect(isDuplicateMessage(id)).toBe(false);
     expect(isDuplicateMessage(id)).toBe(true);
+  });
+});
+
+describe('Flat Green-API Incoming Message Payload', () => {
+  it('successfully extracts and parses flat Green-API message payload', async () => {
+    const payload = {
+      type: "incoming",
+      idMessage: "3EB015F6FB16C1950B9F65_TEST",
+      timestamp: 1792002276,
+      typeMessage: "textMessage",
+      chatId: "120363345000178212@g.us",
+      textMessage: "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy Salama Elsayed\n\nDate: 14/10/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram   Assem\nBed: Bed 409",
+      senderId: "201103700026@c.us",
+      senderName: "Elite Hospital",
+      senderContactName: "Elite Hospital",
+      deletedMessageId: "",
+      editedMessageId: "",
+      isEdited: false,
+      isDeleted: false,
+      isRead: false
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async () => [
+        {
+          doctorId: "101",
+          doctorName: "Dr. Ahmed Mohamed",
+          department: "General Surgery",
+          shift: "Evening shift",
+          phoneNumber: "01012345678"
+        }
+      ]
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.room).toBe("409");
+    expect(result.callRecord?.department).toBe("General Surgery");
+    expect(result.callRecord?.patientName).toBe("مصطفي عبدالوهاب محمد خطابي");
+    expect(result.callRecord?.callerName).toBe("Ahmed Fathy Salama Elsayed");
   });
 });

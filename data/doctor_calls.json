@@ -1,1 +1,25 @@
-[]
+[
+  {
+    "id": "call_1792007406439_c9c98f",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-10-14T19:50:06.428Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب محمد خطابي",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram   Assem",
+    "callerName": "Ahmed Fathy Salama Elsayed",
+    "dispatchedDoctors": [
+      {
+        "name": "Dr. Ahmed Mohamed",
+        "phone": "",
+        "waPhone": "",
+        "shifts": []
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy Salama Elsayed\n\nDate: 14/10/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram   Assem\nBed: Bed 409"
+  }
+]

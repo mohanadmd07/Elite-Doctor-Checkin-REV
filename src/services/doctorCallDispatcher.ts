@@ -834,8 +834,8 @@ export async function processDoctorCallWebhook(params: {
   // 1. Extract message ID and check deduplication
   const idMessage = rawBody.idMessage || rawBody.messageData?.idMessage || "";
   const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || "").trim().toLowerCase();
-  const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || "";
-  const typeWebhook = rawBody.typeWebhook || rawBody.messageData?.typeMessage || "incomingMessage";
+  const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || rawBody.senderName || "";
+  const typeWebhook = rawBody.typeWebhook || rawBody.typeMessage || rawBody.messageData?.typeMessage || "incomingMessage";
 
   // Fast skip for non-message notifications (delivery/read receipts, authorization state changes)
   const nonMessageTypes = ["outgoingmessagestatus", "stateinstancechanged", "deviceinfo", "incomingcall", "outgoingcall"];
@@ -843,7 +843,7 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
-  // Extract raw text from Green-API variations (including image/file captions, quoted & edited messages)
+  // Extract raw text from Green-API variations (including flat payload, image/file captions, quoted & edited messages)
   const messageText =
     rawBody.messageData?.textMessageData?.textMessage ||
     rawBody.messageData?.extendedTextMessageData?.text ||
@@ -853,6 +853,9 @@ export async function processDoctorCallWebhook(params: {
     rawBody.messageData?.caption ||
     rawBody.messageData?.quotedMessage?.textMessage ||
     rawBody.messageData?.text ||
+    rawBody.textMessage ||
+    rawBody.text ||
+    rawBody.caption ||
     rawBody.message ||
     "";
 
