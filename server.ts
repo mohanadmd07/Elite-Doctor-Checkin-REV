@@ -19,7 +19,9 @@ import {
   sendTestDoctorCallAlert,
   isAutomationPaused,
   setAutomationPaused,
-  setGreenApiWebhookUrl
+  setGreenApiWebhookUrl,
+  pollGreenApiNotifications,
+  getRecentWebhookAuditLogs
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3338,6 +3340,33 @@ app.post(["/api/doctor-calls/simulate-call", "/doctor-calls/simulate-call"], asy
     res.json({ success: true, result });
   } catch (err: any) {
     console.error("Error simulating doctor call:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 9. Fetch Live Webhook & Dispatch Audit Logs (for real-time ingestion observability)
+app.get(["/api/doctor-calls/audit-logs", "/doctor-calls/audit-logs"], async (req, res) => {
+  try {
+    const logs = getRecentWebhookAuditLogs();
+    res.json({ success: true, count: logs.length, data: logs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 10. Manual / Background Green-API Notification Poller (Failsafe for when webhooks are blocked)
+app.post(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
+  try {
+    const pollResult = await pollGreenApiNotifications({
+      getActiveCheckins: async () => {
+        const raw = await readCheckInsRaw();
+        return raw.map(c => enrichCheckIn(c));
+      },
+      maxCount: 10
+    });
+    res.json({ success: true, ...pollResult });
+  } catch (err: any) {
+    console.error("Error polling Green-API notifications:", err);
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });

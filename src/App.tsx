@@ -304,6 +304,8 @@ export default function App() {
   const [isSimulatingCall, setIsSimulatingCall] = useState(false);
   const [isTogglingPause, setIsTogglingPause] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [isPollingQueue, setIsPollingQueue] = useState(false);
 
 
 
@@ -465,6 +467,49 @@ export default function App() {
       });
     } finally {
       setIsSimulatingCall(false);
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    try {
+      const res = await fetch("/api/doctor-calls/audit-logs");
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setAuditLogs(json.data);
+      }
+    } catch (_) {}
+  };
+
+  const handlePollQueue = async () => {
+    setIsPollingQueue(true);
+    try {
+      const res = await fetch("/api/doctor-calls/poll", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        if (json.polledCount > 0) {
+          setCallActionFeedback({
+            id: "poll_queue",
+            success: true,
+            message: `Fetched ${json.polledCount} notification(s) from Green-API queue (${json.handledCount} calls handled)!`
+          });
+          fetchDoctorCalls();
+        } else {
+          setCallActionFeedback({
+            id: "poll_queue",
+            success: true,
+            message: "Green-API queue is empty. No new pending messages."
+          });
+        }
+        fetchAuditLogs();
+      }
+    } catch (err: any) {
+      setCallActionFeedback({
+        id: "poll_queue",
+        success: false,
+        message: err?.message || "Failed to poll Green-API queue"
+      });
+    } finally {
+      setIsPollingQueue(false);
     }
   };
 
@@ -1218,8 +1263,18 @@ export default function App() {
 
     fetchDoctorCalls();
     fetchAutomationStatus();
-    const intervalId = setInterval(() => {
+    fetchAuditLogs();
+
+    const intervalId = setInterval(async () => {
       fetchDoctorCalls();
+      fetchAuditLogs();
+      try {
+        const res = await fetch("/api/doctor-calls/poll", { method: "POST" });
+        const json = await res.json();
+        if (json.success && json.handledCount > 0) {
+          fetchDoctorCalls();
+        }
+      } catch (_) {}
     }, 4000);
 
     return () => clearInterval(intervalId);
@@ -3391,6 +3446,7 @@ export default function App() {
                           onClick={() => {
                             setShowStatusModal(true);
                             fetchAutomationStatus();
+                            fetchAuditLogs();
                           }}
                           disabled={isCheckingAutomation}
                           className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -3398,6 +3454,17 @@ export default function App() {
                         >
                           <Activity className={`w-3.5 h-3.5 text-emerald-600 ${isCheckingAutomation ? "animate-spin" : ""}`} />
                           <span>Check Status</span>
+                        </button>
+
+                        {/* Fetch Pending Calls Button (Failsafe Poller) */}
+                        <button
+                          onClick={handlePollQueue}
+                          disabled={isPollingQueue}
+                          className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-lg border border-indigo-200 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                          title="Immediately poll Green-API for incoming messages"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isPollingQueue ? "animate-spin text-indigo-600" : ""}`} />
+                          <span>Fetch Pending</span>
                         </button>
 
                         {/* Send Test Message Button */}
@@ -3583,6 +3650,44 @@ export default function App() {
                               {automationStatus.statusMessage}
                             </div>
                           )}
+
+                          {/* Live Webhook & Polling Activity Stream */}
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                            <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                <span>Live Ingestion Events ({auditLogs.length})</span>
+                              </div>
+                              <button
+                                onClick={handlePollQueue}
+                                disabled={isPollingQueue}
+                                className="text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${isPollingQueue ? "animate-spin" : ""}`} />
+                                <span>Poll Now</span>
+                              </button>
+                            </div>
+                            {auditLogs.length === 0 ? (
+                              <div className="text-slate-400 italic text-[11px] py-1 bg-white p-2.5 rounded border border-slate-200 text-center">
+                                No incoming events recorded yet. Post a call in WhatsApp or click "Poll Now"!
+                              </div>
+                            ) : (
+                              <div className="max-h-36 overflow-y-auto space-y-1.5 font-mono text-[10px] pr-1">
+                                {auditLogs.slice(0, 10).map((log) => (
+                                  <div key={log.id} className="p-2 bg-white rounded border border-slate-200 space-y-0.5">
+                                    <div className="flex items-center justify-between font-bold">
+                                      <span className={log.handled ? "text-emerald-700" : "text-amber-700"}>
+                                        {log.handled ? `✅ ${log.status}` : "⚠️ Skipped"}
+                                      </span>
+                                      <span className="text-slate-400 font-normal">{log.displayTime} ({log.source})</span>
+                                    </div>
+                                    {log.textSnippet && <div className="text-slate-600 truncate font-sans text-[11px]">{log.textSnippet}</div>}
+                                    {log.reason && <div className="text-slate-500 font-sans italic text-[10px]">{log.reason}</div>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">

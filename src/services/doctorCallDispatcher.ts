@@ -80,6 +80,47 @@ export function isDuplicateMessage(messageId: string): boolean {
   return false;
 }
 
+// =========================================================================
+// REAL-TIME AUDIT LOGGING FOR INCOMING WEBHOOKS & POLLS
+// =========================================================================
+
+export interface WebhookAuditLog {
+  id: string;
+  timestamp: string; // ISO string
+  displayTime: string; // Cairo time
+  source: "webhook" | "poll" | "simulation";
+  senderChatId: string;
+  senderName?: string;
+  typeWebhook: string;
+  textSnippet: string;
+  handled: boolean;
+  status?: string;
+  reason?: string;
+  matchedDoctors?: string[];
+}
+
+const RECENT_WEBHOOK_LOGS: WebhookAuditLog[] = [];
+const MAX_AUDIT_LOGS = 25;
+
+export function recordWebhookAuditLog(log: Omit<WebhookAuditLog, "id" | "timestamp" | "displayTime">) {
+  const now = new Date();
+  const cairoTime = now.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo" });
+  const entry: WebhookAuditLog = {
+    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: now.toISOString(),
+    displayTime: cairoTime,
+    ...log
+  };
+  RECENT_WEBHOOK_LOGS.unshift(entry);
+  if (RECENT_WEBHOOK_LOGS.length > MAX_AUDIT_LOGS) {
+    RECENT_WEBHOOK_LOGS.pop();
+  }
+}
+
+export function getRecentWebhookAuditLogs(): WebhookAuditLog[] {
+  return [...RECENT_WEBHOOK_LOGS];
+}
+
 /**
  * Clean invisible unicode formatting characters common in WhatsApp and Arabic text
  */
@@ -102,9 +143,10 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
 
   // Flexible trigger: "Category: DoctorCall", "Category: Doctor Call", "Doctor_Call", or Arabic "استدعاء طبيب"
   const hasDoctorCall =
-    /category\s*:\s*doctor[\s_-]*call/i.test(messageText) ||
+    /category\s*[:：-]?\s*doctor[\s_-]*call/i.test(messageText) ||
     /doctor[\s_-]*call/i.test(messageText) ||
-    /طلب\s*استدعاء\s*طبيب/i.test(messageText);
+    /طلب\s*استدعاء\s*طبيب/i.test(messageText) ||
+    /استدعاء\s*طبيب/i.test(messageText);
 
   if (!hasDoctorCall) return null;
 
@@ -113,37 +155,37 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
     return m ? m[1].trim() : "";
   };
 
-  const category = getField(/category\s*:\s*([^\r\n]+)/i) || "DoctorCall";
+  const category = getField(/(?:category|الفئة)\s*[:：-]\s*([^\r\n]+)/i) || "DoctorCall";
   const departmentRaw =
-    getField(/(?:group|specialty|speciality|department|القسم|التخصص)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:group|specialty|speciality|department|القسم|قسم|التخصص)\s*[:：-]\s*([^\r\n]+)/i);
   const callerName =
-    getField(/(?:by|caller|from|بواسطة|التمريض)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:by|caller|from|بواسطة|التمريض|ممرض|ممرضة)\s*[:：-]\s*([^\r\n]+)/i);
   const callDate =
-    getField(/(?:date|التاريخ)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:date|التاريخ)\s*[:：-]\s*([^\r\n]+)/i);
   const location =
-    getField(/(?:location|المكان)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:location|المكان|الدور)\s*[:：-]\s*([^\r\n]+)/i);
 
   // Extract room from Sub.Location or Bed or Room
-  let room = getField(/(?:sub\.?\s*location|الغرفة|غرفة)\s*:\s*(?:room\s*)?([^\r\n]+)/i);
+  let room = getField(/(?:sub\.?\s*location|الغرفة|غرفة)\s*[:：-]\s*(?:room\s*)?([^\r\n]+)/i);
   if (!room) {
-    room = getField(/room\s*:\s*([^\r\n]+)/i);
+    room = getField(/(?:room|غرفة)\s*[:：-]\s*([^\r\n]+)/i);
   }
   if (!room) {
-    room = getField(/bed\s*:\s*(?:bed\s*)?([^\r\n]+)/i);
+    room = getField(/(?:bed|سرير)\s*[:：-]\s*(?:bed\s*)?([^\r\n]+)/i);
   }
   if (room) {
-    room = room.replace(/^(?:room|غرفة)\s*/i, "").trim();
+    room = room.replace(/^(?:room|غرفة|bed|سرير)\s*/i, "").trim();
   } else {
     room = "N/A";
   }
 
   const patientBarcode =
-    getField(/(?:patient\s*barcode|barcode|باركود)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:patient\s*barcode|barcode|باركود)\s*[:：-]\s*([^\r\n]+)/i);
   const patientName =
-    getField(/(?:patient\s*name|patient|المريض|اسم\s*المريض)\s*:\s*([^\r\n]+)/i);
+    getField(/(?:patient\s*name|patient|المريض|اسم\s*المريض)\s*[:：-]\s*([^\r\n]+)/i);
   const admittingPhysician =
-    getField(/(?:admitting\s*phys(?:ician)?|physician|طبيب\s*الدخول)\s*:\s*([^\r\n]+)/i);
-  const bed = getField(/bed\s*:\s*([^\r\n]+)/i);
+    getField(/(?:admitting\s*phys(?:ician)?|physician|طبيب\s*الدخول)\s*[:：-]\s*([^\r\n]+)/i);
+  const bed = getField(/(?:bed|سرير)\s*[:：-]\s*([^\r\n]+)/i);
 
   // Normalize Department to canonical hospital specialty
   const { department: canonicalDepartment } = normalizeSpecialty(departmentRaw);
@@ -752,43 +794,31 @@ export async function sendTestDoctorCallAlert(): Promise<{
 export async function processDoctorCallWebhook(params: {
   rawBody: any;
   getActiveCheckins: () => Promise<any[]>;
+  source?: "webhook" | "poll" | "simulation";
 }): Promise<{
   handled: boolean;
   reason?: string;
   callRecord?: DoctorCallRecord;
 }> {
-  const { rawBody, getActiveCheckins } = params;
+  const { rawBody, getActiveCheckins, source = "webhook" } = params;
 
   if (!rawBody || typeof rawBody !== "object") {
+    recordWebhookAuditLog({
+      source,
+      senderChatId: "unknown",
+      typeWebhook: "invalid",
+      textSnippet: "",
+      handled: false,
+      reason: "Empty or invalid request body"
+    });
     return { handled: false, reason: "Empty or invalid body" };
   }
 
   // 1. Extract message ID and check deduplication
   const idMessage = rawBody.idMessage || rawBody.messageData?.idMessage || "";
-  if (idMessage && isDuplicateMessage(idMessage)) {
-    return { handled: false, reason: "Duplicate message ID (already processed within TTL)" };
-  }
-
-  // Check source group if specified (supports comma-separated list of monitored groups)
-  const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
   const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || "").trim().toLowerCase();
-
-  if (monitoredGroupRaw && senderChatId) {
-    const monitoredGroups = monitoredGroupRaw
-      .split(",")
-      .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
-      .filter(Boolean)
-      .map(g => (g.includes("@") ? g : `${g}@g.us`));
-
-    const normalizedSender = senderChatId.includes("@") ? senderChatId : `${senderChatId}@g.us`;
-
-    if (monitoredGroups.length > 0 && !monitoredGroups.includes(normalizedSender)) {
-      return {
-        handled: false,
-        reason: `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`
-      };
-    }
-  }
+  const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || "";
+  const typeWebhook = rawBody.typeWebhook || rawBody.messageData?.typeMessage || "incomingMessage";
 
   // Extract raw text from Green-API variations
   const messageText =
@@ -798,14 +828,75 @@ export async function processDoctorCallWebhook(params: {
     rawBody.message ||
     "";
 
+  const textSnippet = (messageText || "").slice(0, 120);
+
+  if (idMessage && isDuplicateMessage(idMessage)) {
+    recordWebhookAuditLog({
+      source,
+      senderChatId,
+      senderName,
+      typeWebhook,
+      textSnippet,
+      handled: false,
+      reason: "Duplicate message ID (already processed within TTL)"
+    });
+    return { handled: false, reason: "Duplicate message ID (already processed within TTL)" };
+  }
+
+  // Check source group if specified (supports comma-separated list of monitored groups)
+  const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
+
+  if (monitoredGroupRaw && senderChatId && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
+    const monitoredGroups = monitoredGroupRaw
+      .split(",")
+      .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
+      .filter(Boolean)
+      .map(g => (g.includes("@") ? g : `${g}@g.us`));
+
+    const normalizedSender = senderChatId.includes("@") ? senderChatId : `${senderChatId}@g.us`;
+
+    if (monitoredGroups.length > 0 && !monitoredGroups.includes(normalizedSender)) {
+      const skipReason = `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`;
+      recordWebhookAuditLog({
+        source,
+        senderChatId,
+        senderName,
+        typeWebhook,
+        textSnippet,
+        handled: false,
+        reason: skipReason
+      });
+      return { handled: false, reason: skipReason };
+    }
+  }
+
   if (!messageText) {
+    recordWebhookAuditLog({
+      source,
+      senderChatId,
+      senderName,
+      typeWebhook,
+      textSnippet: "",
+      handled: false,
+      reason: "No text content found in webhook payload"
+    });
     return { handled: false, reason: "No text content found in webhook payload" };
   }
 
   // 2. Parse DoctorCall format
   const parsed = parseDoctorCallMessage(messageText);
   if (!parsed) {
-    return { handled: false, reason: "Message does not match DoctorCall category" };
+    const skipReason = "Message does not match DoctorCall category pattern";
+    recordWebhookAuditLog({
+      source,
+      senderChatId,
+      senderName,
+      typeWebhook,
+      textSnippet,
+      handled: false,
+      reason: skipReason
+    });
+    return { handled: false, reason: skipReason };
   }
 
   // 3. Resolve active shift in Cairo
@@ -857,20 +948,24 @@ export async function processDoctorCallWebhook(params: {
 
   const callId = `call_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
   let status: "dispatched" | "no_doctor_present" | "failed" | "paused" = "no_doctor_present";
+  let dispatchReason = "";
 
   // 5. Check if automation is paused by admin
   if (isAutomationPaused()) {
     console.log(`[DoctorCall] ⏸️ Automation is currently PAUSED by admin. Recording call silently without dispatch.`);
     status = "paused";
+    dispatchReason = "Automation paused by admin in settings";
   } else if (matchingDoctors.length === 0) {
     console.warn(`[DoctorCall] ⚠️ No doctor checked in for department "${parsed.canonicalDepartment}". Logged silently.`);
     status = "no_doctor_present";
+    dispatchReason = `No doctor registered/checked-in today for ${parsed.canonicalDepartment}`;
   } else {
     // 6. Format alert and dispatch to target group
     const targetGroupId = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim();
     if (!targetGroupId) {
       console.error("[DoctorCall] Target WhatsApp group ID not configured in environment variables.");
       status = "failed";
+      dispatchReason = "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured";
     } else {
       const alertText = formatDoctorCallAlert({
         doctors: matchingDoctors,
@@ -888,12 +983,27 @@ export async function processDoctorCallWebhook(params: {
       if (dispatchRes.success) {
         console.log(`[DoctorCall] ✅ Alert dispatched successfully (ID: ${dispatchRes.idMessage})`);
         status = "dispatched";
+        dispatchReason = `Alert delivered to ${matchingDoctors.map(d => d.name).join(", ")}`;
       } else {
         console.error(`[DoctorCall] ❌ Failed to dispatch alert: ${dispatchRes.error}`);
         status = "failed";
+        dispatchReason = `Green-API dispatch failed: ${dispatchRes.error}`;
       }
     }
   }
+
+  // Record audit log
+  recordWebhookAuditLog({
+    source,
+    senderChatId,
+    senderName,
+    typeWebhook,
+    textSnippet,
+    handled: true,
+    status,
+    reason: dispatchReason,
+    matchedDoctors: matchingDoctors.map(d => d.name)
+  });
 
   // 7. Save record
   const record: DoctorCallRecord = {
@@ -914,6 +1024,68 @@ export async function processDoctorCallWebhook(params: {
 
   await saveDoctorCallRecord(record);
   return { handled: true, callRecord: record };
+}
+
+/**
+ * Polls Green-API receiveNotification queue as a failsafe when webhooks cannot reach the server
+ */
+export async function pollGreenApiNotifications(params: {
+  getActiveCheckins: () => Promise<any[]>;
+  maxCount?: number;
+}): Promise<{
+  polledCount: number;
+  handledCount: number;
+  results: any[];
+}> {
+  const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
+  const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim();
+
+  if (!idInstance || !apiTokenInstance) {
+    return { polledCount: 0, handledCount: 0, results: [] };
+  }
+
+  const { getActiveCheckins, maxCount = 5 } = params;
+  let polled = 0;
+  let handled = 0;
+  const results: any[] = [];
+
+  for (let i = 0; i < maxCount; i++) {
+    try {
+      const receiveUrl = `https://api.green-api.com/waInstance${idInstance}/receiveNotification/${apiTokenInstance}`;
+      const res = await fetch(receiveUrl);
+      const data: any = await res.json().catch(() => null);
+
+      if (!data || !data.receiptId) {
+        break; // Queue is empty
+      }
+
+      polled++;
+      const receiptId = data.receiptId;
+      const rawBody = data.body;
+
+      console.log(`[Green-API Poller] Found queued notification (Receipt ID: ${receiptId}, type: ${rawBody?.typeWebhook})`);
+
+      const processResult = await processDoctorCallWebhook({
+        rawBody,
+        getActiveCheckins,
+        source: "poll"
+      });
+
+      results.push({ receiptId, ...processResult });
+      if (processResult.handled) {
+        handled++;
+      }
+
+      // Delete receipt from Green-API queue so it won't be delivered again
+      const deleteUrl = `https://api.green-api.com/waInstance${idInstance}/deleteNotification/${apiTokenInstance}/${receiptId}`;
+      await fetch(deleteUrl, { method: "DELETE" }).catch(() => {});
+    } catch (err: any) {
+      console.warn("[Green-API Poller] Error polling notification:", err.message);
+      break;
+    }
+  }
+
+  return { polledCount: polled, handledCount: handled, results };
 }
 
 /**
