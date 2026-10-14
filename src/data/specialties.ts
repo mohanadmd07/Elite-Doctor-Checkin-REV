@@ -42,6 +42,18 @@ export const NEPHROLOGY_DOCTOR_IDS = new Set([
 ]);
 
 /**
+ * Strips Arabic diacritics and normalizes letter variations (أ/إ/آ -> ا, ة -> ه, ى/ئ -> ي)
+ */
+function cleanArabicSpecialty(text: string): string {
+  return text
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[ىئ]/g, "ي")
+    .replace(/[\u064B-\u065F]/g, "")
+    .trim();
+}
+
+/**
  * Normalizes any legacy string, typo, or Arabic alias into a canonical specialty
  * or flags it as inactive/filtered out.
  */
@@ -51,6 +63,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // Strip non-breaking spaces and trim
   const clean = rawDept.replace(/\u00A0/g, " ").trim();
   const lower = clean.toLowerCase();
+  const aNorm = cleanArabicSpecialty(lower);
 
   // =========================================================================
   // 1. FILTERED OUT / DEACTIVATED DEPARTMENTS (Non-inpatient / Allied / Administrative)
@@ -60,7 +73,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("orthodontist") ||
     lower.includes("dermatolog") ||
     lower.includes("cosmotolog") ||
-    lower.includes("جلدية") ||
+    aNorm.includes("جلديه") ||
     lower.includes("hair transplant") ||
     lower.includes("psoriasis") ||
     lower.includes("ophthalmolog") ||
@@ -68,7 +81,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("neuropsychiatr") ||
     lower.includes("pediatric cardiology") ||
     lower.includes("laboratory") ||
-    lower.includes("معمل") ||
+    aNorm.includes("معمل") ||
     lower.includes("nurse") ||
     lower.includes("medical records") ||
     lower.includes("speciality") ||
@@ -88,44 +101,144 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     return { active: false, department: clean };
   }
 
+  // Fast path: Exact match with canonical specialties
+  for (const canonical of CANONICAL_SPECIALTIES) {
+    if (lower === canonical.toLowerCase()) {
+      return { active: true, department: canonical };
+    }
+  }
+
   // =========================================================================
   // 2. ACTIVE CANONICAL SPECIALTIES
   // =========================================================================
 
-  // Clinical Pharmacy (Independent Specialty)
+  // Specialized Surgical Disciplines (Must be evaluated BEFORE General Surgery)
+  // Cardiothoracic Surgery
   if (
-    lower.includes("clinical pharmacy") ||
-    lower.includes("pharmac") ||
-    clean === "Clinical Pharmacy" ||
-    clean === "Pharmacist"
+    lower.includes("cardiothoracic") ||
+    aNorm.includes("قلب وصدر") ||
+    aNorm.includes("جراحه قلب")
   ) {
-    return { active: true, department: "Clinical Pharmacy" };
+    return { active: true, department: "Cardiothoracic Surgery" };
   }
 
-  // OPD Coordinator (Independent Specialty)
+  // Neurosurgery
   if (
-    lower.includes("opd coordinator") ||
-    clean === "OPD Coordinator"
+    lower.includes("neurosurgery") ||
+    lower.includes("spine surgeon") ||
+    aNorm.includes("مخ") ||
+    aNorm.includes("اعصاب")
   ) {
-    return { active: true, department: "OPD Coordinator" };
+    return { active: true, department: "Neurosurgery" };
   }
 
-  // Home Care (Independent Specialty - Home Visits & Care)
+  // Orthopedic Surgery
   if (
-    lower.includes("home visit") ||
-    lower.includes("home care") ||
-    lower.includes("زيارات منزلية") ||
-    lower.includes("رعاية منزلية") ||
-    clean === "Home Visit" ||
-    clean === "Home Visits" ||
-    clean === "Home Care"
+    lower.includes("orthopedic") ||
+    lower.includes("orthopedics") ||
+    aNorm.includes("عظام")
   ) {
-    return { active: true, department: "Home Care" };
+    return { active: true, department: "Orthopedic Surgery" };
   }
 
-  // Emergency Medicine (Independent Specialty)
+  // Urology
+  if (
+    lower.includes("urology") ||
+    aNorm.includes("مسالك")
+  ) {
+    return { active: true, department: "Urology" };
+  }
+
+  // General Surgery (Includes Vascular Surgery, iVein, Bariatrics, GIT Surgery, Pediatric Surgery, Maxillofacial, etc.)
+  if (
+    lower.includes("general surgery") ||
+    aNorm.includes("جراح") ||
+    clean === "GS Doctor" ||
+    clean === "General" ||
+    lower.includes("vascular") ||
+    aNorm.includes("اوعيه") ||
+    clean === "iVein" ||
+    lower.includes("git surgery") ||
+    lower.includes("git and pancreas") ||
+    lower.includes("bariatric") ||
+    aNorm.includes("سمنه") ||
+    lower.includes("pediatric surgery") ||
+    lower.includes("pediatric oncology surgery") ||
+    lower.includes("endocrine surgery") ||
+    lower.includes("colorectal") ||
+    lower.includes("breast surgery") ||
+    lower.includes("plastic surgery") ||
+    aNorm.includes("تجميل") ||
+    lower.includes("hand and microsurgery") ||
+    lower.includes("maxillofacial")
+  ) {
+    return { active: true, department: "General Surgery" };
+  }
+
+  // Cardiology
+  if (
+    lower.includes("cardiology") ||
+    aNorm.includes("قلب") ||
+    lower.includes("structural heart") ||
+    lower.includes("heart failure") ||
+    lower.includes("cardiac") ||
+    lower.includes("holter") ||
+    lower.includes("echo") ||
+    aNorm.includes("قسطره")
+  ) {
+    return { active: true, department: "Cardiology" };
+  }
+
+  // Internal Medicine (Pulmonology, Hematology, Endocrinology, Rheumatology, Hepatology, Geriatrics, Gastroenterology)
+  if (
+    lower.includes("internal medicine") ||
+    aNorm.includes("باطن") ||
+    lower.includes("pulmonology") ||
+    lower.includes("pulmonary") ||
+    aNorm.includes("صدر") ||
+    lower.includes("hematology") ||
+    lower.includes("haematologist") ||
+    aNorm.includes("دم") ||
+    lower.includes("endocrinolog") ||
+    lower.includes("diabetes") ||
+    aNorm.includes("سكر") ||
+    aNorm.includes("غدد") ||
+    lower.includes("thyroid") ||
+    lower.includes("pituitary") ||
+    aNorm.includes("الغده النخاميه") ||
+    lower.includes("rheumatolog") ||
+    aNorm.includes("روماتيزم") ||
+    lower.includes("hepatolog") ||
+    lower.includes("hepatica") ||
+    aNorm.includes("كبد") ||
+    lower.includes("liver transplantation") ||
+    lower.includes("gastroenterology") ||
+    aNorm.includes("جهاز هضمي") ||
+    lower.includes("infectious disease") ||
+    lower.includes("immunology") ||
+    aNorm.includes("مناعه")
+  ) {
+    return { active: true, department: "Internal Medicine" };
+  }
+
+  // ICU (Critical Care, SICU)
+  if (
+    clean === "ICU" ||
+    clean.startsWith("ICU") ||
+    lower.includes("critical care") ||
+    aNorm.includes("حالات حرجه") ||
+    aNorm.includes("عنايه") ||
+    aNorm.includes("رعايه") ||
+    lower.includes("sicu")
+  ) {
+    return { active: true, department: "ICU" };
+  }
+
+  // Emergency Medicine
   if (
     lower.includes("emerg") ||
+    lower.includes("طوار") ||
+    aNorm.includes("طوار") ||
     clean === "Emergency" ||
     clean === "Emergency Medicine"
   ) {
@@ -139,9 +252,8 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("kidney") ||
     lower.includes("renal") ||
     lower.includes("dialysis") ||
-    lower.includes("غسيل كلوي") ||
-    lower.includes("كلي") ||
-    lower.includes("كلى") ||
+    aNorm.includes("غسيل كلوي") ||
+    aNorm.includes("كلي") ||
     clean === "طبيب باطن وكلي" ||
     clean === "طبيب باطن وكلى"
   ) {
@@ -149,123 +261,28 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   }
 
   // Nutrition (Independent Specialty)
-  if (lower.includes("nutrition")) {
+  if (
+    lower.includes("nutrition") ||
+    aNorm.includes("تغذي")
+  ) {
     return { active: true, department: "Nutrition" };
-  }
-
-  // General Surgery (Includes Vascular Surgery, iVein, Bariatrics, GIT Surgery, Pediatric Surgery, Maxillofacial, etc.)
-  if (
-    lower.includes("general surgery") ||
-    lower.includes("الجراحة العامة") ||
-    clean === "GS Doctor" ||
-    clean === "General" ||
-    lower.includes("vascular") ||
-    clean === "iVein" ||
-    lower.includes("git surgery") ||
-    lower.includes("git and pancreas") ||
-    lower.includes("bariatric") ||
-    lower.includes("pediatric surgery") ||
-    lower.includes("pediatric oncology surgery") ||
-    lower.includes("endocrine surgery") ||
-    lower.includes("colorectal") ||
-    lower.includes("breast surgery") ||
-    lower.includes("plastic surgery") ||
-    lower.includes("hand and microsurgery") ||
-    lower.includes("maxillofacial")
-  ) {
-    return { active: true, department: "General Surgery" };
-  }
-
-  // Internal Medicine (Pulmonology, Hematology, Endocrinology, Rheumatology, Hepatology, Geriatrics)
-  if (
-    lower.includes("internal medicine") ||
-    lower.includes("باطن") ||
-    lower.includes("pulmonology") ||
-    lower.includes("pulmonary") ||
-    lower.includes("hematology") ||
-    lower.includes("haematologist") ||
-    lower.includes("endocrinolog") ||
-    lower.includes("diabetes") ||
-    lower.includes("thyroid") ||
-    lower.includes("pituitary") ||
-    lower.includes("الغدة النخامية") ||
-    lower.includes("rheumatolog") ||
-    lower.includes("hepatolog") ||
-    lower.includes("hepatica") ||
-    lower.includes("liver transplantation") ||
-    lower.includes("gastroenterology") ||
-    lower.includes("infectious disease") ||
-    lower.includes("immunology")
-  ) {
-    return { active: true, department: "Internal Medicine" };
-  }
-
-  // ICU (Critical Care, SICU)
-  if (
-    clean === "ICU" ||
-    clean.startsWith("ICU") ||
-    lower.includes("critical care") ||
-    lower.includes("حالات حرجة") ||
-    lower.includes("sicu")
-  ) {
-    return { active: true, department: "ICU" };
-  }
-
-  // Cardiology
-  if (
-    lower.includes("cardiology") ||
-    lower.includes("القلب") ||
-    lower.includes("قلب") ||
-    lower.includes("structural heart") ||
-    lower.includes("heart failure") ||
-    lower.includes("cardiac rehabilitation") ||
-    lower.includes("holter") ||
-    lower.includes("echo")
-  ) {
-    return { active: true, department: "Cardiology" };
   }
 
   // Pediatrics
   if (
     lower.includes("pediatric") ||
-    lower.includes("اطفال")
+    aNorm.includes("اطفال") ||
+    aNorm.includes("مبتسرين") ||
+    aNorm.includes("حديثي ولاده")
   ) {
     return { active: true, department: "Pediatrics" };
   }
 
-  // Cardiothoracic Surgery
-  if (lower.includes("cardiothoracic")) {
-    return { active: true, department: "Cardiothoracic Surgery" };
-  }
-
-  // Urology
-  if (lower.includes("urology") || lower.includes("مسالك")) {
-    return { active: true, department: "Urology" };
-  }
-
-  // Orthopedic Surgery (unifying Orthopedics)
-  if (
-    lower.includes("orthopedic") ||
-    lower.includes("orthopedics") ||
-    lower.includes("عظام")
-  ) {
-    return { active: true, department: "Orthopedic Surgery" };
-  }
-
-  // Neurosurgery
-  if (
-    lower.includes("neurosurgery") ||
-    lower.includes("spine surgeon") ||
-    lower.includes("مخ") ||
-    lower.includes("جراحة المخ") ||
-    lower.includes("اعصاب") ||
-    lower.includes("أعصاب")
-  ) {
-    return { active: true, department: "Neurosurgery" };
-  }
-
   // Oncology
-  if (lower.includes("oncology") || lower.includes("اورام")) {
+  if (
+    lower.includes("oncology") ||
+    aNorm.includes("اورام")
+  ) {
     return { active: true, department: "Oncology" };
   }
 
@@ -275,7 +292,10 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes(" ent") ||
     lower.includes("ear") ||
     lower.includes("audiometry") ||
-    lower.includes("swallowing")
+    lower.includes("swallowing") ||
+    aNorm.includes("انف") ||
+    aNorm.includes("اذن") ||
+    aNorm.includes("حنجره")
   ) {
     return { active: true, department: "ENT" };
   }
@@ -284,7 +304,8 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   if (
     lower.includes("obstetrics") ||
     lower.includes("gynecology") ||
-    lower.includes("نساء") ||
+    aNorm.includes("نساء") ||
+    aNorm.includes("توليد") ||
     clean === "4D" ||
     lower.includes("breast feeding")
   ) {
@@ -303,7 +324,10 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("mri") ||
     clean === "U/S" ||
     lower.includes("ultrasound") ||
-    lower.includes("rad doctor")
+    lower.includes("rad doctor") ||
+    aNorm.includes("اشعه") ||
+    aNorm.includes("سونار") ||
+    aNorm.includes("رنين")
   ) {
     return { active: true, department: "Radiology" };
   }
@@ -313,7 +337,7 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("physiotherapy") ||
     lower.includes("physiotherpy") ||
     lower.includes("physical medicine") ||
-    lower.includes("علاج طبيعي") ||
+    aNorm.includes("علاج طبيعي") ||
     lower.includes("low back pain") ||
     lower.includes("prp injection")
   ) {
@@ -324,9 +348,42 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   if (
     lower.includes("anesthesia") ||
     lower.includes("pain therapy") ||
-    lower.includes("تخدير")
+    aNorm.includes("تخدير") ||
+    aNorm.includes("علاج الالم")
   ) {
     return { active: true, department: "Anesthesiology & Pain Therapy" };
+  }
+
+  // Clinical Pharmacy (Independent Specialty)
+  if (
+    lower.includes("clinical pharmacy") ||
+    lower.includes("pharmac") ||
+    aNorm.includes("صيدل") ||
+    clean === "Clinical Pharmacy" ||
+    clean === "Pharmacist"
+  ) {
+    return { active: true, department: "Clinical Pharmacy" };
+  }
+
+  // OPD Coordinator (Independent Specialty)
+  if (
+    lower.includes("opd coordinator") ||
+    clean === "OPD Coordinator"
+  ) {
+    return { active: true, department: "OPD Coordinator" };
+  }
+
+  // Home Care (Independent Specialty - Home Visits & Care)
+  if (
+    lower.includes("home visit") ||
+    lower.includes("home care") ||
+    aNorm.includes("زيارات منزليه") ||
+    aNorm.includes("رعايه منزليه") ||
+    clean === "Home Visit" ||
+    clean === "Home Visits" ||
+    clean === "Home Care"
+  ) {
+    return { active: true, department: "Home Care" };
   }
 
   // Default fallback

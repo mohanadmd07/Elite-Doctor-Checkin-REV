@@ -31,6 +31,7 @@ export interface ParsedDoctorCall {
   patientName?: string;
   admittingPhysician?: string;
   bed?: string;
+  notes?: string;
   rawMessage: string;
 }
 
@@ -56,6 +57,7 @@ export interface DoctorCallRecord {
   callerName: string;
   dispatchedDoctors: DispatchedDoctorInfo[];
   status: "dispatched" | "no_doctor_present" | "failed" | "paused";
+  notes?: string;
   rawMessage: string;
 }
 
@@ -187,6 +189,16 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
     getField(/(?:admitting\s*phys(?:ician)?|physician|طبيب\s*الدخول)\s*[:：-]\s*([^\r\n]+)/i);
   const bed = getField(/(?:bed|سرير)\s*[:：-]\s*([^\r\n]+)/i);
 
+  // Extract trailing notes / clinical request reason (e.g. "المرور على الحالة")
+  let notes = "";
+  const bedMatch = messageText.match(/(?:bed|سرير)\s*[:：-]\s*[^\r\n]+/i);
+  if (bedMatch && bedMatch.index !== undefined) {
+    const afterBed = messageText.slice(bedMatch.index + bedMatch[0].length).trim();
+    if (afterBed) {
+      notes = afterBed;
+    }
+  }
+
   // Normalize Department to canonical hospital specialty
   const { department: canonicalDepartment } = normalizeSpecialty(departmentRaw);
 
@@ -202,6 +214,7 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
     patientName,
     admittingPhysician,
     bed,
+    notes,
     rawMessage: rawMessageText
   };
 }
@@ -312,10 +325,12 @@ export function formatDoctorCallAlert(params: {
   doctors: DispatchedDoctorInfo[];
   specialty: string;
   room: string;
+  notes?: string;
   isOffShiftCoverage?: boolean;
 }): string {
-  const { doctors, specialty, room, isOffShiftCoverage } = params;
+  const { doctors, specialty, room, notes, isOffShiftCoverage } = params;
   const coverageNote = isOffShiftCoverage ? ` _(On-duty coverage)_` : "";
+  const notesLine = notes ? `📝 *Notes:* ${notes}\n` : "";
 
   if (doctors.length === 1) {
     const doc = doctors[0];
@@ -327,7 +342,8 @@ export function formatDoctorCallAlert(params: {
       `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*${coverageNote}\n\n` +
       `📍 *Location:* Room *${room}*\n` +
       `🩺 *Specialty:* ${specialty}\n` +
-      `📞 *Phone:* ${phoneDisplay}\n\n` +
+      `📞 *Phone:* ${phoneDisplay}\n` +
+      notesLine + `\n` +
       `⚡ _Please attend to the patient promptly._`
     );
   }
@@ -341,7 +357,8 @@ export function formatDoctorCallAlert(params: {
     `👨‍⚕️ ${mentionsLine}${coverageNote}\n\n` +
     `📍 *Location:* Room *${room}*\n` +
     `🩺 *Specialty:* ${specialty}\n` +
-    `📞 *Phones:* ${phonesLine}\n\n` +
+    `📞 *Phones:* ${phonesLine}\n` +
+    notesLine + `\n` +
     `⚡ _Please attend to the patient promptly._`
   );
 }
@@ -981,6 +998,7 @@ export async function processDoctorCallWebhook(params: {
         doctors: matchingDoctors,
         specialty: parsed.canonicalDepartment,
         room: parsed.room,
+        notes: parsed.notes,
         isOffShiftCoverage: usedShiftFallback
       });
 
@@ -1029,6 +1047,7 @@ export async function processDoctorCallWebhook(params: {
     callerName: parsed.callerName || "N/A",
     dispatchedDoctors: matchingDoctors,
     status,
+    notes: parsed.notes,
     rawMessage: parsed.rawMessage
   };
 
@@ -1176,6 +1195,7 @@ export async function reDispatchDoctorCall(params: {
     doctors: matchingDoctors,
     specialty: target.department,
     room: target.room,
+    notes: target.notes,
     isOffShiftCoverage: usedShiftFallback
   });
 

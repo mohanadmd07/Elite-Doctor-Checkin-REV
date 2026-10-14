@@ -57,6 +57,75 @@ describe('Doctor Call Message Parsing', () => {
     expect(parsed?.patientName).toBe('Mohamed Ali');
     expect(parsed?.patientBarcode).toBe('987654321');
   });
+
+  it('parses real hospital message 1 (General Surgery - Room 409)', () => {
+    const msg = `Type: Request
+
+Category: DoctorCall
+
+Group: الجراحة العامة
+
+By: Ahmed Fathy Salama Elsayed
+
+Date: 14/10/2026 9:23:12 م
+
+Location: Elite 4th Floor - Elite
+
+Sub.Location: Room 409
+
+
+Patient Barcode: 0000263656
+Patient Name: مصطفي عبدالوهاب محمد خطابي
+Admitting Phys: Akram   Assem
+Bed: Bed 409`;
+
+    const parsed = parseDoctorCallMessage(msg);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.category).toBe('DoctorCall');
+    expect(parsed?.departmentRaw).toBe('الجراحة العامة');
+    expect(parsed?.canonicalDepartment).toBe('General Surgery');
+    expect(parsed?.room).toBe('409');
+    expect(parsed?.callerName).toBe('Ahmed Fathy Salama Elsayed');
+    expect(parsed?.patientName).toBe('مصطفي عبدالوهاب محمد خطابي');
+    expect(parsed?.patientBarcode).toBe('0000263656');
+    expect(parsed?.admittingPhysician).toBe('Akram   Assem');
+    expect(parsed?.bed).toBe('Bed 409');
+  });
+
+  it('parses real hospital message 2 (Obstetrics & Gynecology - Room 302 with notes)', () => {
+    const msg = `Type: Request
+
+Category: DoctorCall
+
+Group:  النساء وتوليد
+
+By: Hadeer Ahmed Arafa Shabaan
+
+Date: 10/14/2026, 7:16:39 PM
+
+Location: Elite 3rd Floor - Elite
+
+Sub.Location: Room 302
+
+
+Patient Barcode: 0000085801
+Patient Name: حنان مصطفى احمد محمد
+Admitting Phys: Mahmoud Elsayed Hanafy Mliss
+Bed: Bed 302
+
+المرور على الحالة`;
+
+    const parsed = parseDoctorCallMessage(msg);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.category).toBe('DoctorCall');
+    expect(parsed?.departmentRaw).toBe('النساء وتوليد');
+    expect(parsed?.canonicalDepartment).toBe('Obstetrics and gynecology');
+    expect(parsed?.room).toBe('302');
+    expect(parsed?.callerName).toBe('Hadeer Ahmed Arafa Shabaan');
+    expect(parsed?.patientName).toBe('حنان مصطفى احمد محمد');
+    expect(parsed?.patientBarcode).toBe('0000085801');
+    expect(parsed?.notes).toBe('المرور على الحالة');
+  });
 });
 
 describe('Doctor Call Alert Formatting', () => {
