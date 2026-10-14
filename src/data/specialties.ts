@@ -389,3 +389,34 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // Default fallback
   return { active: false, department: clean };
 }
+
+export interface SpecialtyOption {
+  value: string;
+  labelEn: string;
+  labelAr: string;
+}
+
+export const SPECIALTY_OPTIONS: SpecialtyOption[] = [
+  { value: "General Surgery", labelEn: "General Surgery", labelAr: "الجراحة العامة" },
+  { value: "Internal Medicine", labelEn: "Internal Medicine", labelAr: "الباطنة العامة" },
+  { value: "ICU", labelEn: "ICU (Intensive Care)", labelAr: "العناية المركزة" },
+  { value: "Emergency Medicine", labelEn: "Emergency Medicine", labelAr: "طب الطوارئ" },
+  { value: "Cardiology", labelEn: "Cardiology", labelAr: "القلب والأوعية الدموية" },
+  { value: "Pediatrics", labelEn: "Pediatrics & Neonatology", labelAr: "الأطفال والمبتسرين" },
+  { value: "Nephrology", labelEn: "Nephrology & Dialysis", labelAr: "أمراض الكلى والغسيل الكلوي" },
+  { value: "Obstetrics and gynecology", labelEn: "Obstetrics & Gynecology", labelAr: "النساء والتوليد" },
+  { value: "Orthopedic Surgery", labelEn: "Orthopedic Surgery", labelAr: "جراحة العظام" },
+  { value: "Neurosurgery", labelEn: "Neurosurgery & Spine", labelAr: "جراحة المخ والأعصاب والعمود الفقري" },
+  { value: "Urology", labelEn: "Urology Surgery", labelAr: "جراحة المسالك البولية" },
+  { value: "Cardiothoracic Surgery", labelEn: "Cardiothoracic Surgery", labelAr: "جراحة القلب والصدر" },
+  { value: "ENT", labelEn: "ENT (Ear, Nose & Throat)", labelAr: "الأنف والأذن والحنجرة" },
+  { value: "Oncology", labelEn: "Oncology", labelAr: "الأورام" },
+  { value: "Radiology", labelEn: "Radiology", labelAr: "الأشعة التشخيصية" },
+  { value: "Physiotherapy", labelEn: "Physiotherapy & Rehab", labelAr: "العلاج الطبيعي والتأهيل" },
+  { value: "Nutrition", labelEn: "Clinical Nutrition", labelAr: "التغذية العلاجية" },
+  { value: "Anesthesiology & Pain Therapy", labelEn: "Anesthesiology & Pain Therapy", labelAr: "التخدير وعلاج الألم" },
+  { value: "Clinical Pharmacy", labelEn: "Clinical Pharmacy", labelAr: "الصيدلة الإكلينيكية" },
+  { value: "OPD Coordinator", labelEn: "OPD Coordinator", labelAr: "منسق العيادات الخارجية" },
+  { value: "Home Care", labelEn: "Home Care", labelAr: "الرعاية والزيارات المنزلية" },
+];
+

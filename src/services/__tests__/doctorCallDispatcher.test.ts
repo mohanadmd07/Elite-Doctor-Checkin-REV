@@ -6,6 +6,8 @@ import {
   isDuplicateMessage,
   processDoctorCallWebhook,
   parseDoctorCallDate,
+  previewCustomDoctorCall,
+  sendCustomDoctorCall
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -291,4 +293,64 @@ describe('Doctor Call Date Parsing & Exact Day Date Roster Matching', () => {
     expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. Ahmed Mohamed");
   });
 });
+
+describe('Custom Doctor Call Preview & Dispatch Workflow', () => {
+  it('correctly matches doctors from monthly sheet, formats alert, and previews message', async () => {
+    const mockCheckins = [
+      {
+        id: "101",
+        doctorName: "Dr. Hassan Ahmed",
+        doctorArabicName: "د. حسن احمد",
+        department: "General Surgery",
+        shifts: ["Evening shift", "Night shift"],
+        mobileNumber: "01099887766"
+      },
+      {
+        id: "102",
+        doctorName: "Dr. Mona Aly",
+        doctorArabicName: "د. منى علي",
+        department: "Internal Medicine",
+        shifts: ["Morning shift"],
+        mobileNumber: "01122334455"
+      }
+    ];
+
+    const preview = await previewCustomDoctorCall({
+      payload: {
+        room: "Room 409",
+        department: "الجراحة العامة",
+        date: "2026-10-14",
+        patientName: "مصطفى عبد الوهاب",
+        notes: "المرور العاجل على الحالة"
+      },
+      getActiveCheckins: async () => mockCheckins
+    });
+
+    expect(preview.success).toBe(true);
+    expect(preview.canonicalDepartment).toBe("General Surgery");
+    expect(preview.callDate).toBe("2026-10-14");
+    expect(preview.matchingDoctors.length).toBe(1);
+    expect(preview.matchingDoctors[0].name).toBe("Dr. Hassan Ahmed");
+    expect(preview.matchingDoctors[0].waPhone).toBe("201099887766");
+    expect(preview.formattedMessage).toContain("Room *Room 409*");
+    expect(preview.formattedMessage).toContain("General Surgery");
+    expect(preview.formattedMessage).toContain("المرور العاجل على الحالة");
+    expect(preview.formattedMessage).toContain("@201099887766");
+  });
+
+  it('allows customizing message text in preview', async () => {
+    const customText = "🚨 CUSTOM URGENT CALL: Doctor needed in Room 505 immediately!";
+    const preview = await previewCustomDoctorCall({
+      payload: {
+        room: "Room 505",
+        department: "ICU",
+        customMessage: customText
+      },
+      getActiveCheckins: async () => []
+    });
+
+    expect(preview.formattedMessage).toBe(customText);
+  });
+});
+
 

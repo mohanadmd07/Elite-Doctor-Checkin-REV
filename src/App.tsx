@@ -44,9 +44,12 @@ import {
   PhoneCall,
   Play,
   Pause,
-  Activity
+  Activity,
+  Eye,
+  Edit3,
+  MessageSquare
 } from "lucide-react";
-import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS } from "./data/specialties.js";
+import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS, SPECIALTY_OPTIONS } from "./data/specialties.js";
 import { useToast } from "./components/common/Toast.tsx";
 import { EmptyState } from "./components/common/EmptyState.tsx";
 import { TableSkeleton, CardGridSkeleton } from "./components/common/TableSkeleton.tsx";
@@ -306,6 +309,109 @@ export default function App() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [isPollingQueue, setIsPollingQueue] = useState(false);
+
+  // Custom Doctor Call Modal state
+  const [showCustomCallModal, setShowCustomCallModal] = useState(false);
+  const [customCallForm, setCustomCallForm] = useState({
+    room: "",
+    department: "General Surgery",
+    date: new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" }),
+    patientName: "",
+    patientBarcode: "",
+    admittingPhysician: "",
+    callerName: "Ward Nurse",
+    notes: "",
+    customMessage: "",
+    isEditingMessageText: false
+  });
+  const [customCallPreview, setCustomCallPreview] = useState<{
+    canonicalDepartment: string;
+    callDate: string;
+    activeShifts: string[];
+    matchingDoctors: any[];
+    allDepartmentDoctors: any[];
+    isOffShiftCoverage: boolean;
+    formattedMessage: string;
+    targetGroupId?: string;
+  } | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [isSendingCustomCall, setIsSendingCustomCall] = useState(false);
+  const [customCallSuccess, setCustomCallSuccess] = useState<string | null>(null);
+  const [selectedCustomDoctorIds, setSelectedCustomDoctorIds] = useState<string[]>([]);
+
+  const fetchCustomCallPreview = async (formOverride?: Partial<typeof customCallForm>, doctorIdsOverride?: string[]) => {
+    const f = { ...customCallForm, ...(formOverride || {}) };
+    const docIds = doctorIdsOverride !== undefined ? doctorIdsOverride : selectedCustomDoctorIds;
+    setIsLoadingPreview(true);
+    try {
+      const res = await fetch("/api/doctor-calls/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: f.room || "N/A",
+          department: f.department,
+          date: f.date,
+          patientName: f.patientName,
+          patientBarcode: f.patientBarcode,
+          admittingPhysician: f.admittingPhysician,
+          callerName: f.callerName,
+          notes: f.notes,
+          customMessage: f.isEditingMessageText ? f.customMessage : "",
+          selectedDoctorIds: docIds
+        })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setCustomCallPreview(json);
+        if (!f.isEditingMessageText) {
+          setCustomCallForm(prev => ({ ...prev, customMessage: json.formattedMessage }));
+        }
+      }
+    } catch (err) {
+      console.error("Error previewing custom call:", err);
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  };
+
+  const handleSendCustomCall = async () => {
+    if (!customCallForm.room.trim()) {
+      toast.error("Room Required", "Please specify a Room or Bed number before dispatching.");
+      return;
+    }
+    setIsSendingCustomCall(true);
+    setCustomCallSuccess(null);
+    try {
+      const res = await fetch("/api/doctor-calls/send-custom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: customCallForm.room.trim(),
+          department: customCallForm.department,
+          date: customCallForm.date,
+          patientName: customCallForm.patientName.trim(),
+          patientBarcode: customCallForm.patientBarcode.trim(),
+          admittingPhysician: customCallForm.admittingPhysician.trim(),
+          callerName: customCallForm.callerName.trim(),
+          notes: customCallForm.notes.trim(),
+          customMessage: customCallForm.customMessage.trim(),
+          selectedDoctorIds: selectedCustomDoctorIds
+        })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setCustomCallSuccess(json.message || "Custom Doctor Call delivered successfully!");
+        toast.success("Alert Dispatched", "Doctor Call message sent to WhatsApp group.");
+        fetchDoctorCalls();
+      } else {
+        toast.error("Dispatch Failed", json.message || "Failed to dispatch WhatsApp message.");
+      }
+    } catch (err: any) {
+      toast.error("Network Error", err?.message || "Failed to send custom doctor call.");
+    } finally {
+      setIsSendingCustomCall(false);
+    }
+  };
 
 
 
@@ -3476,6 +3582,20 @@ export default function App() {
                           <span>Fetch Pending</span>
                         </button>
 
+                        {/* Send Custom Doctor Call Button */}
+                        <button
+                          onClick={() => {
+                            setShowCustomCallModal(true);
+                            setCustomCallSuccess(null);
+                            fetchCustomCallPreview();
+                          }}
+                          className="px-3.5 py-2 bg-gradient-to-r from-emerald-700 to-teal-800 hover:from-emerald-800 hover:to-teal-900 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow-md active:scale-98"
+                          title="Compose and preview a custom inpatient doctor call message"
+                        >
+                          <Send className="w-3.5 h-3.5 text-emerald-200" />
+                          <span>Send Custom Call</span>
+                        </button>
+
                         {/* Send Test Message Button */}
                         <button
                           onClick={handleSendTestMessage}
@@ -3728,6 +3848,435 @@ export default function App() {
                               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
                             >
                               Close
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Doctor Call Dispatcher & Live Preview Modal */}
+                  {showCustomCallModal && (
+                    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+                      <div className="bg-white rounded-2xl max-w-5xl w-full border border-slate-200 shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col">
+                        {/* Modal Header */}
+                        <div className="px-6 py-4 bg-gradient-to-r from-[#063b30] to-[#0b5446] text-white flex items-center justify-between border-b border-emerald-900">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2.5 bg-emerald-500/20 text-emerald-300 rounded-xl border border-emerald-500/30">
+                              <Send className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h3 className="font-bold text-base text-white">Dispatch Custom Doctor Call</h3>
+                              <p className="text-xs text-emerald-200/80">
+                                Page attending physicians via WhatsApp group with live preview & monthly roster matching
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setShowCustomCallModal(false);
+                              setCustomCallSuccess(null);
+                            }}
+                            className="p-1.5 rounded-lg text-emerald-200 hover:text-white hover:bg-emerald-800/50 transition-colors cursor-pointer"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+
+                        {/* Modal Body */}
+                        <div className="overflow-y-auto p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+                          {/* Form Parameters (Left Column) */}
+                          <div className="lg:col-span-6 space-y-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                              <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                                <Hospital className="w-4 h-4 text-emerald-600" />
+                                <span>Call Parameters</span>
+                              </h4>
+                              <span className="text-[11px] text-slate-400">* Required fields</span>
+                            </div>
+
+                            {/* Room / Bed Number */}
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                Room / Bed Number <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. Room 409 or Bed 302"
+                                value={customCallForm.room}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCustomCallForm(prev => ({ ...prev, room: val }));
+                                  fetchCustomCallPreview({ room: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                              />
+                            </div>
+
+                            {/* Specialty / Department Dropdown */}
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                Medical Specialty / Department <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                value={customCallForm.department}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCustomCallForm(prev => ({ ...prev, department: val }));
+                                  fetchCustomCallPreview({ department: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                              >
+                                {SPECIALTY_OPTIONS.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.labelAr} - {opt.labelEn}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Date (Roster Date) */}
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                                <span>Roster Date (Monthly Sheet)</span>
+                                <span className="text-[10px] text-emerald-700 font-normal">Exact day matching</span>
+                              </label>
+                              <input
+                                type="date"
+                                value={customCallForm.date}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCustomCallForm(prev => ({ ...prev, date: val }));
+                                  fetchCustomCallPreview({ date: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                              />
+                              <p className="text-[10px] text-slate-400 mt-1">
+                                Doctors are fetched from the 30-day cumulative monthly sheet for this exact date.
+                              </p>
+                            </div>
+
+                            {/* Patient Info Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                  Patient Name
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. مصطفى عبد الوهاب"
+                                  value={customCallForm.patientName}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomCallForm(prev => ({ ...prev, patientName: val }));
+                                  }}
+                                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                  Patient Barcode / MRN
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. 0000263656"
+                                  value={customCallForm.patientBarcode}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomCallForm(prev => ({ ...prev, patientBarcode: val }));
+                                  }}
+                                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors font-mono"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Physician & Requester Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                  Admitting Physician
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Dr. Akram Assem"
+                                  value={customCallForm.admittingPhysician}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomCallForm(prev => ({ ...prev, admittingPhysician: val }));
+                                  }}
+                                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                  Caller / Nurse Name
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Ward Nurse / Ahmed"
+                                  value={customCallForm.callerName}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setCustomCallForm(prev => ({ ...prev, callerName: val }));
+                                  }}
+                                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Clinical Notes / Request Reason */}
+                            <div>
+                              <label className="block text-xs font-bold text-slate-700 mb-1">
+                                Clinical Request / Notes
+                              </label>
+                              <textarea
+                                rows={2}
+                                placeholder="e.g. المرور على الحالة بصورة عاجلة ومناظرة نتائج التحاليل"
+                                value={customCallForm.notes}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setCustomCallForm(prev => ({ ...prev, notes: val }));
+                                  fetchCustomCallPreview({ notes: val });
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:border-emerald-600 focus:outline-hidden transition-colors"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Live Preview Column (Right Column) */}
+                          <div className="lg:col-span-6 space-y-4 flex flex-col justify-between">
+                            <div className="space-y-4">
+                              {/* 1. Matched Attending Doctors from Monthly Sheet */}
+                              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                                  <div className="flex items-center gap-1.5">
+                                    <Users className="w-4 h-4 text-emerald-600" />
+                                    <span>Attending Doctors on Duty ({customCallPreview?.matchingDoctors.length || 0})</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    {customCallPreview?.isOffShiftCoverage && (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-100 text-amber-800 border border-amber-300 font-semibold">
+                                        Off-shift Coverage
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => fetchCustomCallPreview()}
+                                      disabled={isLoadingPreview}
+                                      className="text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                      title="Refresh doctor matching"
+                                    >
+                                      <RefreshCw className={`w-3 h-3 ${isLoadingPreview ? "animate-spin" : ""}`} />
+                                      <span>Refresh</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {isLoadingPreview ? (
+                                  <div className="p-4 bg-white rounded-lg border border-slate-200 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                                    <span>Matching doctors from monthly sheet...</span>
+                                  </div>
+                                ) : !customCallPreview || customCallPreview.matchingDoctors.length === 0 ? (
+                                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-xs space-y-1">
+                                    <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                      <span>No doctor checked in for {customCallPreview?.canonicalDepartment || customCallForm.department}</span>
+                                    </div>
+                                    <p className="text-[11px] text-amber-700">
+                                      No physician checked in on the monthly sheet for this specialty on {customCallForm.date}. You can still dispatch an alert to the group.
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                                    {customCallPreview.matchingDoctors.map((doc) => {
+                                      const isSelected = selectedCustomDoctorIds.length === 0 || selectedCustomDoctorIds.includes(String(doc.id));
+                                      return (
+                                        <div
+                                          key={doc.id}
+                                          className={`p-2.5 rounded-lg border transition-all text-xs flex items-center justify-between gap-2 ${
+                                            isSelected
+                                              ? "bg-white border-emerald-300 shadow-xs"
+                                              : "bg-slate-100/70 border-slate-200 opacity-60"
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <input
+                                              type="checkbox"
+                                              checked={isSelected}
+                                              onChange={(e) => {
+                                                const checked = e.target.checked;
+                                                let updated: string[];
+                                                if (selectedCustomDoctorIds.length === 0) {
+                                                  // currently all selected
+                                                  if (!checked) {
+                                                    updated = customCallPreview.matchingDoctors
+                                                      .filter(d => String(d.id) !== String(doc.id))
+                                                      .map(d => String(d.id));
+                                                  } else {
+                                                    updated = [];
+                                                  }
+                                                } else {
+                                                  if (checked) {
+                                                    updated = [...selectedCustomDoctorIds, String(doc.id)];
+                                                  } else {
+                                                    updated = selectedCustomDoctorIds.filter(id => id !== String(doc.id));
+                                                  }
+                                                }
+                                                setSelectedCustomDoctorIds(updated);
+                                                fetchCustomCallPreview(undefined, updated);
+                                              }}
+                                              className="rounded text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                                            />
+                                            <div className="min-w-0">
+                                              <div className="font-bold text-slate-900 truncate flex items-center gap-1.5">
+                                                <span>{doc.name}</span>
+                                                {doc.arabicName && doc.arabicName !== doc.name && (
+                                                  <span className="text-[11px] text-slate-500 font-normal truncate">
+                                                    ({doc.arabicName})
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
+                                                <span>📞 {doc.phone || "No phone"}</span>
+                                                {doc.waPhone && (
+                                                  <span className="text-emerald-700 font-mono font-bold">
+                                                    @{doc.waPhone}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          <div className="shrink-0 flex flex-col items-end gap-1">
+                                            <div className="flex flex-wrap gap-1 justify-end">
+                                              {(doc.shifts || []).map((sh: string) => (
+                                                <span
+                                                  key={sh}
+                                                  className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[9px] font-semibold"
+                                                >
+                                                  {sh}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* 2. WhatsApp Message Live Preview Box */}
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                                  <div className="flex items-center gap-1.5">
+                                    <MessageSquare className="w-4 h-4 text-emerald-600" />
+                                    <span>WhatsApp Group Message Preview</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = !customCallForm.isEditingMessageText;
+                                      setCustomCallForm(prev => ({
+                                        ...prev,
+                                        isEditingMessageText: next,
+                                        customMessage: next ? (prev.customMessage || customCallPreview?.formattedMessage || "") : (customCallPreview?.formattedMessage || "")
+                                      }));
+                                    }}
+                                    className="text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                    <span>{customCallForm.isEditingMessageText ? "Reset to Template" : "Customize Message"}</span>
+                                  </button>
+                                </div>
+
+                                <div className="bg-slate-900 rounded-xl p-3 border border-slate-700 space-y-2 text-white">
+                                  {customCallForm.isEditingMessageText ? (
+                                    <textarea
+                                      rows={7}
+                                      value={customCallForm.customMessage}
+                                      onChange={(e) => setCustomCallForm(prev => ({ ...prev, customMessage: e.target.value }))}
+                                      className="w-full bg-slate-950 text-emerald-300 font-mono text-xs p-2.5 rounded-lg border border-slate-700 focus:outline-hidden focus:border-emerald-500"
+                                      placeholder="Type your custom WhatsApp message here..."
+                                    />
+                                  ) : (
+                                    <pre className="text-emerald-300 font-mono text-[11px] whitespace-pre-wrap select-all max-h-44 overflow-y-auto leading-relaxed">
+                                      {customCallForm.customMessage || customCallPreview?.formattedMessage || "Enter a room number to preview the message..."}
+                                    </pre>
+                                  )}
+
+                                  <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[10px] text-slate-400">
+                                    <span>Target Group: {automationStatus?.targetGroup || "Configured WhatsApp Group"}</span>
+                                    <span>⚡ Markdown & Mentions Enabled</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Success Feedback Banner */}
+                              {customCallSuccess && (
+                                <div className="p-3 bg-emerald-50 border border-emerald-300 text-emerald-950 rounded-xl text-xs flex items-center justify-between gap-2 shadow-xs">
+                                  <div className="flex items-center gap-2">
+                                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    <span className="font-semibold">{customCallSuccess}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => setCustomCallSuccess(null)}
+                                    className="text-emerald-700 hover:text-emerald-900 p-1"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Modal Footer */}
+                        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-xs text-slate-500">
+                            {!customCallForm.room.trim() ? (
+                              <span className="text-amber-700 font-medium flex items-center gap-1">
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                Please specify a Room or Bed number
+                              </span>
+                            ) : (
+                              <span className="text-emerald-700 font-medium flex items-center gap-1">
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                Ready to page physicians for Room {customCallForm.room}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowCustomCallModal(false);
+                                setCustomCallSuccess(null);
+                              }}
+                              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                            >
+                              Close
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleSendCustomCall}
+                              disabled={!customCallForm.room.trim() || isSendingCustomCall}
+                              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-2 shadow-sm hover:shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {isSendingCustomCall ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <span>Sending to WhatsApp...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Send className="w-4 h-4 text-emerald-200" />
+                                  <span>Confirm & Send Alert</span>
+                                </>
+                              )}
                             </button>
                           </div>
                         </div>

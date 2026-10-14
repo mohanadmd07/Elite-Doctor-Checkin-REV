@@ -1283,3 +1283,198 @@ export async function reDispatchDoctorCall(params: {
     record: target
   };
 }
+
+export interface CustomDoctorCallPayload {
+  room: string;
+  department: string;
+  date?: string;
+  patientName?: string;
+  patientBarcode?: string;
+  admittingPhysician?: string;
+  callerName?: string;
+  notes?: string;
+  customMessage?: string;
+  selectedDoctorIds?: string[];
+}
+
+export interface CustomDoctorCallPreviewResult {
+  success: boolean;
+  canonicalDepartment: string;
+  callDate: string;
+  activeShifts: string[];
+  matchingDoctors: DispatchedDoctorInfo[];
+  allDepartmentDoctors: DispatchedDoctorInfo[];
+  isOffShiftCoverage: boolean;
+  formattedMessage: string;
+  targetGroupId?: string;
+  error?: string;
+}
+
+/**
+ * Previews the matched attending physicians from the monthly sheet
+ * and generates the WhatsApp message alert for review before sending.
+ */
+export async function previewCustomDoctorCall(params: {
+  payload: CustomDoctorCallPayload;
+  getActiveCheckins: (callDate?: string) => Promise<any[]>;
+}): Promise<CustomDoctorCallPreviewResult> {
+  const { payload, getActiveCheckins } = params;
+  const rawDept = (payload.department || "").trim();
+  const { department: canonicalDepartment } = normalizeSpecialty(rawDept);
+
+  const now = new Date();
+  const cairoDate = getCairoDateString(now);
+  const targetDate = parseDoctorCallDate(payload.date) || payload.date || cairoDate;
+  const activeShifts = getCairoActiveShifts(now);
+
+  const allCheckins = await getActiveCheckins(targetDate);
+  const onShiftDoctors: DispatchedDoctorInfo[] = [];
+  const allDeptDoctors: DispatchedDoctorInfo[] = [];
+
+  for (const c of allCheckins) {
+    const docDept = normalizeSpecialty(c.department).department;
+    if (docDept.toLowerCase() === canonicalDepartment.toLowerCase()) {
+      const docInfo: DispatchedDoctorInfo = {
+        id: c.id,
+        name: c.doctorName,
+        arabicName: c.doctorArabicName,
+        phone: c.mobileNumber || "",
+        waPhone: toWhatsAppPhone(c.mobileNumber),
+        shifts: c.shifts || []
+      };
+      allDeptDoctors.push(docInfo);
+
+      if (matchesActiveShift(c.shifts, activeShifts)) {
+        onShiftDoctors.push(docInfo);
+      }
+    }
+  }
+
+  let finalMatching = onShiftDoctors.length > 0 ? onShiftDoctors : allDeptDoctors;
+  const isOffShiftCoverage = onShiftDoctors.length === 0 && allDeptDoctors.length > 0;
+
+  // If user explicitly pre-selected doctor IDs, filter to those
+  if (payload.selectedDoctorIds && payload.selectedDoctorIds.length > 0) {
+    const selectedSet = new Set(payload.selectedDoctorIds.map(id => String(id).toLowerCase().trim()));
+    finalMatching = finalMatching.filter(d => selectedSet.has(String(d.id).toLowerCase().trim()));
+  }
+
+  const targetGroupId = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim() || "";
+
+  // If user provided custom message text, use it; otherwise auto-format
+  let formattedMessage = (payload.customMessage || "").trim();
+  if (!formattedMessage) {
+    formattedMessage = formatDoctorCallAlert({
+      doctors: finalMatching,
+      specialty: canonicalDepartment,
+      room: payload.room || "N/A",
+      notes: payload.notes,
+      isOffShiftCoverage
+    });
+  }
+
+  return {
+    success: true,
+    canonicalDepartment,
+    callDate: targetDate,
+    activeShifts,
+    matchingDoctors: finalMatching,
+    allDepartmentDoctors: allDeptDoctors,
+    isOffShiftCoverage,
+    formattedMessage,
+    targetGroupId
+  };
+}
+
+/**
+ * Confirms and dispatches the customized Doctor Call message to WhatsApp group,
+ * records the call in the database, and creates an audit log entry.
+ */
+export async function sendCustomDoctorCall(params: {
+  payload: CustomDoctorCallPayload;
+  getActiveCheckins: (callDate?: string) => Promise<any[]>;
+}): Promise<{
+  success: boolean;
+  message: string;
+  idMessage?: string;
+  callRecord?: DoctorCallRecord;
+  error?: string;
+}> {
+  const { payload, getActiveCheckins } = params;
+  const preview = await previewCustomDoctorCall({ payload, getActiveCheckins });
+
+  const targetGroupId = preview.targetGroupId;
+  if (!targetGroupId) {
+    return {
+      success: false,
+      message: "Target WhatsApp group ID is not configured in environment variables (WHATSAPP_DOCTORS_TARGET_GROUP_ID).",
+      error: "Target WhatsApp group ID missing"
+    };
+  }
+
+  const finalMessage = (payload.customMessage || "").trim() || preview.formattedMessage;
+  const now = new Date();
+  const callId = `call_custom_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+
+  console.log(`[Custom DoctorCall] Dispatching to ${targetGroupId} for Room ${payload.room}, Dept ${preview.canonicalDepartment}:`);
+  console.log(finalMessage);
+
+  const dispatchRes = await sendGreenApiTextMessage({
+    chatId: targetGroupId,
+    message: finalMessage
+  });
+
+  const status: "dispatched" | "no_doctor_present" | "failed" = dispatchRes.success
+    ? "dispatched"
+    : (preview.matchingDoctors.length === 0 ? "no_doctor_present" : "failed");
+
+  const callRecord: DoctorCallRecord = {
+    id: callId,
+    callDate: preview.callDate,
+    createdAt: now.toISOString(),
+    room: payload.room || "N/A",
+    department: preview.canonicalDepartment,
+    rawDepartment: payload.department || preview.canonicalDepartment,
+    patientName: payload.patientName || "N/A",
+    patientBarcode: payload.patientBarcode || "N/A",
+    admittingPhysician: payload.admittingPhysician || "N/A",
+    callerName: payload.callerName || "Manual / Custom Dispatch",
+    dispatchedDoctors: preview.matchingDoctors,
+    status,
+    notes: payload.notes,
+    rawMessage: finalMessage
+  };
+
+  await saveDoctorCallRecord(callRecord);
+
+  recordWebhookAuditLog({
+    source: "simulation",
+    senderChatId: targetGroupId,
+    senderName: payload.callerName || "Manual Custom Dispatch",
+    typeWebhook: "customMessageDispatch",
+    textSnippet: finalMessage.slice(0, 120),
+    handled: true,
+    status,
+    reason: dispatchRes.success
+      ? `Custom alert delivered to group (paged: ${preview.matchingDoctors.map(d => d.name).join(", ") || "No doctors matched"})`
+      : `Green-API dispatch failed: ${dispatchRes.error}`,
+    matchedDoctors: preview.matchingDoctors.map(d => d.name)
+  });
+
+  if (!dispatchRes.success) {
+    return {
+      success: false,
+      message: `Failed to deliver WhatsApp message: ${dispatchRes.error}`,
+      error: dispatchRes.error,
+      callRecord
+    };
+  }
+
+  return {
+    success: true,
+    message: `Custom Doctor Call delivered successfully to WhatsApp group! (ID: ${dispatchRes.idMessage})`,
+    idMessage: dispatchRes.idMessage,
+    callRecord
+  };
+}
+

@@ -21,7 +21,9 @@ import {
   setAutomationPaused,
   setGreenApiWebhookUrl,
   pollGreenApiNotifications,
-  getRecentWebhookAuditLogs
+  getRecentWebhookAuditLogs,
+  previewCustomDoctorCall,
+  sendCustomDoctorCall
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3398,6 +3400,40 @@ app.post(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
     res.json({ success: true, ...pollResult });
   } catch (err: any) {
     console.error("Error polling Green-API notifications:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 11. Preview Custom Doctor Call (fetches doctors matching specialty from monthly sheet & formats message)
+app.post(["/api/doctor-calls/preview", "/doctor-calls/preview"], async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const result = await previewCustomDoctorCall({
+      payload,
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error("Error previewing custom doctor call:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 12. Send Custom Doctor Call (confirms and dispatches to WhatsApp group & logs record)
+app.post(["/api/doctor-calls/send-custom", "/doctor-calls/send-custom"], async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const result = await sendCustomDoctorCall({
+      payload,
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
+      }
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error("Error sending custom doctor call:", err);
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });
