@@ -81,13 +81,31 @@ export function isDuplicateMessage(messageId: string): boolean {
 }
 
 /**
+ * Clean invisible unicode formatting characters common in WhatsApp and Arabic text
+ */
+export function cleanWhatsAppText(text: string): string {
+  if (!text || typeof text !== "string") return "";
+  return text
+    // Strip invisible zero-width chars and bidirectional marks
+    .replace(/[\u200B-\u200F\uFEFF\u00A0\u202A-\u202E]/g, " ")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+/**
  * Parses multiline WhatsApp text matching DoctorCall format
  */
-export function parseDoctorCallMessage(messageText: string): ParsedDoctorCall | null {
-  if (!messageText || typeof messageText !== "string") return null;
+export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall | null {
+  if (!rawMessageText || typeof rawMessageText !== "string") return null;
 
-  // Verify trigger
-  const hasDoctorCall = /category:\s*doctorcall/i.test(messageText);
+  const messageText = cleanWhatsAppText(rawMessageText);
+
+  // Flexible trigger: "Category: DoctorCall", "Category: Doctor Call", "Doctor_Call", or Arabic "استدعاء طبيب"
+  const hasDoctorCall =
+    /category\s*:\s*doctor[\s_-]*call/i.test(messageText) ||
+    /doctor[\s_-]*call/i.test(messageText) ||
+    /طلب\s*استدعاء\s*طبيب/i.test(messageText);
+
   if (!hasDoctorCall) return null;
 
   const getField = (regex: RegExp): string => {
@@ -95,30 +113,37 @@ export function parseDoctorCallMessage(messageText: string): ParsedDoctorCall | 
     return m ? m[1].trim() : "";
   };
 
-  const category = getField(/category:\s*([^\r\n]+)/i) || "DoctorCall";
-  const departmentRaw = getField(/group:\s*([^\r\n]+)/i);
-  const callerName = getField(/by:\s*([^\r\n]+)/i);
-  const callDate = getField(/date:\s*([^\r\n]+)/i);
-  const location = getField(/location:\s*([^\r\n]+)/i);
+  const category = getField(/category\s*:\s*([^\r\n]+)/i) || "DoctorCall";
+  const departmentRaw =
+    getField(/(?:group|specialty|speciality|department|القسم|التخصص)\s*:\s*([^\r\n]+)/i);
+  const callerName =
+    getField(/(?:by|caller|from|بواسطة|التمريض)\s*:\s*([^\r\n]+)/i);
+  const callDate =
+    getField(/(?:date|التاريخ)\s*:\s*([^\r\n]+)/i);
+  const location =
+    getField(/(?:location|المكان)\s*:\s*([^\r\n]+)/i);
 
   // Extract room from Sub.Location or Bed or Room
-  let room = getField(/sub\.?\s*location:\s*(?:room\s*)?([^\r\n]+)/i);
+  let room = getField(/(?:sub\.?\s*location|الغرفة|غرفة)\s*:\s*(?:room\s*)?([^\r\n]+)/i);
   if (!room) {
-    room = getField(/room:\s*([^\r\n]+)/i);
+    room = getField(/room\s*:\s*([^\r\n]+)/i);
   }
   if (!room) {
-    room = getField(/bed:\s*(?:bed\s*)?([^\r\n]+)/i);
+    room = getField(/bed\s*:\s*(?:bed\s*)?([^\r\n]+)/i);
   }
   if (room) {
-    room = room.replace(/^room\s*/i, "").trim();
+    room = room.replace(/^(?:room|غرفة)\s*/i, "").trim();
   } else {
     room = "N/A";
   }
 
-  const patientBarcode = getField(/patient\s*barcode:\s*([^\r\n]+)/i) || getField(/barcode:\s*([^\r\n]+)/i);
-  const patientName = getField(/patient\s*name:\s*([^\r\n]+)/i) || getField(/patient:\s*([^\r\n]+)/i);
-  const admittingPhysician = getField(/admitting\s*phys(?:ician)?:\s*([^\r\n]+)/i);
-  const bed = getField(/bed:\s*([^\r\n]+)/i);
+  const patientBarcode =
+    getField(/(?:patient\s*barcode|barcode|باركود)\s*:\s*([^\r\n]+)/i);
+  const patientName =
+    getField(/(?:patient\s*name|patient|المريض|اسم\s*المريض)\s*:\s*([^\r\n]+)/i);
+  const admittingPhysician =
+    getField(/(?:admitting\s*phys(?:ician)?|physician|طبيب\s*الدخول)\s*:\s*([^\r\n]+)/i);
+  const bed = getField(/bed\s*:\s*([^\r\n]+)/i);
 
   // Normalize Department to canonical hospital specialty
   const { department: canonicalDepartment } = normalizeSpecialty(departmentRaw);
@@ -135,38 +160,45 @@ export function parseDoctorCallMessage(messageText: string): ParsedDoctorCall | 
     patientName,
     admittingPhysician,
     bed,
-    rawMessage: messageText
+    rawMessage: rawMessageText
   };
 }
 
 /**
  * Calculates current active shift(s) according to Africa/Cairo local time
- * Shift definitions:
- * - Long shift: 09:00 AM - 09:00 PM
- * - Evening shift: 03:00 PM - 11:00 PM
- * - Night shift: 11:00 PM - 09:00 AM
+ * Hospital shifts defined in Elite Hospital:
+ * - Morning shift: 08:00 AM - 04:00 PM (480 - 960 min)
+ * - Long shift:    08:00 AM - 09:00 PM (480 - 1260 min)
+ * - Evening shift: 03:00 PM - 12:00 AM (midnight) (900 - 1440 min)
+ * - Night shift:   11:00 PM - 09:00 AM (1380 - 540 min next day)
+ * - 24 shift:      Covers all 24 hours
  */
 export function getCairoActiveShifts(date: Date = new Date()): string[] {
-  const cairoTimeStr = date.toLocaleTimeString("en-US", {
+  const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: "Africa/Cairo",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit"
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23"
   });
-  const [hourStr, minStr] = cairoTimeStr.split(":");
-  const hour = parseInt(hourStr, 10);
-  const minute = parseInt(minStr, 10);
+  const parts = formatter.formatToParts(date);
+  const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+  const minute = parseInt(parts.find(p => p.type === "minute")?.value || "0", 10);
   const timeInMinutes = hour * 60 + minute;
 
   const activeShifts: string[] = [];
 
-  // Long shift: 9:00 AM (540 min) - 9:00 PM (1260 min)
-  if (timeInMinutes >= 9 * 60 && timeInMinutes < 21 * 60) {
+  // Morning shift: 8:00 AM (480 min) - 4:00 PM (960 min)
+  if (timeInMinutes >= 8 * 60 && timeInMinutes < 16 * 60) {
+    activeShifts.push("Morning shift");
+  }
+
+  // Long shift: 8:00 AM (480 min) - 9:00 PM (1260 min)
+  if (timeInMinutes >= 8 * 60 && timeInMinutes < 21 * 60) {
     activeShifts.push("Long shift");
   }
 
-  // Evening shift: 3:00 PM (900 min) - 11:00 PM (1380 min)
-  if (timeInMinutes >= 15 * 60 && timeInMinutes < 23 * 60) {
+  // Evening shift: 3:00 PM (900 min) - 12:00 AM (midnight / 1440 min)
+  if (timeInMinutes >= 15 * 60 && timeInMinutes <= 24 * 60) {
     activeShifts.push("Evening shift");
   }
 
@@ -174,6 +206,9 @@ export function getCairoActiveShifts(date: Date = new Date()): string[] {
   if (timeInMinutes >= 23 * 60 || timeInMinutes < 9 * 60) {
     activeShifts.push("Night shift");
   }
+
+  // 24 shift covers all hours
+  activeShifts.push("24 shift");
 
   return activeShifts;
 }
@@ -187,18 +222,21 @@ export function matchesActiveShift(doctorShifts: string[], activeShifts: string[
   const docShiftsLower = doctorShifts.map(s => (s || "").toLowerCase());
 
   // 24-hour shift covers all hours
-  if (docShiftsLower.some(s => s.includes("24"))) return true;
+  if (docShiftsLower.some(s => s.includes("24") || s.includes("يوم كامل") || s.includes("full"))) return true;
 
   for (const active of activeShifts) {
     const activeLower = active.toLowerCase();
+    if (activeLower.includes("morning")) {
+      if (docShiftsLower.some(s => s.includes("morning") || s.includes("صباح") || s.includes("مورنينج"))) return true;
+    }
     if (activeLower.includes("long")) {
-      if (docShiftsLower.some(s => s.includes("long") || s.includes("morning"))) return true;
+      if (docShiftsLower.some(s => s.includes("long") || s.includes("لونج"))) return true;
     }
     if (activeLower.includes("evening")) {
-      if (docShiftsLower.some(s => s.includes("evening") || s.includes("eve"))) return true;
+      if (docShiftsLower.some(s => s.includes("evening") || s.includes("eve") || s.includes("مساء") || s.includes("ايڤينينج"))) return true;
     }
     if (activeLower.includes("night")) {
-      if (docShiftsLower.some(s => s.includes("night"))) return true;
+      if (docShiftsLower.some(s => s.includes("night") || s.includes("ليل") || s.includes("نايت"))) return true;
     }
   }
 
@@ -232,8 +270,10 @@ export function formatDoctorCallAlert(params: {
   doctors: DispatchedDoctorInfo[];
   specialty: string;
   room: string;
+  isOffShiftCoverage?: boolean;
 }): string {
-  const { doctors, specialty, room } = params;
+  const { doctors, specialty, room, isOffShiftCoverage } = params;
+  const coverageNote = isOffShiftCoverage ? ` _(On-duty coverage)_` : "";
 
   if (doctors.length === 1) {
     const doc = doctors[0];
@@ -242,7 +282,7 @@ export function formatDoctorCallAlert(params: {
 
     return (
       `🚨 *INPATIENT DOCTOR CALL* 🚨\n` +
-      `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*\n\n` +
+      `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*${coverageNote}\n\n` +
       `📍 *Location:* Room *${room}*\n` +
       `🩺 *Specialty:* ${specialty}\n` +
       `📞 *Phone:* ${phoneDisplay}\n\n` +
@@ -256,7 +296,7 @@ export function formatDoctorCallAlert(params: {
 
   return (
     `🚨 *INPATIENT DOCTOR CALL* 🚨\n` +
-    `👨‍⚕️ ${mentionsLine}\n\n` +
+    `👨‍⚕️ ${mentionsLine}${coverageNote}\n\n` +
     `📍 *Location:* Room *${room}*\n` +
     `🩺 *Specialty:* ${specialty}\n` +
     `📞 *Phones:* ${phonesLine}\n\n` +
@@ -453,7 +493,7 @@ export async function getDoctorCallRecords(filter?: {
 }
 
 // =========================================================================
-// GREEN-API REST DISPATCH
+// GREEN-API REST DISPATCH & SETTINGS
 // =========================================================================
 
 export async function sendGreenApiTextMessage(params: {
@@ -467,6 +507,11 @@ export async function sendGreenApiTextMessage(params: {
     return { success: false, error: "Green-API instance credentials missing from environment variables." };
   }
 
+  let targetChatId = (params.chatId || "").trim();
+  if (targetChatId && !targetChatId.includes("@")) {
+    targetChatId = `${targetChatId}@g.us`;
+  }
+
   const url = `https://api.green-api.com/waInstance${idInstance}/sendMessage/${apiTokenInstance}`;
 
   try {
@@ -474,7 +519,7 @@ export async function sendGreenApiTextMessage(params: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chatId: params.chatId,
+        chatId: targetChatId,
         message: params.message
       })
     });
@@ -491,6 +536,87 @@ export async function sendGreenApiTextMessage(params: {
 }
 
 /**
+ * Reads instance webhook settings directly from Green-API
+ */
+export async function getGreenApiSettings(): Promise<{
+  success: boolean;
+  settings?: {
+    webhookUrl?: string;
+    incomingWebhook?: string;
+    stateWebhook?: string;
+    outgoingWebhook?: string;
+  };
+  error?: string;
+}> {
+  const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
+  const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim();
+
+  if (!idInstance || !apiTokenInstance) {
+    return { success: false, error: "Missing Green-API credentials" };
+  }
+
+  try {
+    const url = `https://api.green-api.com/waInstance${idInstance}/getSettings/${apiTokenInstance}`;
+    const res = await fetch(url);
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data?.message || "Failed to fetch Green-API settings" };
+    }
+    return { success: true, settings: data };
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Network error fetching Green-API settings" };
+  }
+}
+
+/**
+ * Auto-registers the Webhook URL in Green-API with incoming webhooks enabled
+ */
+export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim();
+  const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim();
+
+  if (!idInstance || !apiTokenInstance) {
+    return { success: false, message: "Missing Green-API credentials in environment variables." };
+  }
+
+  const cleanUrl = webhookUrl.trim();
+  if (!cleanUrl || !cleanUrl.startsWith("http")) {
+    return { success: false, message: "Invalid Webhook URL. Must begin with https:// or http://" };
+  }
+
+  try {
+    const url = `https://api.green-api.com/waInstance${idInstance}/setSettings/${apiTokenInstance}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        webhookUrl: cleanUrl,
+        incomingWebhook: "yes",
+        stateWebhook: "yes"
+      })
+    });
+
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || data?.saveSettings !== true) {
+      return {
+        success: false,
+        message: data?.message || `Failed to update Green-API settings: ${JSON.stringify(data)}`
+      };
+    }
+
+    return {
+      success: true,
+      message: `Webhook URL successfully set to "${cleanUrl}" in Green-API with incoming webhooks enabled!`
+    };
+  } catch (err: any) {
+    return { success: false, message: err?.message || "Failed to set Green-API webhook" };
+  }
+}
+
+/**
  * Checks Green-API connection state and configuration parameters
  */
 export async function checkWhatsAppAutomationStatus(): Promise<{
@@ -502,6 +628,8 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
   stateInstance: string;
   isPaused: boolean;
   statusMessage: string;
+  greenApiWebhookUrl?: string;
+  incomingWebhookEnabled?: boolean;
 }> {
   const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim() || "";
   const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim() || "";
@@ -535,6 +663,15 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
     stateInstance = `error: ${err?.message || "network error"}`;
   }
 
+  let greenApiWebhookUrl: string | undefined;
+  let incomingWebhookEnabled: boolean | undefined;
+
+  const settingsRes = await getGreenApiSettings();
+  if (settingsRes.success && settingsRes.settings) {
+    greenApiWebhookUrl = settingsRes.settings.webhookUrl || "";
+    incomingWebhookEnabled = settingsRes.settings.incomingWebhook === "yes";
+  }
+
   const isConnected = stateInstance === "authorized";
   const configured = isConnected && Boolean(targetGroup);
 
@@ -543,8 +680,12 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
     statusMessage = `WhatsApp is not connected (state: ${stateInstance}). Scan QR code in Green-API console.`;
   } else if (!targetGroup) {
     statusMessage = "Target WhatsApp group ID is missing in environment variables.";
+  } else if (!greenApiWebhookUrl) {
+    statusMessage = "WhatsApp is authorized, but Green-API Webhook URL is not set. Use 'Auto-Set Webhook' to activate.";
+  } else if (incomingWebhookEnabled !== true) {
+    statusMessage = "WhatsApp is authorized, but 'incomingWebhook' is disabled in Green-API. Enable it via 'Auto-Set Webhook'.";
   } else {
-    statusMessage = `WhatsApp is connected & authorized (${stateInstance}) • Target Group Set.`;
+    statusMessage = `WhatsApp is connected & authorized (${stateInstance}) • Webhook active • Target Group Set.`;
   }
 
   return {
@@ -555,7 +696,9 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
     targetGroup,
     stateInstance,
     isPaused,
-    statusMessage
+    statusMessage,
+    greenApiWebhookUrl,
+    incomingWebhookEnabled
   };
 }
 
@@ -571,7 +714,7 @@ export async function sendTestDoctorCallAlert(): Promise<{
   if (!targetGroupId) {
     return {
       success: false,
-      message: "Target WhatsApp group ID (WHATSAPP_DOCTORS_TARGET_GROUP_ID or WHATSAPP_GROUP_ID) is not configured."
+      message: "Target WhatsApp group ID (WHATSAPP_DOCTORS_TARGET_GROUP_ID or WHATSAPP_GROUP_ID) is not configured in environment variables."
     };
   }
 
@@ -617,20 +760,34 @@ export async function processDoctorCallWebhook(params: {
   const { rawBody, getActiveCheckins } = params;
 
   if (!rawBody || typeof rawBody !== "object") {
-    return { handled: false, reason: "Empty body" };
+    return { handled: false, reason: "Empty or invalid body" };
   }
 
-  // 1. Extract message ID and text from Green-API webhook structure
+  // 1. Extract message ID and check deduplication
   const idMessage = rawBody.idMessage || rawBody.messageData?.idMessage || "";
   if (idMessage && isDuplicateMessage(idMessage)) {
-    return { handled: false, reason: "Duplicate message ID (already processed)" };
+    return { handled: false, reason: "Duplicate message ID (already processed within TTL)" };
   }
 
-  // Check source group if specified
-  const monitoredGroup = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim();
-  const senderChatId = rawBody.senderData?.chatId || rawBody.chatId || "";
-  if (monitoredGroup && senderChatId && monitoredGroup !== senderChatId) {
-    return { handled: false, reason: `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroup})` };
+  // Check source group if specified (supports comma-separated list of monitored groups)
+  const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
+  const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || "").trim().toLowerCase();
+
+  if (monitoredGroupRaw && senderChatId) {
+    const monitoredGroups = monitoredGroupRaw
+      .split(",")
+      .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
+      .filter(Boolean)
+      .map(g => (g.includes("@") ? g : `${g}@g.us`));
+
+    const normalizedSender = senderChatId.includes("@") ? senderChatId : `${senderChatId}@g.us`;
+
+    if (monitoredGroups.length > 0 && !monitoredGroups.includes(normalizedSender)) {
+      return {
+        handled: false,
+        reason: `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`
+      };
+    }
   }
 
   // Extract raw text from Green-API variations
@@ -642,7 +799,7 @@ export async function processDoctorCallWebhook(params: {
     "";
 
   if (!messageText) {
-    return { handled: false, reason: "No text content found in webhook" };
+    return { handled: false, reason: "No text content found in webhook payload" };
   }
 
   // 2. Parse DoctorCall format
@@ -678,6 +835,26 @@ export async function processDoctorCallWebhook(params: {
     }
   }
 
+  // Resilient Fallback: If no doctor matched current active shift window, but a doctor in that department
+  // checked in today, include them as on-duty coverage so urgent calls are never missed!
+  let usedShiftFallback = false;
+  if (matchingDoctors.length === 0) {
+    for (const c of allCheckins) {
+      const docDept = normalizeSpecialty(c.department).department;
+      if (docDept.toLowerCase() === parsed.canonicalDepartment.toLowerCase()) {
+        matchingDoctors.push({
+          id: c.id,
+          name: c.doctorName,
+          arabicName: c.doctorArabicName,
+          phone: c.mobileNumber || "",
+          waPhone: toWhatsAppPhone(c.mobileNumber),
+          shifts: c.shifts || []
+        });
+        usedShiftFallback = true;
+      }
+    }
+  }
+
   const callId = `call_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
   let status: "dispatched" | "no_doctor_present" | "failed" | "paused" = "no_doctor_present";
 
@@ -686,22 +863,23 @@ export async function processDoctorCallWebhook(params: {
     console.log(`[DoctorCall] ⏸️ Automation is currently PAUSED by admin. Recording call silently without dispatch.`);
     status = "paused";
   } else if (matchingDoctors.length === 0) {
-    console.warn(`[DoctorCall] ⚠️ No doctor checked in for department "${parsed.canonicalDepartment}" during active shifts [${activeShifts.join(", ")}]. Logged silently.`);
+    console.warn(`[DoctorCall] ⚠️ No doctor checked in for department "${parsed.canonicalDepartment}". Logged silently.`);
     status = "no_doctor_present";
   } else {
     // 6. Format alert and dispatch to target group
     const targetGroupId = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim();
     if (!targetGroupId) {
-      console.error("[DoctorCall] Target WhatsApp group ID not configured.");
+      console.error("[DoctorCall] Target WhatsApp group ID not configured in environment variables.");
       status = "failed";
     } else {
       const alertText = formatDoctorCallAlert({
         doctors: matchingDoctors,
         specialty: parsed.canonicalDepartment,
-        room: parsed.room
+        room: parsed.room,
+        isOffShiftCoverage: usedShiftFallback
       });
 
-      console.log(`[DoctorCall] Disagreeing alert to target group ${targetGroupId}:\n${alertText}`);
+      console.log(`[DoctorCall] Dispatching alert to target group ${targetGroupId}:\n${alertText}`);
       const dispatchRes = await sendGreenApiTextMessage({
         chatId: targetGroupId,
         message: alertText
@@ -778,26 +956,45 @@ export async function reDispatchDoctorCall(params: {
     }
   }
 
+  let usedShiftFallback = false;
+  if (matchingDoctors.length === 0) {
+    for (const c of allCheckins) {
+      const docDept = normalizeSpecialty(c.department).department;
+      if (docDept.toLowerCase() === target.department.toLowerCase()) {
+        matchingDoctors.push({
+          id: c.id,
+          name: c.doctorName,
+          arabicName: c.doctorArabicName,
+          phone: c.mobileNumber || "",
+          waPhone: toWhatsAppPhone(c.mobileNumber),
+          shifts: c.shifts || []
+        });
+        usedShiftFallback = true;
+      }
+    }
+  }
+
   if (matchingDoctors.length === 0) {
     target.status = "no_doctor_present";
     target.dispatchedDoctors = [];
     await saveDoctorCallRecord(target);
     return {
       success: false,
-      message: `No doctor currently checked in for ${target.department} in active shifts [${activeShifts.join(", ")}].`,
+      message: `No doctor currently checked in for ${target.department}.`,
       record: target
     };
   }
 
   const targetGroupId = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() || process.env.WHATSAPP_GROUP_ID?.trim();
   if (!targetGroupId) {
-    return { success: false, message: "Target WhatsApp group ID is not configured." };
+    return { success: false, message: "Target WhatsApp group ID is not configured in environment variables." };
   }
 
   const alertText = formatDoctorCallAlert({
     doctors: matchingDoctors,
     specialty: target.department,
-    room: target.room
+    room: target.room,
+    isOffShiftCoverage: usedShiftFallback
   });
 
   const dispatchRes = await sendGreenApiTextMessage({

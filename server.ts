@@ -18,7 +18,8 @@ import {
   checkWhatsAppAutomationStatus,
   sendTestDoctorCallAlert,
   isAutomationPaused,
-  setAutomationPaused
+  setAutomationPaused,
+  setGreenApiWebhookUrl
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3171,11 +3172,14 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
 
 // 1. Green-API Webhook Ingestion endpoint
 app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
-  // Acknowledge immediately to Green-API to prevent timeout retries
-  res.status(200).json({ status: "received" });
+  const startMs = Date.now();
+  console.log("[DoctorCall Webhook] Incoming POST to /api/whatsapp/webhook");
+  console.log(`[DoctorCall Webhook] Payload type: ${req.body?.typeWebhook || "unknown"}, senderChatId: ${req.body?.senderData?.chatId || req.body?.chatId || "unknown"}`);
 
   try {
-    console.log("[DoctorCall Webhook] Received webhook payload from Green-API");
+    // CRITICAL SERVERLESS LIFECYCLE RULE (Node.js best practices):
+    // Await the entire processing pipeline BEFORE sending HTTP 200 to prevent Vercel Lambda
+    // from freezing/terminating the async execution environment prematurely!
     const result = await processDoctorCallWebhook({
       rawBody: req.body,
       getActiveCheckins: async () => {
@@ -3183,13 +3187,18 @@ app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
         return raw.map(c => enrichCheckIn(c));
       }
     });
+
+    const elapsed = Date.now() - startMs;
     if (result.handled) {
-      console.log(`[DoctorCall Webhook] Processed call ${result.callRecord?.id} with status: ${result.callRecord?.status}`);
+      console.log(`[DoctorCall Webhook] ✅ Handled call ${result.callRecord?.id} with status "${result.callRecord?.status}" in ${elapsed}ms`);
     } else {
-      console.log(`[DoctorCall Webhook] Skipped: ${result.reason}`);
+      console.log(`[DoctorCall Webhook] ℹ️ Skipped webhook in ${elapsed}ms: ${result.reason}`);
     }
+
+    res.status(200).json({ status: "received", ...result });
   } catch (err: any) {
-    console.error("[DoctorCall Webhook] Error processing incoming call:", err);
+    console.error("[DoctorCall Webhook] ❌ Fatal error processing incoming call:", err);
+    res.status(500).json({ status: "error", error: err?.message || String(err) });
   }
 });
 
@@ -3261,6 +3270,74 @@ app.post(["/api/doctor-calls/test-message", "/doctor-calls/test-message"], async
     res.json(result);
   } catch (err: any) {
     console.error("Error sending test message:", err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 7. Auto-configure Green-API Webhook URL directly from Admin Panel
+app.post(["/api/doctor-calls/set-webhook-url", "/doctor-calls/set-webhook-url"], async (req, res) => {
+  try {
+    const webhookUrl = req.body?.webhookUrl;
+    if (!webhookUrl || typeof webhookUrl !== "string") {
+      return res.status(400).json({ success: false, message: "webhookUrl is required" });
+    }
+    const result = await setGreenApiWebhookUrl(webhookUrl);
+    res.json(result);
+  } catch (err: any) {
+    console.error("Error setting Green-API webhook URL:", err);
+    res.status(500).json({ success: false, message: err?.message || String(err) });
+  }
+});
+
+// 8. Simulate Incoming Call Pipeline (End-to-End Diagnostic Tool)
+app.post(["/api/doctor-calls/simulate-call", "/doctor-calls/simulate-call"], async (req, res) => {
+  try {
+    const defaultText =
+      `Type: Request\n\n` +
+      `Category: DoctorCall\n\n` +
+      `Group: جراحة المخ و الاعصاب\n\n` +
+      `By: Nurse Test Simulation\n\n` +
+      `Date: ${new Date().toLocaleString("en-US", { timeZone: "Africa/Cairo" })}\n\n` +
+      `Location: Elite 3rd Floor - Elite\n\n` +
+      `Sub.Location: Room 325\n\n` +
+      `Patient Barcode: 0000999999\n` +
+      `Patient Name: مريض محاكاة تجريبي\n` +
+      `Admitting Phys: Dr. Consultant\n` +
+      `Bed: Bed 325\n\n` +
+      `لمناظرة الحالة بصورة عاجلة`;
+
+    const rawText = (req.body?.message && typeof req.body.message === "string") ? req.body.message : defaultText;
+
+    const sourceGroup = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.split(",")[0]?.trim() || "simulated_group@g.us";
+
+    const simulatedPayload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: `sim_${Date.now()}`,
+      senderData: {
+        chatId: sourceGroup,
+        chatName: "Ward Calls",
+        sender: "201000000000@c.us",
+        senderName: "Head Nurse"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: {
+          textMessage: rawText
+        }
+      }
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: simulatedPayload,
+      getActiveCheckins: async () => {
+        const raw = await readCheckInsRaw();
+        return raw.map(c => enrichCheckIn(c));
+      }
+    });
+
+    res.json({ success: true, result });
+  } catch (err: any) {
+    console.error("Error simulating doctor call:", err);
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });
