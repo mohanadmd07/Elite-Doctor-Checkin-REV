@@ -5,6 +5,7 @@ import {
   formatDoctorCallAlert,
   isDuplicateMessage,
   processDoctorCallWebhook,
+  parseDoctorCallDate,
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -226,3 +227,68 @@ describe('Flat Green-API Incoming Message Payload', () => {
     expect(result.callRecord?.callerName).toBe("Ahmed Fathy Salama Elsayed");
   });
 });
+
+describe('Doctor Call Date Parsing & Exact Day Date Roster Matching', () => {
+  it('parses diverse Egyptian, Arabic, and US date formats into YYYY-MM-DD', () => {
+    expect(parseDoctorCallDate('14‏/10‏/2026 9:23:12 م')).toBe('2026-10-14');
+    expect(parseDoctorCallDate('10/14/2026, 7:16:39 PM')).toBe('2026-10-14');
+    expect(parseDoctorCallDate('١٤/١٠/٢٠٢٦ ٩:٢٣:١٢ م')).toBe('2026-10-14');
+    expect(parseDoctorCallDate('2026-10-14 21:23:12')).toBe('2026-10-14');
+    expect(parseDoctorCallDate('2026/10/14')).toBe('2026-10-14');
+    expect(parseDoctorCallDate('05/10/2026')).toBe('2026-10-05');
+  });
+
+  it('passes the exact day date from message to getActiveCheckins', async () => {
+    let capturedDate = "";
+    const rawMessage =
+      "Type: Request\n\n" +
+      "Category: DoctorCall\n\n" +
+      "Group: الجراحة العامة\n\n" +
+      "By: Nurse Fatima\n\n" +
+      "Date: 14‏/10‏/2026 9:23:12 م\n\n" +
+      "Location: Elite 4th Floor - Elite\n\n" +
+      "Sub.Location: Room 409\n\n" +
+      "Patient Barcode: 0000263656\n" +
+      "Patient Name: مصطفي عبدالوهاب محمد خطابي\n" +
+      "Admitting Phys: Akram Assem\n" +
+      "Bed: Bed 409";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "test_call_date_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: {
+          textMessage: rawMessage
+        }
+      }
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async (targetDate?: string) => {
+        capturedDate = targetDate || "";
+        return [
+          {
+            id: "101",
+            doctorName: "Dr. Ahmed Mohamed",
+            department: "General Surgery",
+            shifts: ["Evening shift", "Night shift"],
+            mobileNumber: "01012345678"
+          }
+        ];
+      }
+    });
+
+    expect(capturedDate).toBe("2026-10-14");
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.callDate).toBe("2026-10-14");
+    expect(result.callRecord?.dispatchedDoctors.length).toBeGreaterThan(0);
+    expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. Ahmed Mohamed");
+  });
+});
+

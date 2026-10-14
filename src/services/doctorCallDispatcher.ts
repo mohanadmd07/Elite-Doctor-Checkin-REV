@@ -220,6 +220,53 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
 }
 
 /**
+ * Parses diverse date formats found in DoctorCall messages into ISO YYYY-MM-DD
+ * Handles:
+ * - Egyptian/Arabic date strings: "14‏/10‏/2026 9:23:12 م" -> "2026-10-14"
+ * - US formatted date strings: "10/14/2026, 7:16:39 PM" -> "2026-10-14"
+ * - ISO date strings: "2026-10-14" -> "2026-10-14"
+ * - Normalizes Arabic numerals (٠-٩) and Unicode RTL/LTR markers
+ */
+export function parseDoctorCallDate(dateStr?: string): string | null {
+  if (!dateStr || typeof dateStr !== "string") return null;
+
+  // Convert Arabic numerals to ASCII
+  const asciiStr = dateStr.replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+  // Strip RTL/LTR marks and zero-width characters
+  const cleaned = asciiStr.replace(/[\u200e\u200f\u202a-\u202e\uFEFF]/g, "").trim();
+
+  // 1. Check for standard ISO format: YYYY-MM-DD
+  const isoMatch = cleaned.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = isoMatch[2].padStart(2, "0");
+    const d = isoMatch[3].padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // 2. Check for DD/MM/YYYY or MM/DD/YYYY
+  const partsMatch = cleaned.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+  if (partsMatch) {
+    const first = parseInt(partsMatch[1], 10);
+    const second = parseInt(partsMatch[2], 10);
+    const year = partsMatch[3];
+
+    // If first part > 12, it must be the day: DD/MM/YYYY
+    if (first > 12 && second <= 12) {
+      return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+    }
+    // If second part > 12, it must be the day: MM/DD/YYYY
+    if (second > 12 && first <= 12) {
+      return `${year}-${String(first).padStart(2, "0")}-${String(second).padStart(2, "0")}`;
+    }
+    // In Egypt hospital context, day/month/year (DD/MM/YYYY) is standard
+    return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+/**
  * Calculates current active shift(s) according to Africa/Cairo local time
  * Hospital shifts defined in Elite Hospital:
  * - Morning shift: 08:00 AM - 04:00 PM (480 - 960 min)
@@ -810,7 +857,7 @@ export async function sendTestDoctorCallAlert(): Promise<{
 
 export async function processDoctorCallWebhook(params: {
   rawBody: any;
-  getActiveCheckins: () => Promise<any[]>;
+  getActiveCheckins: (callDate?: string) => Promise<any[]>;
   source?: "webhook" | "poll" | "simulation";
 }): Promise<{
   handled: boolean;
@@ -940,15 +987,16 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: skipReason };
   }
 
-  // 3. Resolve active shift in Cairo
+  // 3. Resolve active shift and call date in Cairo
   const now = new Date();
   const activeShifts = getCairoActiveShifts(now);
   const cairoDate = getCairoDateString(now);
+  const targetCallDate = parseDoctorCallDate(parsed.callDate) || cairoDate;
 
-  console.log(`[DoctorCall] Received call for Room ${parsed.room}, Dept: "${parsed.departmentRaw}" -> "${parsed.canonicalDepartment}". Active Cairo Shifts: [${activeShifts.join(", ")}]`);
+  console.log(`[DoctorCall] Received call for Room ${parsed.room}, Dept: "${parsed.departmentRaw}" -> "${parsed.canonicalDepartment}". Date: "${targetCallDate}". Active Cairo Shifts: [${activeShifts.join(", ")}]`);
 
-  // 4. Match checked-in doctors
-  const allCheckins = await getActiveCheckins();
+  // 4. Match checked-in doctors for this exact date from monthly roster
+  const allCheckins = await getActiveCheckins(targetCallDate);
   const matchingDoctors: DispatchedDoctorInfo[] = [];
 
   for (const c of allCheckins) {
@@ -1050,7 +1098,7 @@ export async function processDoctorCallWebhook(params: {
   // 7. Save record
   const record: DoctorCallRecord = {
     id: callId,
-    callDate: cairoDate,
+    callDate: targetCallDate,
     createdAt: now.toISOString(),
     room: parsed.room,
     department: parsed.canonicalDepartment,
@@ -1073,7 +1121,7 @@ export async function processDoctorCallWebhook(params: {
  * Polls Green-API receiveNotification queue as a failsafe when webhooks cannot reach the server
  */
 export async function pollGreenApiNotifications(params: {
-  getActiveCheckins: () => Promise<any[]>;
+  getActiveCheckins: (callDate?: string) => Promise<any[]>;
   maxCount?: number;
 }): Promise<{
   polledCount: number;
@@ -1136,7 +1184,7 @@ export async function pollGreenApiNotifications(params: {
  */
 export async function reDispatchDoctorCall(params: {
   callId: string;
-  getActiveCheckins: () => Promise<any[]>;
+  getActiveCheckins: (callDate?: string) => Promise<any[]>;
 }): Promise<{
   success: boolean;
   message: string;
@@ -1152,7 +1200,8 @@ export async function reDispatchDoctorCall(params: {
 
   const now = new Date();
   const activeShifts = getCairoActiveShifts(now);
-  const allCheckins = await getActiveCheckins();
+  const targetDate = target.callDate || getCairoDateString(now);
+  const allCheckins = await getActiveCheckins(targetDate);
   const matchingDoctors: DispatchedDoctorInfo[] = [];
 
   for (const c of allCheckins) {

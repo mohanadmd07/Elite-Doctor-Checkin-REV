@@ -3173,6 +3173,40 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
 // WHATSAPP DOCTOR CALL AUTOMATION & DISPATCH WEBHOOK
 // =========================================================================
 
+/**
+ * Retrieves attending physicians matching the exact calendar/duty date from the
+ * 30-day cumulative monthly sheet (monthly_checkins), rather than the daily sheet.
+ * Includes both 7 PM hospital duty day cutoff matching and local Cairo calendar matching.
+ */
+async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckIn[]> {
+  const monthlyList = await readMonthlyCheckIns();
+  const todayEgyptStr = getEgyptDateStr(new Date().toISOString());
+  const dateToMatch = targetDateStr || todayEgyptStr;
+
+  console.log(`[DoctorCall Roster] Querying monthly sheet for exact day date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
+
+  // Match checkins for this exact day date
+  const matched = monthlyList.filter(c => {
+    const egyptDate = getEgyptDateStr(c.timestamp);
+    const cairoCalDate = new Date(c.timestamp).toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
+    const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
+
+    return egyptDate === dateToMatch || cairoCalDate === dateToMatch || directDate === dateToMatch;
+  });
+
+  // Deduplicate by normalized doctor ID/name to return unique attending physicians for this day
+  const docMap = new Map<string, CheckIn>();
+  for (const c of matched) {
+    const enriched = enrichCheckIn(c);
+    const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+    docMap.set(key, enriched);
+  }
+
+  const result = Array.from(docMap.values());
+  console.log(`[DoctorCall Roster] Found ${result.length} physician(s) on monthly sheet for date "${dateToMatch}"`);
+  return result;
+}
+
 // 1. Green-API Webhook Ingestion endpoint
 app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
   const startMs = Date.now();
@@ -3185,9 +3219,8 @@ app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
     // from freezing/terminating the async execution environment prematurely!
     const result = await processDoctorCallWebhook({
       rawBody: req.body,
-      getActiveCheckins: async () => {
-        const raw = await readCheckInsRaw();
-        return raw.map(c => enrichCheckIn(c));
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
       }
     });
 
@@ -3227,9 +3260,8 @@ app.post(["/api/doctor-calls/:id/redispatch", "/doctor-calls/:id/redispatch"], a
     const callId = req.params.id;
     const result = await reDispatchDoctorCall({
       callId,
-      getActiveCheckins: async () => {
-        const raw = await readCheckInsRaw();
-        return raw.map(c => enrichCheckIn(c));
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
       }
     });
     res.json(result);
@@ -3332,9 +3364,8 @@ app.post(["/api/doctor-calls/simulate-call", "/doctor-calls/simulate-call"], asy
 
     const result = await processDoctorCallWebhook({
       rawBody: simulatedPayload,
-      getActiveCheckins: async () => {
-        const raw = await readCheckInsRaw();
-        return raw.map(c => enrichCheckIn(c));
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
       }
     });
 
@@ -3359,9 +3390,8 @@ app.get(["/api/doctor-calls/audit-logs", "/doctor-calls/audit-logs"], async (req
 app.post(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
   try {
     const pollResult = await pollGreenApiNotifications({
-      getActiveCheckins: async () => {
-        const raw = await readCheckInsRaw();
-        return raw.map(c => enrichCheckIn(c));
+      getActiveCheckins: async (callDate?: string) => {
+        return getMonthlyCheckinsForDate(callDate);
       },
       maxCount: 10
     });
