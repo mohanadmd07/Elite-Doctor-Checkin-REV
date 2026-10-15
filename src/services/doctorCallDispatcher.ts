@@ -16,8 +16,9 @@ import crypto from "crypto";
 import { normalizeSpecialty } from "../data/specialties.js";
 import { getSupabase } from "../db/supabase.js";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), "data");
 const DOCTOR_CALLS_FILE = path.join(DATA_DIR, "doctor_calls.json");
+const AUDIT_LOGS_FILE = path.join(DATA_DIR, "webhook_audit_logs.json");
 
 export interface ParsedDoctorCall {
   category: string;
@@ -102,7 +103,31 @@ export interface WebhookAuditLog {
 }
 
 const RECENT_WEBHOOK_LOGS: WebhookAuditLog[] = [];
-const MAX_AUDIT_LOGS = 25;
+const MAX_AUDIT_LOGS = 50;
+
+function readAuditLogsLocal(): WebhookAuditLog[] {
+  try {
+    if (fs.existsSync(AUDIT_LOGS_FILE)) {
+      const content = fs.readFileSync(AUDIT_LOGS_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    // Ignore
+  }
+  return [];
+}
+
+function writeAuditLogsLocal(logs: WebhookAuditLog[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(AUDIT_LOGS_FILE, JSON.stringify(logs.slice(0, MAX_AUDIT_LOGS), null, 2), "utf-8");
+  } catch (err) {
+    // Ignore
+  }
+}
 
 export function recordWebhookAuditLog(log: Omit<WebhookAuditLog, "id" | "timestamp" | "displayTime">) {
   const now = new Date();
@@ -117,9 +142,16 @@ export function recordWebhookAuditLog(log: Omit<WebhookAuditLog, "id" | "timesta
   if (RECENT_WEBHOOK_LOGS.length > MAX_AUDIT_LOGS) {
     RECENT_WEBHOOK_LOGS.pop();
   }
+  writeAuditLogsLocal(RECENT_WEBHOOK_LOGS);
 }
 
 export function getRecentWebhookAuditLogs(): WebhookAuditLog[] {
+  if (RECENT_WEBHOOK_LOGS.length === 0) {
+    const fileLogs = readAuditLogsLocal();
+    if (fileLogs.length > 0) {
+      RECENT_WEBHOOK_LOGS.push(...fileLogs);
+    }
+  }
   return [...RECENT_WEBHOOK_LOGS];
 }
 
@@ -795,6 +827,8 @@ export async function getGreenApiSettings(): Promise<{
     incomingWebhook?: string;
     stateWebhook?: string;
     outgoingWebhook?: string;
+    outgoingMessageWebhook?: string;
+    outgoingAPIMessageWebhook?: string;
   };
   error?: string;
 }> {
@@ -819,7 +853,7 @@ export async function getGreenApiSettings(): Promise<{
 }
 
 /**
- * Auto-registers the Webhook URL in Green-API with incoming webhooks enabled
+ * Auto-registers the Webhook URL in Green-API with incoming, outgoing, and state webhooks enabled
  */
 export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
   success: boolean;
@@ -845,6 +879,9 @@ export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
       body: JSON.stringify({
         webhookUrl: cleanUrl,
         incomingWebhook: "yes",
+        outgoingWebhook: "yes",
+        outgoingMessageWebhook: "yes",
+        outgoingAPIMessageWebhook: "yes",
         stateWebhook: "yes"
       })
     });
@@ -859,7 +896,7 @@ export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
 
     return {
       success: true,
-      message: `Webhook URL successfully set to "${cleanUrl}" in Green-API with incoming webhooks enabled!`
+      message: `Webhook URL successfully set to "${cleanUrl}" in Green-API with incoming and outgoing webhooks enabled!`
     };
   } catch (err: any) {
     return { success: false, message: err?.message || "Failed to set Green-API webhook" };
@@ -880,6 +917,9 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
   statusMessage: string;
   greenApiWebhookUrl?: string;
   incomingWebhookEnabled?: boolean;
+  outgoingMessageWebhookEnabled?: boolean;
+  supabaseTableStatus?: "ready" | "missing_table" | "error" | "not_configured";
+  supabaseErrorMessage?: string;
 }> {
   const idInstance = process.env.GREEN_API_ID_INSTANCE?.trim() || "";
   const apiTokenInstance = process.env.GREEN_API_API_TOKEN_INSTANCE?.trim() || "";
@@ -890,6 +930,29 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
   const hasToken = Boolean(apiTokenInstance);
   const isPaused = isAutomationPaused();
 
+  let supabaseTableStatus: "ready" | "missing_table" | "error" | "not_configured" = "not_configured";
+  let supabaseErrorMessage = "";
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { error } = await supabase.from("doctor_calls").select("id").limit(1);
+      if (error) {
+        if (error.message?.includes("does not exist") || error.code === "42P01") {
+          supabaseTableStatus = "missing_table";
+          supabaseErrorMessage = 'Table "public.doctor_calls" does not exist in Supabase database. Please execute scripts/supabase-schema.sql in the Supabase SQL Editor.';
+        } else {
+          supabaseTableStatus = "error";
+          supabaseErrorMessage = error.message;
+        }
+      } else {
+        supabaseTableStatus = "ready";
+      }
+    } catch (err: any) {
+      supabaseTableStatus = "error";
+      supabaseErrorMessage = err.message || String(err);
+    }
+  }
+
   if (!hasInstanceId || !hasToken) {
     return {
       configured: false,
@@ -899,7 +962,9 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
       targetGroup,
       stateInstance: "missing_credentials",
       isPaused,
-      statusMessage: "Green-API instance ID or API token missing in environment variables."
+      statusMessage: "Green-API instance ID or API token missing in environment variables.",
+      supabaseTableStatus,
+      supabaseErrorMessage
     };
   }
 
@@ -915,11 +980,13 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
 
   let greenApiWebhookUrl: string | undefined;
   let incomingWebhookEnabled: boolean | undefined;
+  let outgoingMessageWebhookEnabled: boolean | undefined;
 
   const settingsRes = await getGreenApiSettings();
   if (settingsRes.success && settingsRes.settings) {
     greenApiWebhookUrl = settingsRes.settings.webhookUrl || "";
     incomingWebhookEnabled = settingsRes.settings.incomingWebhook === "yes";
+    outgoingMessageWebhookEnabled = settingsRes.settings.outgoingMessageWebhook === "yes";
   }
 
   const isConnected = stateInstance === "authorized";
@@ -934,6 +1001,8 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
     statusMessage = "WhatsApp is authorized, but Green-API Webhook URL is not set. Use 'Auto-Set Webhook' to activate.";
   } else if (incomingWebhookEnabled !== true) {
     statusMessage = "WhatsApp is authorized, but 'incomingWebhook' is disabled in Green-API. Enable it via 'Auto-Set Webhook'.";
+  } else if (supabaseTableStatus === "missing_table") {
+    statusMessage = "WhatsApp is authorized, but Supabase table 'doctor_calls' is missing. Please create it using scripts/supabase-schema.sql.";
   } else {
     statusMessage = `WhatsApp is connected & authorized (${stateInstance}) • Webhook active • Target Group Set.`;
   }
@@ -948,7 +1017,10 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
     isPaused,
     statusMessage,
     greenApiWebhookUrl,
-    incomingWebhookEnabled
+    incomingWebhookEnabled,
+    outgoingMessageWebhookEnabled,
+    supabaseTableStatus,
+    supabaseErrorMessage
   };
 }
 
@@ -1024,7 +1096,17 @@ export async function processDoctorCallWebhook(params: {
 
   // 1. Extract message ID and check deduplication
   const idMessage = rawBody.idMessage || rawBody.messageData?.idMessage || "";
-  const senderChatId = (rawBody.senderData?.chatId || rawBody.chatId || rawBody.messageData?.chatId || rawBody.chat || rawBody.from || "").trim().toLowerCase();
+  const senderChatId = (
+    rawBody.senderData?.chatId ||
+    rawBody.chatId ||
+    rawBody.messageData?.chatId ||
+    rawBody.chat ||
+    rawBody.from ||
+    rawBody.senderId ||
+    rawBody.senderData?.sender ||
+    rawBody.sender ||
+    ""
+  ).trim().toLowerCase();
   const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || rawBody.senderName || "";
   const typeWebhook = rawBody.typeWebhook || rawBody.typeMessage || rawBody.messageData?.typeMessage || "incomingMessage";
 
@@ -1076,6 +1158,9 @@ export async function processDoctorCallWebhook(params: {
     rawBody.messageData?.chatId,
     rawBody.chat,
     rawBody.from,
+    rawBody.senderId,
+    rawBody.senderData?.sender,
+    rawBody.sender,
     senderChatId
   ].filter(Boolean).map(s => String(s).trim().toLowerCase());
 
@@ -1089,40 +1174,6 @@ export async function processDoctorCallWebhook(params: {
     });
     if (isFromTargetGroup) {
       return { handled: false, reason: "Ignored message originating from the target doctors group" };
-    }
-  }
-
-  // Check source group if specified (supports comma/semicolon/space separated list of monitored groups)
-  const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
-
-  if (monitoredGroupRaw && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
-    const monitoredGroups = monitoredGroupRaw
-      .split(/[,;\s]+/)
-      .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
-      .filter(Boolean);
-
-    if (monitoredGroups.length > 0) {
-      const matchesMonitored = candidateChatIds.some(cid => {
-        const cleanCid = cid.replace(/@(g|c)\.us$/i, "");
-        return monitoredGroups.some(mg => {
-          const cleanMg = mg.replace(/@(g|c)\.us$/i, "");
-          return cid === mg || cleanCid === cleanMg || cleanCid.includes(cleanMg) || cleanMg.includes(cleanCid);
-        });
-      });
-
-      if (!matchesMonitored) {
-        const skipReason = `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`;
-        recordWebhookAuditLog({
-          source,
-          senderChatId,
-          senderName,
-          typeWebhook,
-          textSnippet,
-          handled: false,
-          reason: skipReason
-        });
-        return { handled: false, reason: skipReason };
-      }
     }
   }
 
@@ -1149,10 +1200,37 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: skipReason };
   }
 
+  // Check source group if specified (supports comma/semicolon/space separated list of monitored groups)
+  const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
+  let matchesMonitored = true;
+  let monitoredGroups: string[] = [];
+
+  if (monitoredGroupRaw && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
+    monitoredGroups = monitoredGroupRaw
+      .split(/[,;\s]+/)
+      .map(g => g.trim().toLowerCase().replace(/['"]/g, ""))
+      .filter(Boolean);
+
+    if (monitoredGroups.length > 0) {
+      matchesMonitored = candidateChatIds.some(cid => {
+        const cleanCid = cid.replace(/@(g|c)\.us$/i, "");
+        return monitoredGroups.some(mg => {
+          const cleanMg = mg.replace(/@(g|c)\.us$/i, "");
+          return cid === mg || cleanCid === cleanMg || cleanCid.includes(cleanMg) || cleanMg.includes(cleanCid);
+        });
+      });
+    }
+  }
+
   // 2. Parse DoctorCall format
   const parsed = parseDoctorCallMessage(messageText);
+
+  // If this message does not match DoctorCall format:
   if (!parsed) {
-    const skipReason = "Message does not match DoctorCall category pattern";
+    const skipReason = !matchesMonitored && monitoredGroups.length > 0
+      ? `Ignored message from chat ${senderChatId} (monitored: ${monitoredGroups.join(", ")})`
+      : "Message does not match DoctorCall category pattern";
+
     recordWebhookAuditLog({
       source,
       senderChatId,
@@ -1163,6 +1241,14 @@ export async function processDoctorCallWebhook(params: {
       reason: skipReason
     });
     return { handled: false, reason: skipReason };
+  }
+
+  // If this IS a valid DoctorCall, NEVER DROP IT!
+  // If the chat didn't strictly match WHATSAPP_CALLS_SOURCE_GROUP_ID, log a clear notice and proceed
+  if (!matchesMonitored && monitoredGroups.length > 0) {
+    console.warn(
+      `[DoctorCall] ⚠️ Notice: Incoming message from chat "${senderChatId}" matched DoctorCall format, but chat ID is not explicitly listed in WHATSAPP_CALLS_SOURCE_GROUP_ID ("${monitoredGroupRaw}"). Proceeding with dispatch to prevent dropped hospital emergency call.`
+    );
   }
 
   // 3. Resolve active shift and call date in Cairo using 8:00 AM hospital shift cutoff

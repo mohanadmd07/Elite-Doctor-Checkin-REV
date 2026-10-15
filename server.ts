@@ -3206,16 +3206,50 @@ async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckI
     docMap.set(key, enriched);
   }
 
+  // Fallback: If no records match on monthly sheet for this date, also check daily checkins if date matches today's duty date
+  if (docMap.size === 0) {
+    try {
+      const dailyList = await readDailyCheckIns();
+      const dailyMatched = dailyList.filter(c => {
+        const egyptDate = getEgyptDateStr(c.timestamp);
+        const cairoCalDate = new Date(c.timestamp).toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
+        const dutyDate = getHospitalDutyDate(new Date(c.timestamp));
+        return egyptDate === dateToMatch || cairoCalDate === dateToMatch || dutyDate === dateToMatch;
+      });
+      for (const c of dailyMatched) {
+        const enriched = enrichCheckIn(c);
+        const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+        docMap.set(key, enriched);
+      }
+    } catch (err: any) {
+      console.warn("[DoctorCall Roster] Daily checkins fallback error:", err.message);
+    }
+  }
+
   const result = Array.from(docMap.values());
   console.log(`[DoctorCall Roster] Found ${result.length} physician(s) on monthly sheet for date "${dateToMatch}"`);
   return result;
 }
 
 // 1. Green-API Webhook Ingestion endpoint
-app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
+app.all(["/api/whatsapp/webhook", "/api/whatsapp/webhook/", "/whatsapp/webhook", "/whatsapp/webhook/"], async (req, res) => {
+  // Support GET / HEAD / OPTIONS for endpoint verification and ping checks
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
+    return res.status(200).json({
+      status: "ready",
+      service: "doctor-call-webhook",
+      endpoint: req.originalUrl,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ status: "method_not_allowed", method: req.method });
+  }
+
   const startMs = Date.now();
-  console.log("[DoctorCall Webhook] Incoming POST to /api/whatsapp/webhook");
-  console.log(`[DoctorCall Webhook] Payload type: ${req.body?.typeWebhook || "unknown"}, senderChatId: ${req.body?.senderData?.chatId || req.body?.chatId || "unknown"}`);
+  console.log(`[DoctorCall Webhook] Incoming POST to ${req.originalUrl}`);
+  console.log(`[DoctorCall Webhook] Payload type: ${req.body?.typeWebhook || req.body?.typeMessage || req.body?.type || "unknown"}, senderChatId: ${req.body?.senderData?.chatId || req.body?.chatId || req.body?.senderId || "unknown"}`);
 
   try {
     // CRITICAL SERVERLESS LIFECYCLE RULE (Node.js best practices):
@@ -3245,6 +3279,20 @@ app.post(["/api/whatsapp/webhook", "/whatsapp/webhook"], async (req, res) => {
 // 2. Fetch Doctor Calls List (with date, department, status, and search filters)
 app.get(["/api/doctor-calls", "/doctor-calls"], async (req, res) => {
   try {
+    // Proactive Green-API Queue Drain:
+    // When viewing doctor calls, automatically poll up to 3 pending notifications from Green-API queue
+    // to catch any messages delivered while serverless lambda was cold or webhooks were delayed
+    try {
+      await pollGreenApiNotifications({
+        getActiveCheckins: async (callDate?: string) => {
+          return getMonthlyCheckinsForDate(callDate);
+        },
+        maxCount: 3
+      });
+    } catch (pollErr: any) {
+      // Non-blocking
+    }
+
     const date = typeof req.query.date === "string" ? req.query.date : undefined;
     const department = typeof req.query.department === "string" ? req.query.department : undefined;
     const status = typeof req.query.status === "string" ? req.query.status : undefined;

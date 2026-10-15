@@ -11,7 +11,11 @@
       "destination": "/api"
     },
     {
-      "source": "/((?!api/|api$).*)",
+      "source": "/whatsapp/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/((?!api/|api$|whatsapp/).*)",
       "destination": "/index.html"
     }
   ]

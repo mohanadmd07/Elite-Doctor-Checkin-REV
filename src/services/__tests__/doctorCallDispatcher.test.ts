@@ -478,6 +478,117 @@ describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
     expect(parsed?.patientName).toBe("حنان مصطفى");
     expect(parsed?.notes).toBe("المرور على الحالة");
   });
+
+  it('handles outgoingMessageReceived webhooks when sent from the instance phone', async () => {
+    const outgoingPayload = {
+      typeWebhook: "outgoingMessageReceived",
+      idMessage: "msg_out_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: {
+          textMessage:
+            "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 405\n\nPatient Name: احمد خالد\nBed: Bed 405"
+        }
+      }
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: outgoingPayload,
+      getActiveCheckins: async () => [
+        {
+          id: "301",
+          doctorName: "Dr. General Surgeon",
+          department: "General Surgery",
+          shifts: ["Morning shift", "24 shift"],
+          mobileNumber: "01000000002"
+        }
+      ]
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.room).toBe("405");
+    expect(result.callRecord?.department).toBe("General Surgery");
+  });
+
+  it('never drops a valid DoctorCall even if WHATSAPP_CALLS_SOURCE_GROUP_ID has a minor mismatch', async () => {
+    const originalEnv = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID;
+    try {
+      // Simulate configured source group being different
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = "999999999999@g.us";
+
+      const payload = {
+        typeWebhook: "incomingMessageReceived",
+        idMessage: "msg_mismatch_" + Date.now(),
+        senderData: {
+          chatId: "120363345000178212@g.us",
+          senderName: "Hospital Group"
+        },
+        messageData: {
+          typeMessage: "textMessage",
+          textMessageData: {
+            textMessage:
+              "Type: Request\n\nCategory: DoctorCall\n\nGroup: الباطنة العامة\n\nBy: Nurse Station\n\nDate: 14/10/2026 11:00:00 AM\n\nLocation: Elite 2nd Floor\n\nSub.Location: Room 201\n\nPatient Name: سمير علي\nBed: Bed 201"
+          }
+        }
+      };
+
+      const result = await processDoctorCallWebhook({
+        rawBody: payload,
+        getActiveCheckins: async () => [
+          {
+            id: "401",
+            doctorName: "Dr. Internal Med",
+            department: "Internal Medicine",
+            shifts: ["Morning shift", "24 shift"],
+            mobileNumber: "01000000003"
+          }
+        ]
+      });
+
+      // Valid DoctorCall must NOT be dropped!
+      expect(result.handled).toBe(true);
+      expect(result.callRecord?.room).toBe("201");
+      expect(result.callRecord?.department).toBe("Internal Medicine");
+    } finally {
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = originalEnv;
+    }
+  });
+
+  it('skips non-call chatter from unmonitored chats', async () => {
+    const originalEnv = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID;
+    try {
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = "120363345000178212@g.us";
+
+      const payload = {
+        typeWebhook: "incomingMessageReceived",
+        idMessage: "msg_chat_" + Date.now(),
+        senderData: {
+          chatId: "999999999999@g.us",
+          senderName: "Random Group"
+        },
+        messageData: {
+          typeMessage: "textMessage",
+          textMessageData: {
+            textMessage: "Hello guys, anyone have lunch yet?"
+          }
+        }
+      };
+
+      const result = await processDoctorCallWebhook({
+        rawBody: payload,
+        getActiveCheckins: async () => []
+      });
+
+      expect(result.handled).toBe(false);
+      expect(result.reason).toContain("Ignored message from chat");
+    } finally {
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = originalEnv;
+    }
+  });
 });
 
 

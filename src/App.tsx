@@ -300,7 +300,35 @@ export default function App() {
     statusMessage: string;
     greenApiWebhookUrl?: string;
     incomingWebhookEnabled?: boolean;
+    outgoingMessageWebhookEnabled?: boolean;
+    supabaseTableStatus?: "ready" | "missing_table" | "error" | "not_configured";
+    supabaseErrorMessage?: string;
   } | null>(null);
+  const [copiedSql, setCopiedSql] = useState(false);
+
+  const DOCTOR_CALLS_SQL = `-- Execute this script in your Supabase SQL Editor:
+CREATE TABLE IF NOT EXISTS public.doctor_calls (
+  id TEXT PRIMARY KEY,
+  call_date TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  room TEXT NOT NULL,
+  department TEXT NOT NULL,
+  raw_department TEXT,
+  patient_name TEXT,
+  patient_barcode TEXT,
+  admitting_physician TEXT,
+  caller_name TEXT,
+  dispatched_doctors JSONB DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'received',
+  raw_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_date ON public.doctor_calls (call_date);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_dept ON public.doctor_calls (department);
+CREATE INDEX IF NOT EXISTS idx_doctor_calls_status ON public.doctor_calls (status);
+
+ALTER TABLE public.doctor_calls ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USING (true) WITH CHECK (true);`;
   const [isCheckingAutomation, setIsCheckingAutomation] = useState(false);
   const [isSendingTestMessage, setIsSendingTestMessage] = useState(false);
   const [isConfiguringWebhook, setIsConfiguringWebhook] = useState(false);
@@ -3675,6 +3703,36 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Missing Supabase Table Warning Banner */}
+                  {automationStatus?.supabaseTableStatus === "missing_table" && (
+                    <div className="bg-rose-50 border-2 border-rose-300 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-rose-950 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2.5 bg-rose-600 text-white rounded-lg shrink-0 mt-0.5">
+                          <AlertTriangle className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-xs uppercase tracking-wide text-rose-900">
+                            Supabase Cloud Table "doctor_calls" is Missing!
+                          </h4>
+                          <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
+                            On Vercel, calls cannot be saved or fetched across server restarts until this table is created. Click "Copy SQL Query" and run it once in your Supabase SQL Editor.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(DOCTOR_CALLS_SQL);
+                          setCopiedSql(true);
+                          setTimeout(() => setCopiedSql(false), 3000);
+                        }}
+                        className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
+                      >
+                        {copiedSql ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4 text-white" />}
+                        <span>{copiedSql ? "SQL Copied to Clipboard!" : "Copy SQL for Supabase"}</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* WhatsApp Automation Diagnostics Modal */}
                   {showStatusModal && (
                     <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
@@ -3730,14 +3788,48 @@ export default function App() {
                           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5 font-mono text-[11px]">
                             <div className="text-slate-500 font-sans font-bold text-xs flex items-center justify-between">
                               <span>Green-API Webhook Settings:</span>
-                              <span className={automationStatus?.incomingWebhookEnabled ? "text-emerald-600 font-bold" : "text-amber-600 font-bold"}>
-                                {automationStatus?.incomingWebhookEnabled ? "✅ Incoming: ON" : "⚠️ Incoming: OFF"}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className={automationStatus?.incomingWebhookEnabled ? "text-emerald-600 font-bold" : "text-amber-600 font-bold"}>
+                                  {automationStatus?.incomingWebhookEnabled ? "✅ In: ON" : "⚠️ In: OFF"}
+                                </span>
+                                <span className={automationStatus?.outgoingMessageWebhookEnabled ? "text-emerald-600 font-bold" : "text-amber-600 font-bold"}>
+                                  {automationStatus?.outgoingMessageWebhookEnabled ? "✅ Out: ON" : "⚠️ Out: OFF"}
+                                </span>
+                              </div>
                             </div>
                             <div className="text-slate-700 break-all">
                               <span className="font-semibold text-slate-500">Registered URL:</span>{" "}
                               {automationStatus?.greenApiWebhookUrl || "(Not set in Green-API console)"}
                             </div>
+                          </div>
+
+                          {/* Supabase Cloud Table Status */}
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5 text-[11px]">
+                            <div className="text-slate-500 font-bold text-xs flex items-center justify-between">
+                              <span>Supabase Cloud Database:</span>
+                              {automationStatus?.supabaseTableStatus === "ready" ? (
+                                <span className="font-bold text-emerald-600">✅ Table Ready (Persisted)</span>
+                              ) : automationStatus?.supabaseTableStatus === "missing_table" ? (
+                                <span className="font-bold text-rose-600">❌ Table "doctor_calls" Missing</span>
+                              ) : (
+                                <span className="font-bold text-slate-500">Local Only</span>
+                              )}
+                            </div>
+                            {automationStatus?.supabaseTableStatus === "missing_table" && (
+                              <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                                <span className="text-rose-700 font-medium">Create table in Supabase SQL editor:</span>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(DOCTOR_CALLS_SQL);
+                                    setCopiedSql(true);
+                                    setTimeout(() => setCopiedSql(false), 3000);
+                                  }}
+                                  className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] rounded transition-colors cursor-pointer"
+                                >
+                                  {copiedSql ? "Copied!" : "Copy SQL"}
+                                </button>
+                              </div>
+                            )}
                           </div>
 
                           {/* Groups Configured */}
