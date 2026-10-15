@@ -453,7 +453,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       if (callsStatusFilter && callsStatusFilter !== "All") params.append("status", callsStatusFilter);
       if (callsSearch.trim()) params.append("search", callsSearch.trim());
 
-      const res = await fetch(`/api/doctor-calls?${params.toString()}`);
+      const res = await fetch(`/api/doctor-calls?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setDoctorCalls(json.data);
@@ -491,7 +491,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   const fetchAutomationStatus = async () => {
     setIsCheckingAutomation(true);
     try {
-      const res = await fetch("/api/doctor-calls/status");
+      const res = await fetch("/api/doctor-calls/status", { cache: "no-store" });
       const json = await res.json();
       if (json.success && json.status) {
         setAutomationStatus(json.status);
@@ -606,7 +606,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
   const fetchAuditLogs = async () => {
     try {
-      const res = await fetch("/api/doctor-calls/audit-logs");
+      const res = await fetch("/api/doctor-calls/audit-logs", { cache: "no-store" });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setAuditLogs(json.data);

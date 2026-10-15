@@ -3278,6 +3278,9 @@ app.all(["/api/whatsapp/webhook", "/api/whatsapp/webhook/", "/whatsapp/webhook",
 
 // 2. Fetch Doctor Calls List (with date, department, status, and search filters)
 app.get(["/api/doctor-calls", "/doctor-calls"], async (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   try {
     // Proactive Green-API Queue Drain:
     // When viewing doctor calls, automatically poll up to 3 pending notifications from Green-API queue
@@ -3325,6 +3328,9 @@ app.post(["/api/doctor-calls/:id/redispatch", "/doctor-calls/:id/redispatch"], a
 
 // 4. Check Green-API Connection Status & Configuration
 app.get(["/api/doctor-calls/status", "/doctor-calls/status"], async (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   try {
     const status = await checkWhatsAppAutomationStatus();
     res.json({ success: true, status });
@@ -3430,6 +3436,9 @@ app.post(["/api/doctor-calls/simulate-call", "/doctor-calls/simulate-call"], asy
 
 // 9. Fetch Live Webhook & Dispatch Audit Logs (for real-time ingestion observability)
 app.get(["/api/doctor-calls/audit-logs", "/doctor-calls/audit-logs"], async (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   try {
     const logs = getRecentWebhookAuditLogs();
     res.json({ success: true, count: logs.length, data: logs });
