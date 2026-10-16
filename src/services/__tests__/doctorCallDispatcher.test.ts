@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   toWhatsAppPhone,
   parseDoctorCallMessage,
   formatDoctorCallAlert,
   isDuplicateMessage,
   processDoctorCallWebhook,
+  pollGreenApiNotifications,
   parseDoctorCallDate,
   previewCustomDoctorCall,
   sendCustomDoctorCall,
@@ -590,6 +591,102 @@ describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
     }
   });
 });
+
+describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () => {
+  it('recovers and dispatches source group DoctorCall via lastIncomingMessages when Green-API sends quotaExceeded webhook', async () => {
+    const origId = process.env.GREEN_API_ID_INSTANCE;
+    const origToken = process.env.GREEN_API_API_TOKEN_INSTANCE;
+    const origSource = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID;
+    const origTarget = process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID;
+    const origFetch = global.fetch;
+
+    const uniqueMsgId = `3EB0_QUOTA_RECOVERY_${Date.now()}`;
+    const uniquePatient = `مريض طوارئ ${Date.now()}`;
+
+    try {
+      process.env.GREEN_API_ID_INSTANCE = "7100000001";
+      process.env.GREEN_API_API_TOKEN_INSTANCE = "test_token_123";
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = "120363345000178212@g.us";
+      process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID = "120363041612395794@g.us";
+
+      global.fetch = vi.fn(async (url: any, init?: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/lastIncomingMessages/")) {
+          return {
+            ok: true,
+            json: async () => [
+              {
+                type: "incoming",
+                idMessage: uniqueMsgId,
+                timestamp: Math.floor(Date.now() / 1000),
+                typeMessage: "textMessage",
+                chatId: "120363345000178212@g.us",
+                textMessage:
+                  `Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: ${uniquePatient}\nAdmitting Phys: Akram Assem\nBed: Bed 409`,
+                senderId: "201103700026@c.us",
+                senderName: "Elite Hospital"
+              }
+            ]
+          } as any;
+        }
+        if (urlStr.includes("/lastOutgoingMessages/") || urlStr.includes("/getChatHistory/")) {
+          return { ok: true, json: async () => [] } as any;
+        }
+        if (urlStr.includes("/sendMessage/")) {
+          return { ok: true, json: async () => ({ idMessage: "sent_alert_123" }) } as any;
+        }
+        return { ok: true, json: async () => ({}) } as any;
+      });
+
+      const quotaPayload = {
+        typeWebhook: "quotaExceeded",
+        instanceData: { idInstance: 7100000001, wid: "201000000000@c.us", typeInstance: "whatsapp" },
+        timestamp: Math.floor(Date.now() / 1000),
+        quotaData: {
+          method: "incomingMessageReceived",
+          used: 3,
+          total: 3,
+          correspondents: ["120363041612395794@g.us", "201203886997-1605102717@g.us", "201000000001@c.us"],
+          description: "Monthly quota has been exceeded. Allowed chats: 120363041612395794@g.us"
+        }
+      };
+
+      const res = await processDoctorCallWebhook({
+        rawBody: quotaPayload,
+        getActiveCheckins: async () => [
+          {
+            id: "901",
+            doctorName: "Dr. Recovered Surgeon",
+            department: "General Surgery",
+            shifts: ["Evening shift", "Night shift", "24 shift"],
+            mobileNumber: "01012345678"
+          }
+        ]
+      });
+
+      expect(res.handled).toBe(true);
+      expect(res.callRecord?.id).toBe(`call_msg_${uniqueMsgId}`);
+      expect(res.callRecord?.room).toBe("409");
+      expect(res.callRecord?.department).toBe("General Surgery");
+      expect(res.callRecord?.patientName).toBe(uniquePatient);
+      expect(res.callRecord?.status).toBe("dispatched");
+
+      // Subsequent poll must deduplicate and NOT dispatch the same message again
+      const secondPoll = await pollGreenApiNotifications({
+        getActiveCheckins: async () => [],
+        skipQueueDrain: true
+      });
+      expect(secondPoll.handledCount).toBe(0);
+    } finally {
+      process.env.GREEN_API_ID_INSTANCE = origId;
+      process.env.GREEN_API_API_TOKEN_INSTANCE = origToken;
+      process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID = origSource;
+      process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID = origTarget;
+      global.fetch = origFetch;
+    }
+  });
+});
+
 
 
 

@@ -282,9 +282,7 @@ export default function App() {
   const [callsSearch, setCallsSearch] = useState("");
   const [callsDeptFilter, setCallsDeptFilter] = useState("All");
   const [callsStatusFilter, setCallsStatusFilter] = useState("All");
-  const [callsDateFilter, setCallsDateFilter] = useState(() => {
-    return new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
-  });
+  const [callsDateFilter, setCallsDateFilter] = useState("");
   const [redispatchingCallId, setRedispatchingCallId] = useState<string | null>(null);
   const [callActionFeedback, setCallActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
 
@@ -4441,14 +4439,36 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                   <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-3 flex-1">
                       {/* Date Filter */}
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <label className="text-xs font-bold text-slate-600">Date:</label>
                         <input
                           type="date"
                           value={callsDateFilter}
                           onChange={(e) => setCallsDateFilter(e.target.value)}
-                          className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                          className="px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                         />
+                        <button
+                          type="button"
+                          onClick={() => setCallsDateFilter("")}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                            callsDateFilter === ""
+                              ? "bg-[#063b30] text-white border-[#063b30]"
+                              : "bg-slate-50 text-slate-600 border-slate-300 hover:bg-slate-100"
+                          }`}
+                        >
+                          All Dates
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCallsDateFilter(
+                              new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" })
+                            )
+                          }
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 text-slate-600 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                          Today
+                        </button>
                       </div>
 
                       {/* Search Bar */}
@@ -4520,16 +4540,17 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                   icon={PhoneCall}
                                   title="No Doctor Calls Recorded"
                                   description={
-                                    callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
+                                    callsDateFilter || callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
                                       ? "No recorded calls match current filter criteria."
                                       : "Incoming calls from WhatsApp group matching \"Category: DoctorCall\" will automatically appear here."
                                   }
                                   actionLabel={
-                                    callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
-                                      ? "Clear Filters"
+                                    callsDateFilter || callsSearch || callsDeptFilter !== "All" || callsStatusFilter !== "All"
+                                      ? "Show All Calls"
                                       : undefined
                                   }
                                   onAction={() => {
+                                    setCallsDateFilter("");
                                     setCallsSearch("");
                                     setCallsDeptFilter("All");
                                     setCallsStatusFilter("All");
