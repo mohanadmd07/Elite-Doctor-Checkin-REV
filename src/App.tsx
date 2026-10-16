@@ -336,12 +336,34 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [isPollingQueue, setIsPollingQueue] = useState(false);
 
+  // Helper: Hospital operational duty date in Africa/Cairo (before 08:00 AM belongs to previous day's roster)
+  const getHospitalDutyDateClient = (date: Date = new Date()): string => {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      hourCycle: "h23"
+    });
+    const parts = formatter.formatToParts(date);
+    const year = parts.find(p => p.type === "year")?.value || "";
+    const month = parts.find(p => p.type === "month")?.value || "";
+    const day = parts.find(p => p.type === "day")?.value || "";
+    const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+    const d = new Date(`${year}-${month}-${day}T12:00:00Z`);
+    if (hour < 8) {
+      d.setUTCDate(d.getUTCDate() - 1);
+    }
+    return d.toISOString().split("T")[0];
+  };
+
   // Custom Doctor Call Modal state
   const [showCustomCallModal, setShowCustomCallModal] = useState(false);
   const [customCallForm, setCustomCallForm] = useState({
     room: "",
     department: "General Surgery",
-    date: new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" }),
+    date: getHospitalDutyDateClient(),
     patientName: "",
     patientBarcode: "",
     admittingPhysician: "",
@@ -389,9 +411,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       const json = await res.json();
       if (json.success) {
         setCustomCallPreview(json);
-        if (!f.isEditingMessageText) {
-          setCustomCallForm(prev => ({ ...prev, customMessage: json.formattedMessage }));
-        }
+        setCustomCallForm(prev => ({
+          ...prev,
+          date: json.callDate || prev.date,
+          customMessage: f.isEditingMessageText ? prev.customMessage : json.formattedMessage
+        }));
       }
     } catch (err) {
       console.error("Error previewing custom call:", err);
@@ -3621,9 +3645,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         {/* Send Custom Doctor Call Button */}
                         <button
                           onClick={() => {
+                            const dutyDate = getHospitalDutyDateClient();
+                            setCustomCallForm(prev => ({ ...prev, date: dutyDate }));
                             setShowCustomCallModal(true);
                             setCustomCallSuccess(null);
-                            fetchCustomCallPreview();
+                            fetchCustomCallPreview({ date: dutyDate });
                           }}
                           className="px-3.5 py-2 bg-gradient-to-r from-emerald-700 to-teal-800 hover:from-emerald-800 hover:to-teal-900 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow-md active:scale-98"
                           title="Compose and preview a custom inpatient doctor call message"
@@ -4470,11 +4496,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            setCallsDateFilter(
-                              new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" })
-                            )
-                          }
+                          onClick={() => setCallsDateFilter(getHospitalDutyDateClient())}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-50 text-slate-600 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
                         >
                           Today

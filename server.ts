@@ -25,7 +25,8 @@ import {
   getRecentWebhookAuditLogs,
   previewCustomDoctorCall,
   sendCustomDoctorCall,
-  getHospitalDutyDate
+  getHospitalDutyDate,
+  resolveHospitalDutyDate
 } from "./src/services/doctorCallDispatcher.js";
 
 // In-memory cache for latest client-rendered Retina header image
@@ -3185,42 +3186,44 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
 async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckIn[]> {
   const monthlyList = await readMonthlyCheckIns();
   const defaultDutyDate = getHospitalDutyDate(new Date());
-  const dateToMatch = targetDateStr || defaultDutyDate;
+  const dateToMatch = targetDateStr ? resolveHospitalDutyDate(targetDateStr, new Date()) : defaultDutyDate;
 
   console.log(`[DoctorCall Roster] Querying monthly sheet for exact duty date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
 
-  // Match checkins for this exact duty date
+  // Match checkins strictly by their Monthly Sheet date (getEgyptDateStr, where inputs >= 7 PM belong to next day's sheet)
+  // This prevents next-day pre-registrations (entered after 7 PM on day D for day D+1) from polluting day D's duty roster before 8:00 AM on day D+1.
   const matched = monthlyList.filter(c => {
-    const egyptDate = getEgyptDateStr(c.timestamp);
-    const cairoCalDate = new Date(c.timestamp).toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
     const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
-    const dutyDate = getHospitalDutyDate(new Date(c.timestamp));
-
-    return egyptDate === dateToMatch || cairoCalDate === dateToMatch || directDate === dateToMatch || dutyDate === dateToMatch;
+    const sheetDate = directDate || getEgyptDateStr(c.timestamp);
+    return sheetDate === dateToMatch;
   });
 
   // Deduplicate by normalized doctor ID/name to return unique attending physicians for this day
+  // (monthlyList is ordered newest-first, so keep the first/latest entry for that sheet date)
   const docMap = new Map<string, CheckIn>();
   for (const c of matched) {
     const enriched = enrichCheckIn(c);
     const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
-    docMap.set(key, enriched);
+    if (!docMap.has(key)) {
+      docMap.set(key, enriched);
+    }
   }
 
-  // Fallback: If no records match on monthly sheet for this date, also check daily checkins if date matches today's duty date
+  // Fallback: If no records match on monthly sheet for this date, also check daily checkins matching this exact sheet date
   if (docMap.size === 0) {
     try {
       const dailyList = await readDailyCheckIns();
       const dailyMatched = dailyList.filter(c => {
-        const egyptDate = getEgyptDateStr(c.timestamp);
-        const cairoCalDate = new Date(c.timestamp).toLocaleDateString("en-CA", { timeZone: "Africa/Cairo" });
-        const dutyDate = getHospitalDutyDate(new Date(c.timestamp));
-        return egyptDate === dateToMatch || cairoCalDate === dateToMatch || dutyDate === dateToMatch;
+        const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
+        const sheetDate = directDate || getEgyptDateStr(c.timestamp);
+        return sheetDate === dateToMatch;
       });
       for (const c of dailyMatched) {
         const enriched = enrichCheckIn(c);
         const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
-        docMap.set(key, enriched);
+        if (!docMap.has(key)) {
+          docMap.set(key, enriched);
+        }
       }
     } catch (err: any) {
       console.warn("[DoctorCall Roster] Daily checkins fallback error:", err.message);

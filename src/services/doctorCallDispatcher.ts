@@ -424,21 +424,44 @@ export function resolveHospitalDutyDate(callDateStr?: string, referenceTime: Dat
 
   // Extract time from the string if present (e.g. "9:23:12 م", "02:15:00 ص", "7:16:39 PM", "14:30")
   let callHour: number | null = null;
-  const timeMatch = cleaned.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([^\d\s\r\n]+)?/);
+  const timeMatch = cleaned.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([^\d\s\r\n,]+)?/);
   if (timeMatch) {
     let h = parseInt(timeMatch[1], 10);
     const meridian = (timeMatch[3] || "").trim().toLowerCase();
-    const isPM = meridian === "م" || meridian === "pm" || meridian === "مساء" || meridian.startsWith("p");
-    const isAM = meridian === "ص" || meridian === "am" || meridian === "صباح" || meridian.startsWith("a");
+    const isPM = meridian.startsWith("م") || meridian.startsWith("p");
+    const isAM = meridian.startsWith("ص") || meridian.startsWith("a");
 
     if (isPM && h < 12) h += 12;
     if (isAM && h === 12) h = 0;
     callHour = h;
   }
 
-  // If time was not specified in the date string, assume noon (12:00) so the explicit date is preserved as-is
+  const parsedCalendarDate = `${year}-${month}-${day}`;
+
+  // If time was not specified in the date string:
+  // When the date string is today's Cairo calendar date (e.g. "2026-10-17" after midnight),
+  // use the referenceTime's Cairo hour so calls/previews before 8:00 AM Egypt time resolve to the previous day ("2026-10-16").
   if (callHour === null) {
-    callHour = 12;
+    const refFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      hourCycle: "h23"
+    });
+    const refParts = refFormatter.formatToParts(referenceTime);
+    const refYear = refParts.find(p => p.type === "year")?.value || "";
+    const refMonth = refParts.find(p => p.type === "month")?.value || "";
+    const refDay = refParts.find(p => p.type === "day")?.value || "";
+    const refHour = parseInt(refParts.find(p => p.type === "hour")?.value || "0", 10);
+    const refCairoCalDate = `${refYear}-${refMonth}-${refDay}`;
+
+    if (parsedCalendarDate === refCairoCalDate) {
+      callHour = refHour;
+    } else {
+      callHour = 12;
+    }
   }
 
   const d = new Date(`${year}-${month}-${day}T12:00:00Z`);
@@ -1857,7 +1880,9 @@ export async function reDispatchDoctorCall(params: {
 
   const now = new Date();
   const activeShifts = getCairoActiveShifts(now);
-  const targetDate = target.callDate || getCairoDateString(now);
+  const referenceDate = target.createdAt ? new Date(target.createdAt) : now;
+  const targetDate = resolveHospitalDutyDate(target.callDate, isNaN(referenceDate.getTime()) ? now : referenceDate);
+  target.callDate = targetDate;
   const allCheckins = await getActiveCheckins(targetDate);
   const matchingDoctors: DispatchedDoctorInfo[] = [];
 

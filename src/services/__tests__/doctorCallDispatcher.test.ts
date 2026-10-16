@@ -379,6 +379,19 @@ describe('8:00 AM Egypt Hospital Duty Date Boundary Rule', () => {
     const earlyMorningUtc = new Date('2026-10-15T01:00:00Z');
     expect(getHospitalDutyDate(earlyMorningUtc)).toBe('2026-10-14');
 
+    // 01:16 AM Cairo on Oct 17 is 22:16 UTC on Oct 16 -> duty date must be Oct 16
+    const oct17AfterMidnightUtc = new Date('2026-10-16T22:16:00Z');
+    expect(getHospitalDutyDate(oct17AfterMidnightUtc)).toBe('2026-10-16');
+
+    // Date-only string "2026-10-17" passed after midnight (01:16 AM Cairo on Oct 17) -> must resolve to "2026-10-16"
+    expect(resolveHospitalDutyDate('2026-10-17', oct17AfterMidnightUtc)).toBe('2026-10-16');
+    expect(resolveHospitalDutyDate('17/10/2026', oct17AfterMidnightUtc)).toBe('2026-10-16');
+    expect(resolveHospitalDutyDate('10/17/2026, 1:16:00 AM', oct17AfterMidnightUtc)).toBe('2026-10-16');
+    expect(resolveHospitalDutyDate('17/10/2026 12:30:00 صباحاً', oct17AfterMidnightUtc)).toBe('2026-10-16');
+
+    // Explicit previous day "2026-10-16" passed at 01:16 AM Cairo on Oct 17 -> must stay "2026-10-16" (not subtract twice)
+    expect(resolveHospitalDutyDate('2026-10-16', oct17AfterMidnightUtc)).toBe('2026-10-16');
+
     // 11:00 AM Cairo is 08:00 UTC
     const daytimeUtc = new Date('2026-10-15T08:00:00Z');
     expect(getHospitalDutyDate(daytimeUtc)).toBe('2026-10-15');
