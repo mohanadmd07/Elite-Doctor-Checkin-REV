@@ -556,11 +556,23 @@ export function formatDoctorCallAlert(params: {
   doctors: DispatchedDoctorInfo[];
   specialty: string;
   room: string;
+  patientName?: string;
+  patientBarcode?: string;
   notes?: string;
   isOffShiftCoverage?: boolean;
 }): string {
-  const { doctors, specialty, room, notes, isOffShiftCoverage } = params;
+  const { doctors, specialty, room, patientName, patientBarcode, notes, isOffShiftCoverage } = params;
   const coverageNote = isOffShiftCoverage ? ` _(On-duty coverage)_` : "";
+  const cleanPatientName =
+    patientName && patientName.trim() && patientName.trim().toLowerCase() !== "n/a"
+      ? patientName.trim()
+      : "";
+  const cleanMrn =
+    patientBarcode && patientBarcode.trim() && patientBarcode.trim().toLowerCase() !== "n/a"
+      ? patientBarcode.trim()
+      : "";
+  const patientLine = cleanPatientName ? `👤 *Patient:* ${cleanPatientName}\n` : "";
+  const mrnLine = cleanMrn ? `🆔 *MRN:* ${cleanMrn}\n` : "";
   const notesLine = notes ? `📝 *Notes:* ${notes}\n` : "";
 
   if (doctors.length === 1) {
@@ -573,6 +585,8 @@ export function formatDoctorCallAlert(params: {
       `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*${coverageNote}\n\n` +
       `📍 *Location:* Room *${room}*\n` +
       `🩺 *Specialty:* ${specialty}\n` +
+      patientLine +
+      mrnLine +
       `📞 *Phone:* ${phoneDisplay}\n` +
       notesLine + `\n` +
       `⚡ _Please attend to the patient promptly._`
@@ -588,6 +602,8 @@ export function formatDoctorCallAlert(params: {
     `👨‍⚕️ ${mentionsLine}${coverageNote}\n\n` +
     `📍 *Location:* Room *${room}*\n` +
     `🩺 *Specialty:* ${specialty}\n` +
+    patientLine +
+    mrnLine +
     `📞 *Phones:* ${phonesLine}\n` +
     notesLine + `\n` +
     `⚡ _Please attend to the patient promptly._`
@@ -887,6 +903,7 @@ export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
       body: JSON.stringify({
         webhookUrl: cleanUrl,
         incomingWebhook: "yes",
+        incomingBlockWebhook: "yes",
         outgoingWebhook: "yes",
         outgoingMessageWebhook: "yes",
         outgoingAPIMessageWebhook: "yes",
@@ -1079,6 +1096,38 @@ export async function sendTestDoctorCallAlert(): Promise<{
 // PIPELINE WORKFLOW (WEBHOOK INGESTION & DISPATCH)
 // =========================================================================
 
+let lastOpportunisticJournalPollMs = 0;
+
+/**
+ * Piggybacks a throttled Green-API Journal API check onto any incoming webhook heartbeat or API request
+ * so messages from quota-restricted source groups are ingested even when no browser is open.
+ */
+export async function runOpportunisticJournalPoll(
+  getActiveCheckins: (callDate?: string) => Promise<any[]>,
+  minIntervalMs: number = 8000
+): Promise<DoctorCallRecord | undefined> {
+  if (!process.env.GREEN_API_ID_INSTANCE?.trim() || !process.env.GREEN_API_API_TOKEN_INSTANCE?.trim()) {
+    return undefined;
+  }
+  const nowMs = Date.now();
+  if (nowMs - lastOpportunisticJournalPollMs < minIntervalMs) {
+    return undefined;
+  }
+  lastOpportunisticJournalPollMs = nowMs;
+  try {
+    const pollRes = await pollGreenApiNotifications({
+      getActiveCheckins,
+      maxCount: 3,
+      skipQueueDrain: true
+    });
+    const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
+    return firstHandled?.callRecord;
+  } catch (err: any) {
+    console.warn("[DoctorCall] Opportunistic journal poll error:", err.message);
+    return undefined;
+  }
+}
+
 export async function processDoctorCallWebhook(params: {
   rawBody: any;
   getActiveCheckins: (callDate?: string) => Promise<any[]>;
@@ -1118,13 +1167,25 @@ export async function processDoctorCallWebhook(params: {
   const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || rawBody.senderName || "";
   const typeWebhook = rawBody.typeWebhook || rawBody.typeMessage || rawBody.messageData?.typeMessage || "incomingMessage";
 
-  // Fast skip for non-message notifications (delivery/read receipts, authorization state changes)
+  // Non-message notifications (delivery/read receipts, authorization state changes)
+  // Piggyback an opportunistic journal poll so every Green-API event acts as a background heartbeat when the app is closed!
   const nonMessageTypes = ["outgoingmessagestatus", "stateinstancechanged", "deviceinfo", "incomingcall", "outgoingcall"];
   if (nonMessageTypes.includes(typeWebhook.toLowerCase())) {
+    if (source === "webhook") {
+      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
+      if (recovered) {
+        return {
+          handled: true,
+          reason: `Recovered source group call via Journal API during ${typeWebhook} webhook heartbeat`,
+          callRecord: recovered
+        };
+      }
+    }
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
-  // Handle Green-API Developer Plan 'quotaExceeded' webhook by immediately polling Journal API
+  // Handle Green-API Developer Plan 'quotaExceeded' webhook by polling Journal API with retry delays
+  // (Green-API often takes 1.5s–4s after firing quotaExceeded to finish indexing the new message in lastIncomingMessages / getChatHistory)
   if (typeWebhook.toLowerCase() === "quotaexceeded") {
     const blockedChats = Array.isArray(rawBody.quotaData?.correspondents)
       ? rawBody.quotaData.correspondents.join(", ")
@@ -1146,18 +1207,28 @@ export async function processDoctorCallWebhook(params: {
     });
 
     if (source === "webhook") {
-      try {
-        const pollRes = await pollGreenApiNotifications({ getActiveCheckins, maxCount: 5, skipQueueDrain: true });
-        const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
-        if (firstHandled) {
-          return {
-            handled: true,
-            reason: "Recovered and dispatched via Green-API Journal API after quotaExceeded webhook",
-            callRecord: firstHandled.callRecord
-          };
+      const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
+      const retryDelaysMs = isTestEnv ? [0, 10, 10] : [0, 2500, 3500];
+
+      for (let attempt = 0; attempt < retryDelaysMs.length; attempt++) {
+        const delayMs = retryDelaysMs[attempt];
+        if (delayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
-      } catch (err: any) {
-        console.warn("[DoctorCall] Journal recovery after quotaExceeded failed:", err.message);
+        try {
+          lastOpportunisticJournalPollMs = Date.now();
+          const pollRes = await pollGreenApiNotifications({ getActiveCheckins, maxCount: 5, skipQueueDrain: true });
+          const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
+          if (firstHandled) {
+            return {
+              handled: true,
+              reason: `Recovered and dispatched via Green-API Journal API after quotaExceeded webhook (attempt ${attempt + 1})`,
+              callRecord: firstHandled.callRecord
+            };
+          }
+        } catch (err: any) {
+          console.warn(`[DoctorCall] Journal recovery attempt ${attempt + 1} after quotaExceeded failed:`, err.message);
+        }
       }
     }
 
@@ -1245,6 +1316,18 @@ export async function processDoctorCallWebhook(params: {
       handled: false,
       reason: skipReason
     });
+
+    if (source === "webhook") {
+      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
+      if (recovered) {
+        return {
+          handled: true,
+          reason: "Recovered source group call via Journal API during non-text webhook",
+          callRecord: recovered
+        };
+      }
+    }
+
     return { handled: false, reason: skipReason };
   }
 
@@ -1288,6 +1371,18 @@ export async function processDoctorCallWebhook(params: {
       handled: false,
       reason: skipReason
     });
+
+    if (source === "webhook") {
+      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
+      if (recovered) {
+        return {
+          handled: true,
+          reason: "Recovered source group call via Journal API during other chat webhook",
+          callRecord: recovered
+        };
+      }
+    }
+
     return { handled: false, reason: skipReason };
   }
 
@@ -1393,6 +1488,8 @@ export async function processDoctorCallWebhook(params: {
         doctors: matchingDoctors,
         specialty: parsed.canonicalDepartment,
         room: parsed.room,
+        patientName: parsed.patientName,
+        patientBarcode: parsed.patientBarcode,
         notes: parsed.notes,
         isOffShiftCoverage: usedShiftFallback
       });
@@ -1480,7 +1577,7 @@ export async function pollGreenApiNotifications(params: {
     for (let i = 0; i < maxCount; i++) {
       try {
         const receiveUrl = `https://api.green-api.com/waInstance${idInstance}/receiveNotification/${apiTokenInstance}`;
-        const res = await fetch(receiveUrl);
+        const res = await fetch(receiveUrl, { cache: "no-store" as RequestCache });
         const data: any = await res.json().catch(() => null);
 
         if (!data || !data.receiptId) {
@@ -1539,8 +1636,8 @@ export async function pollGreenApiNotifications(params: {
     const outgoingUrl = `https://api.green-api.com/waInstance${idInstance}/lastOutgoingMessages/${apiTokenInstance}?minutes=1440`;
 
     const [incRes, outRes] = await Promise.all([
-      fetch(incomingUrl).catch(() => null),
-      fetch(outgoingUrl).catch(() => null)
+      fetch(incomingUrl, { cache: "no-store" as RequestCache }).catch(() => null),
+      fetch(outgoingUrl, { cache: "no-store" as RequestCache }).catch(() => null)
     ]);
 
     if (incRes && incRes.ok) {
@@ -1750,6 +1847,8 @@ export async function reDispatchDoctorCall(params: {
     doctors: matchingDoctors,
     specialty: target.department,
     room: target.room,
+    patientName: target.patientName,
+    patientBarcode: target.patientBarcode,
     notes: target.notes,
     isOffShiftCoverage: usedShiftFallback
   });
@@ -1859,6 +1958,8 @@ export async function previewCustomDoctorCall(params: {
       doctors: finalMatching,
       specialty: canonicalDepartment,
       room: payload.room || "N/A",
+      patientName: payload.patientName,
+      patientBarcode: payload.patientBarcode,
       notes: payload.notes,
       isOffShiftCoverage
     });

@@ -593,7 +593,7 @@ describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
 });
 
 describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () => {
-  it('recovers and dispatches source group DoctorCall via lastIncomingMessages when Green-API sends quotaExceeded webhook', async () => {
+  it('recovers and dispatches source group DoctorCall via lastIncomingMessages (including delayed journal indexing) and includes Patient Name and MRN', async () => {
     const origId = process.env.GREEN_API_ID_INSTANCE;
     const origToken = process.env.GREEN_API_API_TOKEN_INSTANCE;
     const origSource = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID;
@@ -601,7 +601,10 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
     const origFetch = global.fetch;
 
     const uniqueMsgId = `3EB0_QUOTA_RECOVERY_${Date.now()}`;
-    const uniquePatient = `مريض طوارئ ${Date.now()}`;
+    const uniquePatient = `مصطفي عبدالوهاب ${Date.now()}`;
+    const uniqueMrn = "0000263656";
+    let journalCallCount = 0;
+    let sentWhatsAppPayload: any = null;
 
     try {
       process.env.GREEN_API_ID_INSTANCE = "7100000001";
@@ -612,6 +615,11 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
       global.fetch = vi.fn(async (url: any, init?: any) => {
         const urlStr = String(url);
         if (urlStr.includes("/lastIncomingMessages/")) {
+          journalCallCount++;
+          // Simulate Green-API journal indexing delay: empty on attempt 1, populated on attempt 2
+          if (journalCallCount === 1) {
+            return { ok: true, json: async () => [] } as any;
+          }
           return {
             ok: true,
             json: async () => [
@@ -622,7 +630,7 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
                 typeMessage: "textMessage",
                 chatId: "120363345000178212@g.us",
                 textMessage:
-                  `Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: ${uniquePatient}\nAdmitting Phys: Akram Assem\nBed: Bed 409`,
+                  `Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: ${uniqueMrn}\nPatient Name: ${uniquePatient}\nAdmitting Phys: Akram Assem\nBed: Bed 409`,
                 senderId: "201103700026@c.us",
                 senderName: "Elite Hospital"
               }
@@ -633,6 +641,7 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
           return { ok: true, json: async () => [] } as any;
         }
         if (urlStr.includes("/sendMessage/")) {
+          sentWhatsAppPayload = init?.body ? JSON.parse(init.body) : null;
           return { ok: true, json: async () => ({ idMessage: "sent_alert_123" }) } as any;
         }
         return { ok: true, json: async () => ({}) } as any;
@@ -665,11 +674,15 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
       });
 
       expect(res.handled).toBe(true);
+      expect(journalCallCount).toBeGreaterThanOrEqual(2);
       expect(res.callRecord?.id).toBe(`call_msg_${uniqueMsgId}`);
       expect(res.callRecord?.room).toBe("409");
       expect(res.callRecord?.department).toBe("General Surgery");
       expect(res.callRecord?.patientName).toBe(uniquePatient);
+      expect(res.callRecord?.patientBarcode).toBe(uniqueMrn);
       expect(res.callRecord?.status).toBe("dispatched");
+      expect(sentWhatsAppPayload?.message).toContain(`👤 *Patient:* ${uniquePatient}`);
+      expect(sentWhatsAppPayload?.message).toContain(`🆔 *MRN:* ${uniqueMrn}`);
 
       // Subsequent poll must deduplicate and NOT dispatch the same message again
       const secondPoll = await pollGreenApiNotifications({
@@ -686,6 +699,7 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
     }
   });
 });
+
 
 
 

@@ -21,6 +21,7 @@ import {
   setAutomationPaused,
   setGreenApiWebhookUrl,
   pollGreenApiNotifications,
+  runOpportunisticJournalPoll,
   getRecentWebhookAuditLogs,
   previewCustomDoctorCall,
   sendCustomDoctorCall,
@@ -3448,7 +3449,8 @@ app.get(["/api/doctor-calls/audit-logs", "/doctor-calls/audit-logs"], async (req
 });
 
 // 10. Manual / Background Green-API Notification Poller (Failsafe for when webhooks are blocked)
-app.post(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
+app.all(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   try {
     const pollResult = await pollGreenApiNotifications({
       getActiveCheckins: async (callDate?: string) => {
@@ -3778,6 +3780,11 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   try {
+    // Piggyback a throttled (15s) Green-API journal poll onto check-ins fetches
+    await runOpportunisticJournalPoll(
+      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
+      15000
+    ).catch(() => {});
     const list = await readCheckIns();
     res.json(list.map(c => enrichCheckIn(c)));
   } catch (err) {
@@ -4407,12 +4414,18 @@ async function startServer() {
     console.warn("[Elite Server] Background doctors delta sync:", err);
   });
 
-  // Periodically check and clean up expired check-ins every 30 seconds
+  // Periodically check and clean up expired check-ins & poll Green-API journal every 20 seconds
   setInterval(() => {
     cleanupExpiredCheckIns().catch(err => {
       console.error("[Elite Server] Background cleanup check-ins failed:", err);
     });
-  }, 30000);
+    runOpportunisticJournalPoll(
+      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
+      15000
+    ).catch(err => {
+      console.error("[Elite Server] Background doctor call poll failed:", err);
+    });
+  }, 20000);
 
   // Global JSON error response handler (ensures API never responds with raw HTML <!DOCTYPE>)
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

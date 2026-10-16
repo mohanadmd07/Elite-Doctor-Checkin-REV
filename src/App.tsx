@@ -1389,6 +1389,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     return () => clearInterval(intervalId);
   }, [isAdminAuthenticated]);
 
+  // Global background poller: ensures any open check-in kiosk or browser tab also triggers Green-API journal sync
+  useEffect(() => {
+    const runPoll = () => {
+      fetch("/api/doctor-calls/poll", { method: "POST", cache: "no-store" }).catch(() => {});
+    };
+    runPoll();
+    const bgPollId = setInterval(runPoll, 15000);
+    return () => clearInterval(bgPollId);
+  }, []);
+
   // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 4 seconds)
   useEffect(() => {
     if (!isAdminAuthenticated || adminTab !== "calls") return;
@@ -1401,7 +1411,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       fetchDoctorCalls();
       fetchAuditLogs();
       try {
-        const res = await fetch("/api/doctor-calls/poll", { method: "POST" });
+        const res = await fetch("/api/doctor-calls/poll", { method: "POST", cache: "no-store" });
         const json = await res.json();
         if (json.success && json.handledCount > 0) {
           fetchDoctorCalls();
