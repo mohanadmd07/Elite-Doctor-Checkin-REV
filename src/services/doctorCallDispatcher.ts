@@ -1008,13 +1008,37 @@ export async function checkWhatsAppAutomationStatus(): Promise<{
   let outgoingMessageWebhookEnabled: boolean | undefined;
 
   const settingsRes = await getGreenApiSettings();
+  let incomingBlockWebhookEnabled: boolean | undefined;
   if (settingsRes.success && settingsRes.settings) {
     greenApiWebhookUrl = settingsRes.settings.webhookUrl || "";
     incomingWebhookEnabled = settingsRes.settings.incomingWebhook === "yes";
     outgoingMessageWebhookEnabled = settingsRes.settings.outgoingMessageWebhook === "yes";
+    incomingBlockWebhookEnabled = settingsRes.settings.incomingBlockWebhook === "yes";
   }
 
   const isConnected = stateInstance === "authorized";
+  const isTestEnv = process.env.NODE_ENV === "test" || Boolean(process.env.VITEST);
+
+  if (
+    isConnected &&
+    !isTestEnv &&
+    settingsRes.success &&
+    (!greenApiWebhookUrl || !incomingWebhookEnabled || !incomingBlockWebhookEnabled)
+  ) {
+    const defaultWebhookUrl =
+      greenApiWebhookUrl ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/api/whatsapp/webhook`
+        : "https://elite-doctor-checkin-rev.vercel.app/api/whatsapp/webhook");
+    const autoSetRes = await setGreenApiWebhookUrl(defaultWebhookUrl).catch(() => ({ success: false }));
+    if (autoSetRes.success) {
+      greenApiWebhookUrl = defaultWebhookUrl;
+      incomingWebhookEnabled = true;
+      outgoingMessageWebhookEnabled = true;
+      incomingBlockWebhookEnabled = true;
+    }
+  }
+
   const configured = isConnected && Boolean(targetGroup);
 
   let statusMessage = "";
@@ -1118,7 +1142,8 @@ export async function runOpportunisticJournalPoll(
     const pollRes = await pollGreenApiNotifications({
       getActiveCheckins,
       maxCount: 3,
-      skipQueueDrain: true
+      skipQueueDrain: true,
+      journalMinutes: 60
     });
     const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
     return firstHandled?.callRecord;
@@ -1184,8 +1209,8 @@ export async function processDoctorCallWebhook(params: {
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
-  // Handle Green-API Developer Plan 'quotaExceeded' webhook by polling Journal API with retry delays
-  // (Green-API often takes 1.5s–4s after firing quotaExceeded to finish indexing the new message in lastIncomingMessages / getChatHistory)
+  // Handle Green-API Developer Plan 'quotaExceeded' webhook by polling Journal API with fast, rate-limit-safe retries
+  // (Stays well under Vercel's 10s serverless timeout while respecting Green-API's 1 req/sec Journal API limit)
   if (typeWebhook.toLowerCase() === "quotaexceeded") {
     const blockedChats = Array.isArray(rawBody.quotaData?.correspondents)
       ? rawBody.quotaData.correspondents.join(", ")
@@ -1208,7 +1233,7 @@ export async function processDoctorCallWebhook(params: {
 
     if (source === "webhook") {
       const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
-      const retryDelaysMs = isTestEnv ? [0, 10, 10] : [0, 2500, 3500];
+      const retryDelaysMs = isTestEnv ? [0, 10] : [1200, 2800];
 
       for (let attempt = 0; attempt < retryDelaysMs.length; attempt++) {
         const delayMs = retryDelaysMs[attempt];
@@ -1217,7 +1242,13 @@ export async function processDoctorCallWebhook(params: {
         }
         try {
           lastOpportunisticJournalPollMs = Date.now();
-          const pollRes = await pollGreenApiNotifications({ getActiveCheckins, maxCount: 5, skipQueueDrain: true });
+          const pollRes = await pollGreenApiNotifications({
+            getActiveCheckins,
+            maxCount: 5,
+            skipQueueDrain: true,
+            journalMinutes: 60,
+            incomingOnly: attempt > 0
+          });
           const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
           if (firstHandled) {
             return {
@@ -1387,6 +1418,7 @@ export async function processDoctorCallWebhook(params: {
   }
 
   // Persistent deduplication check against Supabase / stored records (prevents duplicate dispatch on serverless cold starts & journal polls)
+  // Deduplicates strictly by deterministic message ID (`call_msg_${idMessage}`), and only falls back to rawMessage for legacy records without `call_msg_`
   if (idMessage && !idMessage.startsWith("sim_") && (source === "poll" || Boolean(getSupabase()))) {
     try {
       const existingCalls = await getDoctorCallRecords();
@@ -1395,7 +1427,11 @@ export async function processDoctorCallWebhook(params: {
       const alreadyPersisted = existingCalls.some(
         c =>
           c.id === deterministicId ||
-          (source === "poll" && normalizedIncoming && cleanWhatsAppText(c.rawMessage || "").trim() === normalizedIncoming)
+          (source === "poll" &&
+            !String(c.id || "").startsWith("call_msg_") &&
+            !String(c.id || "").startsWith("call_custom_") &&
+            normalizedIncoming &&
+            cleanWhatsAppText(c.rawMessage || "").trim() === normalizedIncoming)
       );
       if (alreadyPersisted) {
         markMessageIdProcessed(idMessage);
@@ -1547,14 +1583,20 @@ export async function processDoctorCallWebhook(params: {
   return { handled: true, callRecord: record };
 }
 
+// Track groups where getChatHistory is blocked by Green-API Developer Plan 3-chat quota (HTTP 466)
+// so we don't repeatedly call getChatHistory and trigger endless quotaExceeded webhook storms.
+const QUOTA_BLOCKED_HISTORY_GROUPS = new Set<string>();
+
 /**
- * Polls Green-API receiveNotification queue AND Journal API (lastIncomingMessages / lastOutgoingMessages / getChatHistory).
+ * Polls Green-API receiveNotification queue AND Journal API (lastIncomingMessages / lastOutgoingMessages).
  * Crucial failsafe when webhooks are blocked by Green-API's 3-chat developer plan 'quotaExceeded' limit.
  */
 export async function pollGreenApiNotifications(params: {
   getActiveCheckins: (callDate?: string) => Promise<any[]>;
   maxCount?: number;
   skipQueueDrain?: boolean;
+  journalMinutes?: number;
+  incomingOnly?: boolean;
 }): Promise<{
   polledCount: number;
   handledCount: number;
@@ -1567,7 +1609,13 @@ export async function pollGreenApiNotifications(params: {
     return { polledCount: 0, handledCount: 0, results: [] };
   }
 
-  const { getActiveCheckins, maxCount = 5, skipQueueDrain = false } = params;
+  const {
+    getActiveCheckins,
+    maxCount = 5,
+    skipQueueDrain = false,
+    journalMinutes = 1440,
+    incomingOnly = false
+  } = params;
   let polled = 0;
   let handled = 0;
   const results: any[] = [];
@@ -1614,8 +1662,11 @@ export async function pollGreenApiNotifications(params: {
     }
   }
 
-  // 2. Direct Journal & Group History Fetch (bypasses Green-API 3-chat 'quotaExceeded' webhook block)
+  // 2. Direct Journal Fetch (bypasses Green-API 3-chat 'quotaExceeded' webhook block)
+  // IMPORTANT: Green-API Journal endpoints (lastIncomingMessages / lastOutgoingMessages) enforce a strict
+  // 1 request/second rate limit per instance. Never call them concurrently via Promise.all!
   try {
+    const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
     const journalMessagesMap = new Map<string, any>();
 
     const addJournalItems = (items: any) => {
@@ -1631,27 +1682,37 @@ export async function pollGreenApiNotifications(params: {
       }
     };
 
-    // 2a. Fetch lastIncomingMessages & lastOutgoingMessages (last 24 hours = 1440 minutes)
-    const incomingUrl = `https://api.green-api.com/waInstance${idInstance}/lastIncomingMessages/${apiTokenInstance}?minutes=1440`;
-    const outgoingUrl = `https://api.green-api.com/waInstance${idInstance}/lastOutgoingMessages/${apiTokenInstance}?minutes=1440`;
+    const fetchJournalEndpoint = async (url: string) => {
+      let res = await fetch(url, { cache: "no-store" as RequestCache }).catch(() => null);
+      if (res && res.status === 429 && !isTestEnv) {
+        // Respect 1 req/sec rate limit and retry once
+        await new Promise(r => setTimeout(r, 1100));
+        res = await fetch(url, { cache: "no-store" as RequestCache }).catch(() => null);
+      }
+      if (res && res.ok) {
+        const data = await res.json().catch(() => []);
+        addJournalItems(data);
+      }
+    };
 
-    const [incRes, outRes] = await Promise.all([
-      fetch(incomingUrl, { cache: "no-store" as RequestCache }).catch(() => null),
-      fetch(outgoingUrl, { cache: "no-store" as RequestCache }).catch(() => null)
-    ]);
+    // 2a. Fetch lastIncomingMessages first
+    const incomingUrl = `https://api.green-api.com/waInstance${idInstance}/lastIncomingMessages/${apiTokenInstance}?minutes=${journalMinutes}`;
+    await fetchJournalEndpoint(incomingUrl);
 
-    if (incRes && incRes.ok) {
-      const incData = await incRes.json().catch(() => []);
-      addJournalItems(incData);
+    // 2b. Fetch lastOutgoingMessages sequentially after 1.05s (unless incomingOnly is set)
+    if (!incomingOnly) {
+      if (!isTestEnv) {
+        await new Promise(r => setTimeout(r, 1050));
+      }
+      const outgoingUrl = `https://api.green-api.com/waInstance${idInstance}/lastOutgoingMessages/${apiTokenInstance}?minutes=${journalMinutes}`;
+      await fetchJournalEndpoint(outgoingUrl);
     }
-    if (outRes && outRes.ok) {
-      const outData = await outRes.json().catch(() => []);
-      addJournalItems(outData);
-    }
 
-    // 2b. Also fetch getChatHistory for explicitly configured source group(s)
+    // 2c. Only attempt getChatHistory on manual/foreground polls (!skipQueueDrain) and only for groups
+    // that haven't already returned 466 Quota Exceeded (since calling getChatHistory on a quota-blocked group
+    // causes Green-API to emit a new quotaExceeded webhook).
     const monitoredGroupRaw = process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID?.trim() || "";
-    if (monitoredGroupRaw && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
+    if (!skipQueueDrain && monitoredGroupRaw && monitoredGroupRaw.toLowerCase() !== "all" && monitoredGroupRaw !== "*") {
       const sourceGroups = monitoredGroupRaw
         .split(/[,;\s]+/)
         .map(g => g.trim().replace(/['"]/g, ""))
@@ -1659,6 +1720,9 @@ export async function pollGreenApiNotifications(params: {
         .map(g => (g.includes("@") ? g : `${g}@g.us`));
 
       for (const groupChatId of sourceGroups) {
+        if (QUOTA_BLOCKED_HISTORY_GROUPS.has(groupChatId.toLowerCase())) {
+          continue;
+        }
         const historyUrl = `https://api.green-api.com/waInstance${idInstance}/getChatHistory/${apiTokenInstance}`;
         const histRes = await fetch(historyUrl, {
           method: "POST",
@@ -1666,9 +1730,13 @@ export async function pollGreenApiNotifications(params: {
           body: JSON.stringify({ chatId: groupChatId, count: 25 })
         }).catch(() => null);
 
-        if (histRes && histRes.ok) {
-          const histData = await histRes.json().catch(() => []);
-          addJournalItems(histData);
+        if (histRes) {
+          if (histRes.status === 466) {
+            QUOTA_BLOCKED_HISTORY_GROUPS.add(groupChatId.toLowerCase());
+          } else if (histRes.ok) {
+            const histData = await histRes.json().catch(() => []);
+            addJournalItems(histData);
+          }
         }
       }
     }
@@ -1677,17 +1745,17 @@ export async function pollGreenApiNotifications(params: {
       // Load persisted records once to deduplicate across serverless cold starts
       const existingCalls = await getDoctorCallRecords();
       const existingIds = new Set<string>();
-      const existingRawMessages = new Set<string>();
+      const legacyRawMessages = new Set<string>();
 
       for (const rec of existingCalls) {
         if (rec.id) {
           existingIds.add(rec.id);
           if (rec.id.startsWith("call_msg_")) {
             markMessageIdProcessed(rec.id.slice("call_msg_".length));
+          } else if (!rec.id.startsWith("call_custom_") && rec.rawMessage) {
+            // Only deduplicate by rawMessage for legacy records that did not store a WhatsApp idMessage
+            legacyRawMessages.add(cleanWhatsAppText(rec.rawMessage).trim());
           }
-        }
-        if (rec.rawMessage) {
-          existingRawMessages.add(cleanWhatsAppText(rec.rawMessage).trim());
         }
       }
 
@@ -1732,9 +1800,9 @@ export async function pollGreenApiNotifications(params: {
           continue;
         }
 
-        // Skip if identical raw message was already saved earlier (e.g. legacy call_ ID format)
+        // Skip only if identical raw message was saved under legacy non-idMessage format
         const normalizedText = cleanWhatsAppText(msgText).trim();
-        if (normalizedText && existingRawMessages.has(normalizedText)) {
+        if (normalizedText && legacyRawMessages.has(normalizedText)) {
           markMessageIdProcessed(msgId);
           continue;
         }
