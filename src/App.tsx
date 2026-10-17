@@ -6277,9 +6277,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       onChange={(e) => setCheckinFormData({ ...checkinFormData, department: e.target.value })}
                       className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-bold text-[#063b30] focus:bg-white focus:border-[#063b30] outline-none transition-all cursor-pointer"
                     >
+                      {checkinFormData.department &&
+                        !SPECIALTY_OPTIONS.some((s) => s.value === checkinFormData.department) && (
+                          <option value={checkinFormData.department}>
+                            {checkinFormData.department}
+                          </option>
+                        )}
                       {SPECIALTY_OPTIONS.map((spec) => (
-                        <option key={`chk-modal-spec-${spec.en}`} value={spec.en}>
-                          {spec.en} — {spec.ar}
+                        <option key={`chk-modal-spec-${spec.value}`} value={spec.value}>
+                          {spec.labelEn} — {spec.labelAr}
                         </option>
                       ))}
                     </select>

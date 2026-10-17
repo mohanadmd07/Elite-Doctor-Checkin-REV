@@ -1,8 +1,8 @@
 [
   {
-    "id": "log_1792276415643_6y2u",
-    "timestamp": "2026-10-17T22:33:35.643Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322466_psqi",
+    "timestamp": "2026-10-17T22:48:42.466Z",
+    "displayTime": "1:48:42 AM",
     "source": "poll",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -16,9 +16,9 @@
     ]
   },
   {
-    "id": "log_1792276415630_pb4a",
-    "timestamp": "2026-10-17T22:33:35.630Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322454_v48w",
+    "timestamp": "2026-10-17T22:48:42.454Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "quotaExceeded",
     "senderName": "",
@@ -28,9 +28,9 @@
     "reason": "Green-API quotaExceeded webhook received (active webhook chats: 120363041612395794@g.us, 201203886997-1605102717@g.us, 201000000001@c.us) — fetching source group messages via Journal API"
   },
   {
-    "id": "log_1792276415630_uiou",
-    "timestamp": "2026-10-17T22:33:35.630Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322454_k8qe",
+    "timestamp": "2026-10-17T22:48:42.454Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "999999999999@g.us",
     "senderName": "Random Group",
@@ -40,9 +40,9 @@
     "reason": "Ignored message from chat 999999999999@g.us (monitored: 120363345000178212@g.us)"
   },
   {
-    "id": "log_1792276415629_g3zo",
-    "timestamp": "2026-10-17T22:33:35.629Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322453_1qag",
+    "timestamp": "2026-10-17T22:48:42.453Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Hospital Group",
@@ -56,9 +56,9 @@
     ]
   },
   {
-    "id": "log_1792276415629_zwy2",
-    "timestamp": "2026-10-17T22:33:35.629Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322452_bytw",
+    "timestamp": "2026-10-17T22:48:42.452Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -72,9 +72,9 @@
     ]
   },
   {
-    "id": "log_1792276415628_3nnw",
-    "timestamp": "2026-10-17T22:33:35.628Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322451_evbq",
+    "timestamp": "2026-10-17T22:48:42.451Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -88,9 +88,9 @@
     ]
   },
   {
-    "id": "log_1792276415625_jsga",
-    "timestamp": "2026-10-17T22:33:35.625Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322450_e3an",
+    "timestamp": "2026-10-17T22:48:42.450Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -104,9 +104,9 @@
     ]
   },
   {
-    "id": "log_1792276415624_6ku6",
-    "timestamp": "2026-10-17T22:33:35.624Z",
-    "displayTime": "1:33:35 AM",
+    "id": "log_1792277322447_qumn",
+    "timestamp": "2026-10-17T22:48:42.447Z",
+    "displayTime": "1:48:42 AM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
