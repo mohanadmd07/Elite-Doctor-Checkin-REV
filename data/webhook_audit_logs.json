@@ -1,0 +1,122 @@
+[
+  {
+    "id": "log_1792276415643_6y2u",
+    "timestamp": "2026-10-17T22:33:35.643Z",
+    "displayTime": "1:33:35 AM",
+    "source": "poll",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "textMessage",
+    "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elit",
+    "handled": true,
+    "status": "dispatched",
+    "reason": "Alert delivered to Dr. Recovered Surgeon",
+    "matchedDoctors": [
+      "Dr. Recovered Surgeon"
+    ]
+  },
+  {
+    "id": "log_1792276415630_pb4a",
+    "timestamp": "2026-10-17T22:33:35.630Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "quotaExceeded",
+    "senderName": "",
+    "typeWebhook": "quotaExceeded",
+    "textSnippet": "Monthly quota has been exceeded. Allowed chats: 120363041612395794@g.us",
+    "handled": false,
+    "reason": "Green-API quotaExceeded webhook received (active webhook chats: 120363041612395794@g.us, 201203886997-1605102717@g.us, 201000000001@c.us) — fetching source group messages via Journal API"
+  },
+  {
+    "id": "log_1792276415630_uiou",
+    "timestamp": "2026-10-17T22:33:35.630Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "999999999999@g.us",
+    "senderName": "Random Group",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Hello guys, anyone have lunch yet?",
+    "handled": false,
+    "reason": "Ignored message from chat 999999999999@g.us (monitored: 120363345000178212@g.us)"
+  },
+  {
+    "id": "log_1792276415629_g3zo",
+    "timestamp": "2026-10-17T22:33:35.629Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Hospital Group",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الباطنة العامة\n\nBy: Nurse Station\n\nDate: 14/10/2026 11:00:00 AM\n\nLocation: E",
+    "handled": true,
+    "status": "failed",
+    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
+    "matchedDoctors": [
+      "Dr. Internal Med"
+    ]
+  },
+  {
+    "id": "log_1792276415629_zwy2",
+    "timestamp": "2026-10-17T22:33:35.629Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "outgoingMessageReceived",
+    "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elit",
+    "handled": true,
+    "status": "failed",
+    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
+    "matchedDoctors": [
+      "Dr. General Surgeon"
+    ]
+  },
+  {
+    "id": "log_1792276415628_3nnw",
+    "timestamp": "2026-10-17T22:33:35.628Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Nurse\nDate: 15/10/2026 03:45:00 ص\nLocation: Elite 4th",
+    "handled": true,
+    "status": "failed",
+    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
+    "matchedDoctors": [
+      "Dr. On-Duty Night Surgeon"
+    ]
+  },
+  {
+    "id": "log_1792276415625_jsga",
+    "timestamp": "2026-10-17T22:33:35.625Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Nurse Fatima\n\nDate: 14‏/10‏/2026 9:23:12 م\n\nLocation: El",
+    "handled": true,
+    "status": "failed",
+    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
+    "matchedDoctors": [
+      "Dr. Ahmed Mohamed"
+    ]
+  },
+  {
+    "id": "log_1792276415624_6ku6",
+    "timestamp": "2026-10-17T22:33:35.624Z",
+    "displayTime": "1:33:35 AM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "textMessage",
+    "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy Salama Elsayed\n\nDate: 14/10/2026 9:23:12 م\n\n",
+    "handled": true,
+    "status": "failed",
+    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
+    "matchedDoctors": [
+      "Dr. Ahmed Mohamed"
+    ]
+  }
+]

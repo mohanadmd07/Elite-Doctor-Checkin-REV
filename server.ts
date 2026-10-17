@@ -1463,20 +1463,19 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
         operations.push(supabase.from("custom_doctor_phones").delete().eq("id", cleanId));
       }
 
-      // Cascade update checkins and monthly_checkins
-      operations.push(supabase.from("checkins").update({
+      // Cascade update checkins, monthly_checkins, and weekly_checkins
+      const cascadePayload: Record<string, any> = {
+        doctor_id: cleanId,
         doctor_name: recordToSave.name,
         doctor_arabic_name: recordToSave.arabicName,
         department: recordToSave.department,
         mobile_number: recordToSave.mobileNumber,
-      }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`));
+      };
+      const orFilter = `doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`;
 
-      operations.push(supabase.from("monthly_checkins").update({
-        doctor_name: recordToSave.name,
-        doctor_arabic_name: recordToSave.arabicName,
-        department: recordToSave.department,
-        mobile_number: recordToSave.mobileNumber,
-      }).or(`doctor_id.eq.${cleanId}${origCleanId ? `,doctor_id.eq.${origCleanId}` : ""}`));
+      operations.push(supabase.from("checkins").update(cascadePayload).or(orFilter));
+      operations.push(supabase.from("monthly_checkins").update(cascadePayload).or(orFilter));
+      operations.push(supabase.from("weekly_checkins").update(cascadePayload).or(orFilter));
 
       const results = await Promise.all(operations);
       for (const res of results) {
@@ -1489,7 +1488,7 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
     }
   }
 
-  // 6. Cascade update in-memory daily and monthly check-ins
+  // 6. Cascade update in-memory daily, monthly, and archived check-ins
   const dailyCheckins = readCheckInsLocal();
   let dailyChanged = false;
   for (const c of dailyCheckins) {
@@ -1521,6 +1520,31 @@ async function saveCustomDoctorRecord(docRecord: CustomDoctorRecord): Promise<vo
     }
   }
   if (monthlyChanged) writeMonthlyCheckInsLocal(monthlyCheckins);
+
+  try {
+    const archivePath = path.join(DATA_DIR, "historical_checkins_archive.json");
+    if (fs.existsSync(archivePath)) {
+      const archiveList: CheckIn[] = JSON.parse(fs.readFileSync(archivePath, "utf-8")) || [];
+      let archiveChanged = false;
+      for (const c of archiveList) {
+        const idMatch = normalizeId(c.id) === idKey || (origKey && normalizeId(c.id) === origKey);
+        const nameMatch = (nameKey && normalizeName(c.doctorName) === nameKey) || (origNameKey && normalizeName(c.doctorName) === origNameKey);
+        if (idMatch || nameMatch) {
+          c.id = cleanId;
+          c.doctorName = recordToSave.name;
+          c.doctorArabicName = recordToSave.arabicName;
+          c.department = recordToSave.department;
+          c.mobileNumber = recordToSave.mobileNumber;
+          archiveChanged = true;
+        }
+      }
+      if (archiveChanged) {
+        fs.writeFileSync(archivePath, JSON.stringify(archiveList, null, 2), "utf-8");
+      }
+    }
+  } catch (e) {
+    console.warn("Failed to cascade doctor update to historical archive:", e);
+  }
 
   invalidateCheckinsCache();
   invalidateMonthlyCache();
@@ -2299,6 +2323,370 @@ async function clearMonthlyCheckIns(): Promise<void> {
 
 const clearWeeklyCheckIns = clearMonthlyCheckIns;
 
+const HISTORICAL_ARCHIVE_FILE = path.join(DATA_DIR, "historical_checkins_archive.json");
+
+function readHistoricalArchiveLocal(): CheckIn[] {
+  try {
+    if (fs.existsSync(HISTORICAL_ARCHIVE_FILE)) {
+      const raw = fs.readFileSync(HISTORICAL_ARCHIVE_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (err) {
+    console.warn("Error reading historical_checkins_archive.json:", err);
+  }
+  return [];
+}
+
+function writeHistoricalArchiveLocal(checkins: CheckIn[]) {
+  try {
+    ensureLocalMonthlyData();
+    fs.writeFileSync(HISTORICAL_ARCHIVE_FILE, JSON.stringify(checkins, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Error writing historical_checkins_archive.json:", err);
+  }
+}
+
+function normalizeSheetDateInput(dateInput?: string): string {
+  if (dateInput && /^\d{4}-\d{2}-\d{2}$/.test(dateInput.trim())) {
+    return dateInput.trim();
+  }
+  return getEgyptDateInfo(dateInput).isoDate;
+}
+
+function buildTimestampForSheetDate(targetDateInput: string, existingTimestamp?: string): string {
+  const targetDateStr = normalizeSheetDateInput(targetDateInput);
+  if (existingTimestamp) {
+    try {
+      const d = new Date(existingTimestamp);
+      if (!isNaN(d.getTime()) && getEgyptDateStr(existingTimestamp) === targetDateStr) {
+        return existingTimestamp;
+      }
+    } catch {}
+  }
+  // 10:00:00Z UTC is 12:00 PM / 1:00 PM in Africa/Cairo (after 08:00 AM duty start and before 19:00 7 PM next-day transition)
+  return `${targetDateStr}T10:00:00.000Z`;
+}
+
+async function getCheckInsForSheetDate(targetDateInput?: string): Promise<CheckIn[]> {
+  const targetDateStr = normalizeSheetDateInput(targetDateInput);
+  const [monthlyList, dailyList] = await Promise.all([
+    readMonthlyCheckIns(),
+    readCheckIns(),
+  ]);
+  const archiveList = readHistoricalArchiveLocal();
+
+  const mergedMap = new Map<string, CheckIn>();
+
+  for (const c of archiveList) {
+    if (!c || !c.id) continue;
+    const cDate = getEgyptDateStr(c.timestamp);
+    if (cDate === targetDateStr) {
+      const enriched = enrichCheckIn(c);
+      const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+      mergedMap.set(key, enriched);
+    }
+  }
+
+  for (const c of monthlyList) {
+    if (!c || !c.id) continue;
+    const cDate = getEgyptDateStr(c.timestamp);
+    if (cDate === targetDateStr) {
+      const enriched = enrichCheckIn(c);
+      const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+      mergedMap.set(key, enriched);
+    }
+  }
+
+  for (const c of dailyList) {
+    if (!c || !c.id) continue;
+    const cDate = getEgyptDateStr(c.timestamp);
+    if (cDate === targetDateStr) {
+      const enriched = enrichCheckIn(c);
+      const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+      mergedMap.set(key, enriched);
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
+async function deleteCheckInForDate(
+  id: string,
+  targetDateInput?: string,
+  originalTimestamp?: string
+): Promise<boolean> {
+  invalidateCheckinsCache();
+  invalidateMonthlyCache();
+
+  const cleanId = (id || "").trim().replace(/^(emp\.|emp)/i, "");
+  const idNorm = normalizeId(cleanId);
+  const targetDateStr = targetDateInput
+    ? normalizeSheetDateInput(targetDateInput)
+    : originalTimestamp
+    ? getEgyptDateStr(originalTimestamp)
+    : getEgyptDateInfo().isoDate;
+
+  let removedAny = false;
+  const matchingTimestamps = new Set<string>();
+  if (originalTimestamp) {
+    matchingTimestamps.add(originalTimestamp);
+  }
+
+  const localMonthly = readMonthlyCheckInsLocal();
+  const filteredMonthly = localMonthly.filter(c => {
+    const cDate = getEgyptDateStr(c.timestamp);
+    const isMatch = normalizeId(c.id) === idNorm && cDate === targetDateStr;
+    if (isMatch) {
+      removedAny = true;
+      if (c.timestamp) matchingTimestamps.add(c.timestamp);
+    }
+    return !isMatch;
+  });
+  if (filteredMonthly.length !== localMonthly.length) {
+    writeMonthlyCheckInsLocal(filteredMonthly);
+  }
+
+  const localArchive = readHistoricalArchiveLocal();
+  if (localArchive.length > 0) {
+    const filteredArchive = localArchive.filter(c => {
+      const cDate = getEgyptDateStr(c.timestamp);
+      const isMatch = normalizeId(c.id) === idNorm && cDate === targetDateStr;
+      if (isMatch) {
+        removedAny = true;
+        if (c.timestamp) matchingTimestamps.add(c.timestamp);
+      }
+      return !isMatch;
+    });
+    if (filteredArchive.length !== localArchive.length) {
+      writeHistoricalArchiveLocal(filteredArchive);
+    }
+  }
+
+  const localDaily = readCheckInsLocal();
+  const activeSheetDate = getEgyptDateInfo().isoDate;
+  const filteredDaily = localDaily.filter(c => {
+    const cDate = getEgyptDateStr(c.timestamp);
+    const isMatch =
+      normalizeId(c.id) === idNorm &&
+      (cDate === targetDateStr || targetDateStr === activeSheetDate);
+    if (isMatch) {
+      removedAny = true;
+      if (c.timestamp) matchingTimestamps.add(c.timestamp);
+    }
+    return !isMatch;
+  });
+  if (filteredDaily.length !== localDaily.length) {
+    writeCheckInsLocal(filteredDaily);
+  }
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const deleteOps: PromiseLike<any>[] = [
+        supabase.from("monthly_checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`).eq("checkin_date", targetDateStr),
+        supabase.from("weekly_checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`).eq("checkin_date", targetDateStr),
+      ];
+      for (const ts of matchingTimestamps) {
+        deleteOps.push(
+          supabase.from("monthly_checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`).eq("checkin_timestamp", ts),
+          supabase.from("weekly_checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`).eq("checkin_timestamp", ts)
+        );
+      }
+      if (targetDateStr === activeSheetDate || filteredDaily.length !== localDaily.length) {
+        deleteOps.push(
+          supabase.from("checkins").delete().or(`doctor_id.eq.${cleanId},doctor_id.eq.${id}`)
+        );
+      }
+      await Promise.all(deleteOps);
+      removedAny = true;
+    } catch (err) {
+      console.error("[Supabase] deleteCheckInForDate failed:", err);
+    }
+  }
+
+  return removedAny;
+}
+
+async function upsertCheckInForDate(
+  checkin: CheckIn,
+  targetDateInput?: string,
+  options?: {
+    originalId?: string;
+    originalDate?: string;
+    originalTimestamp?: string;
+    syncMasterProfile?: boolean;
+  }
+): Promise<CheckIn> {
+  invalidateCheckinsCache();
+  invalidateMonthlyCache();
+
+  const targetDateStr = normalizeSheetDateInput(targetDateInput || (checkin.timestamp ? getEgyptDateStr(checkin.timestamp) : undefined));
+  const cleanId = (checkin.id || "").trim().replace(/^(emp\.|emp)/i, "");
+  const origCleanId = options?.originalId ? options.originalId.trim().replace(/^(emp\.|emp)/i, "") : "";
+  const origDateStr = options?.originalDate
+    ? normalizeSheetDateInput(options.originalDate)
+    : options?.originalTimestamp
+    ? getEgyptDateStr(options.originalTimestamp)
+    : targetDateStr;
+
+  // 1. If doctor ID or target date was changed during edit, remove old check-in record first
+  if (
+    (origCleanId && normalizeId(origCleanId) !== normalizeId(cleanId)) ||
+    (origDateStr && origDateStr !== targetDateStr)
+  ) {
+    await deleteCheckInForDate(origCleanId || cleanId, origDateStr, options?.originalTimestamp);
+  }
+
+  // 2. Normalize department and shifts
+  let finalShifts = Array.isArray(checkin.shifts) ? [...checkin.shifts] : ["Morning shift"];
+  if (
+    finalShifts.length === 3 &&
+    finalShifts.includes("Morning shift") &&
+    finalShifts.includes("Evening shift") &&
+    finalShifts.includes("Night shift")
+  ) {
+    finalShifts = ["24 shift"];
+  }
+
+  const canonicalDept = normalizeDepartment(checkin.department || "General Surgery");
+  const resolvedTimestamp = buildTimestampForSheetDate(
+    targetDateStr,
+    origDateStr === targetDateStr ? (options?.originalTimestamp || checkin.timestamp) : checkin.timestamp
+  );
+
+  // 3. Optionally sync physician profile (Name, Arabic Name, Department, Mobile) to Master Database
+  if (options?.syncMasterProfile !== false) {
+    await saveCustomDoctorRecord({
+      originalId: origCleanId || cleanId,
+      id: cleanId,
+      name: (checkin.doctorName || "").trim(),
+      arabicName: (checkin.doctorArabicName || checkin.doctorName || "").trim(),
+      department: canonicalDept,
+      mobileNumber: (checkin.mobileNumber || "").trim(),
+    });
+  }
+
+  const idKey = normalizeId(cleanId);
+  const nameKey = normalizeName(checkin.doctorName || "");
+  const docInDb = DOCTORS_BY_ID_MAP.get(idKey) || DOCTORS_BY_NAME_MAP.get(nameKey);
+
+  const hasArabic = (s?: string) => Boolean(s && /[\u0600-\u06FF]/.test(s));
+  let resolvedArabicName = (checkin.doctorArabicName || "").trim();
+  if (docInDb?.arabicName && hasArabic(docInDb.arabicName) && !hasArabic(resolvedArabicName)) {
+    resolvedArabicName = docInDb.arabicName;
+  }
+
+  const resolvedMobile =
+    checkin.mobileNumber !== undefined && String(checkin.mobileNumber).trim() !== ""
+      ? String(checkin.mobileNumber).trim()
+      : (docInDb?.mobileNumber || mobileNumbersByCodeMap.get(idKey) || mobileNumbersByNameMap.get(nameKey) || "");
+
+  const normalizedCheckIn: CheckIn = {
+    id: cleanId,
+    doctorName: (checkin.doctorName || docInDb?.name || "").trim(),
+    doctorArabicName: resolvedArabicName || (docInDb?.arabicName || checkin.doctorName || "").trim(),
+    department: canonicalDept,
+    shifts: finalShifts,
+    timestamp: resolvedTimestamp,
+    mobileNumber: resolvedMobile,
+  };
+
+  // Collect any existing timestamps for this doctor on targetDateStr so Supabase cleanup is exact
+  const existingTimestamps = new Set<string>();
+  if (options?.originalTimestamp && origDateStr === targetDateStr) {
+    existingTimestamps.add(options.originalTimestamp);
+  }
+  const localMonthly = readMonthlyCheckInsLocal();
+  for (const c of localMonthly) {
+    if (normalizeId(c.id) === idKey && getEgyptDateStr(c.timestamp) === targetDateStr && c.timestamp) {
+      existingTimestamps.add(c.timestamp);
+    }
+  }
+
+  // 4. Update Supabase monthly_checkins and weekly_checkins
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const payload = {
+        doctor_id: cleanId,
+        doctor_name: normalizedCheckIn.doctorName,
+        doctor_arabic_name: normalizedCheckIn.doctorArabicName,
+        department: normalizedCheckIn.department,
+        shifts: normalizedCheckIn.shifts,
+        mobile_number: normalizedCheckIn.mobileNumber || "",
+        checkin_timestamp: normalizedCheckIn.timestamp,
+        checkin_date: targetDateStr,
+      };
+
+      // Clean up any pre-existing row for this doctor on targetDateStr (including rows with 7PM-shifted timestamps)
+      for (const ts of existingTimestamps) {
+        if (ts !== normalizedCheckIn.timestamp) {
+          await Promise.all([
+            supabase.from("monthly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_timestamp", ts),
+            supabase.from("weekly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_timestamp", ts),
+          ]);
+        }
+      }
+
+      const { error: upsertErr } = await supabase
+        .from("monthly_checkins")
+        .upsert(payload, { onConflict: "doctor_id,checkin_date" });
+
+      if (upsertErr) {
+        await supabase.from("monthly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_date", targetDateStr);
+        await supabase.from("monthly_checkins").insert(payload);
+      }
+
+      try {
+        const { error: wkErr } = await supabase
+          .from("weekly_checkins")
+          .upsert(payload, { onConflict: "doctor_id,checkin_date" });
+        if (wkErr) {
+          await supabase.from("weekly_checkins").delete().eq("doctor_id", cleanId).eq("checkin_date", targetDateStr);
+          await supabase.from("weekly_checkins").insert(payload);
+        }
+      } catch {}
+    } catch (err) {
+      console.error("[Supabase] upsertCheckInForDate failed:", err);
+    }
+  }
+
+  // 5. Update local monthly_checkins.json & weekly_checkins.json
+  const filteredMonthly = localMonthly.filter(c => {
+    const cDate = getEgyptDateStr(c.timestamp);
+    return !(normalizeId(c.id) === idKey && cDate === targetDateStr);
+  });
+  filteredMonthly.push(normalizedCheckIn);
+  const prunedMonthly = await pruneMonthlyCheckInsTo30Days(filteredMonthly);
+  writeMonthlyCheckInsLocal(prunedMonthly);
+
+  // Also update historical archive if targetDateStr is in archive
+  const localArchive = readHistoricalArchiveLocal();
+  if (localArchive.some(c => getEgyptDateStr(c.timestamp) === targetDateStr)) {
+    const filteredArchive = localArchive.filter(c => {
+      const cDate = getEgyptDateStr(c.timestamp);
+      return !(normalizeId(c.id) === idKey && cDate === targetDateStr);
+    });
+    filteredArchive.push(normalizedCheckIn);
+    writeHistoricalArchiveLocal(filteredArchive);
+  }
+
+  // 6. If targetDateStr is the active daily sheet date (or if this doctor has an active check-in for targetDateStr), sync to active checkins!
+  const activeSheetDate = getEgyptDateInfo().isoDate;
+  const localDaily = readCheckInsLocal();
+  const hasActiveOnSameDate = localDaily.some(
+    c => normalizeId(c.id) === idKey && getEgyptDateStr(c.timestamp) === targetDateStr
+  );
+  if (targetDateStr === activeSheetDate || hasActiveOnSameDate) {
+    await addCheckIn(normalizedCheckIn);
+  }
+
+  invalidateCheckinsCache();
+  invalidateMonthlyCache();
+  return enrichCheckIn(normalizedCheckIn);
+}
+
 // API Endpoints
 app.get("/header_bg.png", (req, res) => {
   // Support Node.js backend parameters: query parameters for responsive sizing (?w=600 or ?size=compact)
@@ -2829,8 +3217,6 @@ interface DailySheetGenOptions {
 
 // Reusable function to build the daily sheet Excel workbook buffer
 async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
-  const rawCheckins = await readCheckIns();
-  const checkins = rawCheckins.map(c => enrichCheckIn(c));
   const autoReset = options.autoReset !== false;
   const cutoff = options.cutoff || "18:30";
   const nextDay = options.nextDay === true;
@@ -2841,6 +3227,18 @@ async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
     cutoff,
     nextDay
   });
+
+  let checkins: CheckIn[] = [];
+  if (options.dateParam) {
+    checkins = await getCheckInsForSheetDate(dateInfo.isoDate);
+  } else {
+    const rawCheckins = await readCheckIns();
+    checkins = rawCheckins.map(c => enrichCheckIn(c));
+    if (checkins.length === 0) {
+      checkins = await getCheckInsForSheetDate(dateInfo.isoDate);
+    }
+  }
+
   const arabicWeekday = options.dayParam || dateInfo.arabicWeekday;
   const formattedDate = dateInfo.formattedDate;
   const fullTitle = `${title} ${arabicWeekday} ${formattedDate}`;
@@ -2869,8 +3267,12 @@ async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
   titleCell.font = { name: "Segoe UI", size: 16, bold: true, color: { argb: "FF063B30" } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
 
-  // Priority: 1) explicit options.headerBase64, 2) cached client-rendered retina PNG, 3) bundled header_bg.png
-  const rawHeaderImgB64 = options.headerBase64 || LATEST_RENDERED_HEADER_BASE64 || getHeaderBgBase64();
+  // Priority: 1) explicit options.headerBase64, 2) cached client-rendered retina PNG (only if today's date), 3) bundled header_bg.png
+  const isTodayDate = dateInfo.isoDate === getEgyptDateInfo().isoDate;
+  const rawHeaderImgB64 =
+    options.headerBase64 ||
+    (isTodayDate ? LATEST_RENDERED_HEADER_BASE64 : "") ||
+    getHeaderBgBase64();
   if (rawHeaderImgB64) {
     try {
       const cleanB64 = rawHeaderImgB64.replace(/^data:image\/png;base64,/, "");
@@ -3521,7 +3923,19 @@ function formatTimestampForDisplay(timestampStr: string): string {
 app.get(["/api/download/monthly-sheet", "/download/monthly-sheet"], async (req, res) => {
   try {
     const rawMonthly = await readMonthlyCheckIns();
-    const monthlyData = rawMonthly.map(c => enrichCheckIn(c));
+    const rawDaily = await readCheckIns();
+    const mergedMap = new Map<string, CheckIn>();
+    rawMonthly.forEach(c => {
+      const enriched = enrichCheckIn(c);
+      const dateStr = getEgyptDateStr(enriched.timestamp);
+      mergedMap.set(`${enriched.id.toLowerCase()}_${dateStr}`, enriched);
+    });
+    rawDaily.forEach(c => {
+      const enriched = enrichCheckIn(c);
+      const dateStr = getEgyptDateStr(enriched.timestamp);
+      mergedMap.set(`${enriched.id.toLowerCase()}_${dateStr}`, enriched);
+    });
+    const monthlyData = Array.from(mergedMap.values());
     const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
     const workbook = new ExcelJS.Workbook();
     const headerImgB64 = getHeaderBgBase64();
@@ -3777,7 +4191,6 @@ app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
 });
 
 // Get current check-ins
-// Get current check-ins
 app.get(["/api/checkins", "/checkins"], async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -3788,10 +4201,225 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
       async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
       15000
     ).catch(() => {});
+
+    const dateQuery = typeof req.query.date === "string" ? req.query.date.trim() : "";
+    if (dateQuery) {
+      const dateList = await getCheckInsForSheetDate(dateQuery);
+      return res.json(dateList);
+    }
+
     const list = await readCheckIns();
     res.json(list.map(c => enrichCheckIn(c)));
   } catch (err) {
     res.status(500).json({ error: "Failed to read check-ins." });
+  }
+});
+
+// Get list of available roster dates with doctor and department counts
+app.get(["/api/checkins/dates", "/checkins/dates"], async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  try {
+    const [monthlyList, dailyList] = await Promise.all([
+      readMonthlyCheckIns(),
+      readCheckIns(),
+    ]);
+    const archiveList = readHistoricalArchiveLocal();
+
+    const perDateMap = new Map<string, Map<string, CheckIn>>();
+    const addRecord = (c: CheckIn) => {
+      if (!c || !c.id) return;
+      const enriched = enrichCheckIn(c);
+      const dateStr = getEgyptDateStr(enriched.timestamp);
+      if (!perDateMap.has(dateStr)) {
+        perDateMap.set(dateStr, new Map());
+      }
+      const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+      perDateMap.get(dateStr)!.set(key, enriched);
+    };
+
+    archiveList.forEach(addRecord);
+    monthlyList.forEach(addRecord);
+    dailyList.forEach(addRecord);
+
+    const activeTodayDate = getEgyptDateInfo().isoDate;
+    const datesSummary = Array.from(perDateMap.entries())
+      .map(([date, docMap]) => {
+        const docs = Array.from(docMap.values());
+        const depts = new Set(docs.map(d => d.department));
+        const info = getEgyptDateInfo(date, { autoReset: false });
+        return {
+          date,
+          englishWeekday: info.englishWeekday,
+          arabicWeekday: info.arabicWeekday,
+          formattedDate: info.formattedDate,
+          doctorsCount: docs.length,
+          departmentsCount: depts.size,
+          isToday: date === activeTodayDate,
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    res.json({
+      activeTodayDate,
+      dates: datesSummary,
+    });
+  } catch (err) {
+    console.error("Error fetching roster dates:", err);
+    res.status(500).json({ error: "Failed to read roster dates." });
+  }
+});
+
+// Get check-ins for a specific date (YYYY-MM-DD)
+app.get(["/api/checkins/by-date", "/checkins/by-date"], async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  try {
+    const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : "";
+    const targetDate = normalizeSheetDateInput(dateParam || undefined);
+    const list = await getCheckInsForSheetDate(targetDate);
+    const dateInfo = getEgyptDateInfo(targetDate, { autoReset: false });
+    res.json({
+      date: targetDate,
+      dateInfo,
+      count: list.length,
+      checkins: list,
+    });
+  } catch (err) {
+    console.error("Error fetching check-ins by date:", err);
+    res.status(500).json({ error: "Failed to read check-ins for the specified date." });
+  }
+});
+
+// Add a doctor check-in to a specific date (or today) and sync across all sheets
+app.post(["/api/checkins/by-date", "/checkins/by-date"], async (req, res) => {
+  const { id, doctorName, doctorArabicName, department, shifts, mobileNumber, date, syncMasterProfile } = req.body;
+
+  if (!id || !doctorName || !department) {
+    return res.status(400).json({ error: "Missing required fields: ID, Doctor Name, or Department." });
+  }
+  if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
+    return res.status(400).json({ error: "Please select at least one shift." });
+  }
+
+  const validShifts = ["Morning shift", "Long shift", "Evening shift", "Night shift", "24 shift"];
+  const invalidShifts = shifts.filter((s: string) => !validShifts.includes(s));
+  if (invalidShifts.length > 0) {
+    return res.status(400).json({ error: `Invalid shift selected: ${invalidShifts.join(", ")}` });
+  }
+
+  try {
+    const targetDate = normalizeSheetDateInput(date ? String(date).trim() : undefined);
+    const saved = await upsertCheckInForDate(
+      {
+        id: String(id).trim(),
+        doctorName: String(doctorName).trim(),
+        doctorArabicName: String(doctorArabicName || doctorName).trim(),
+        department: String(department).trim(),
+        shifts,
+        timestamp: "",
+        mobileNumber: mobileNumber ? String(mobileNumber).trim() : "",
+      },
+      targetDate,
+      {
+        syncMasterProfile: syncMasterProfile !== false,
+      }
+    );
+    res.status(201).json({
+      success: true,
+      date: targetDate,
+      checkIn: saved,
+      message: `Physician check-in saved for ${targetDate} and synced across all sheets.`,
+    });
+  } catch (err: any) {
+    console.error("Error in POST /api/checkins/by-date:", err);
+    res.status(500).json({ error: err?.message || "Failed to save check-in for date." });
+  }
+});
+
+// Edit an existing doctor check-in on a specific date (or today) and sync across all sheets
+app.put(["/api/checkins/by-date", "/checkins/by-date"], async (req, res) => {
+  const {
+    originalId,
+    originalDate,
+    originalTimestamp,
+    id,
+    doctorName,
+    doctorArabicName,
+    department,
+    shifts,
+    mobileNumber,
+    date,
+    syncMasterProfile,
+  } = req.body;
+
+  if (!id || !doctorName || !department) {
+    return res.status(400).json({ error: "Missing required fields: ID, Doctor Name, or Department." });
+  }
+  if (!shifts || !Array.isArray(shifts) || shifts.length === 0) {
+    return res.status(400).json({ error: "Please select at least one shift." });
+  }
+
+  const validShifts = ["Morning shift", "Long shift", "Evening shift", "Night shift", "24 shift"];
+  const invalidShifts = shifts.filter((s: string) => !validShifts.includes(s));
+  if (invalidShifts.length > 0) {
+    return res.status(400).json({ error: `Invalid shift selected: ${invalidShifts.join(", ")}` });
+  }
+
+  try {
+    const targetDate = normalizeSheetDateInput(date ? String(date).trim() : (originalDate ? String(originalDate).trim() : undefined));
+    const saved = await upsertCheckInForDate(
+      {
+        id: String(id).trim(),
+        doctorName: String(doctorName).trim(),
+        doctorArabicName: String(doctorArabicName || doctorName).trim(),
+        department: String(department).trim(),
+        shifts,
+        timestamp: originalTimestamp ? String(originalTimestamp) : "",
+        mobileNumber: mobileNumber !== undefined ? String(mobileNumber).trim() : "",
+      },
+      targetDate,
+      {
+        originalId: originalId ? String(originalId).trim() : String(id).trim(),
+        originalDate: originalDate ? String(originalDate).trim() : targetDate,
+        originalTimestamp: originalTimestamp ? String(originalTimestamp) : undefined,
+        syncMasterProfile: syncMasterProfile !== false,
+      }
+    );
+    res.json({
+      success: true,
+      date: targetDate,
+      checkIn: saved,
+      message: `Physician check-in updated for ${targetDate} and synced across all sheets.`,
+    });
+  } catch (err: any) {
+    console.error("Error in PUT /api/checkins/by-date:", err);
+    res.status(500).json({ error: err?.message || "Failed to update check-in for date." });
+  }
+});
+
+// Delete a doctor check-in from a specific date and sync across all sheets
+app.delete(["/api/checkins/by-date/:id", "/checkins/by-date/:id"], async (req, res) => {
+  const { id } = req.params;
+  const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : (req.body?.date ? String(req.body.date).trim() : "");
+  const timestampParam = typeof req.query.timestamp === "string" ? req.query.timestamp.trim() : (req.body?.timestamp ? String(req.body.timestamp).trim() : undefined);
+
+  try {
+    const targetDate = normalizeSheetDateInput(dateParam || undefined);
+    const deleted = await deleteCheckInForDate(id, targetDate, timestampParam);
+    if (!deleted) {
+      return res.status(404).json({ error: "Check-in record not found for the specified date." });
+    }
+    res.json({
+      success: true,
+      date: targetDate,
+      message: `Check-in deleted from ${targetDate} and synced across all sheets.`,
+    });
+  } catch (err: any) {
+    console.error("Error in DELETE /api/checkins/by-date/:id:", err);
+    res.status(500).json({ error: err?.message || "Failed to delete check-in for date." });
   }
 });
 
@@ -3901,21 +4529,34 @@ app.post(["/api/checkins", "/checkins"], async (req, res) => {
   }
 });
 
-// Remove a check-in
+// Remove a check-in (supports optional ?date=YYYY-MM-DD&timestamp=... for historical dates)
 app.delete(["/api/checkins/:id", "/checkins/:id"], async (req, res) => {
   const { id } = req.params;
-  try {
-    // Find the daily check-in first to get its timestamp for matching monthly record deletion
-    const dailyCheckIns = await readCheckIns();
-    const targetCheckIn = dailyCheckIns.find(c => c.id.toLowerCase() === id.toLowerCase());
+  const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : "";
+  const timestampParam = typeof req.query.timestamp === "string" ? req.query.timestamp.trim() : undefined;
 
-    const deleted = await deleteCheckIn(id);
-    if (!deleted) {
-      return res.status(404).json({ error: "Check-in not found." });
+  try {
+    if (dateParam) {
+      const deletedForDate = await deleteCheckInForDate(id, dateParam, timestampParam);
+      if (!deletedForDate) {
+        return res.status(404).json({ error: "Check-in not found for the selected date." });
+      }
+      return res.json({ success: true, message: "Check-in deleted from daily and monthly sheets." });
     }
 
+    // Find the daily check-in first to get its timestamp for matching monthly record deletion
+    const dailyCheckIns = await readCheckIns();
+    const targetCheckIn = dailyCheckIns.find(c => normalizeId(c.id) === normalizeId(id));
+
+    const deleted = await deleteCheckIn(id);
     if (targetCheckIn) {
-      await deleteMonthlyCheckIn(targetCheckIn.id, targetCheckIn.timestamp);
+      await deleteCheckInForDate(targetCheckIn.id, getEgyptDateStr(targetCheckIn.timestamp), targetCheckIn.timestamp);
+    } else if (!deleted) {
+      // Fallback: also try deleting from today's active sheet date in monthly_checkins
+      const deletedFromTodayMonthly = await deleteCheckInForDate(id, getEgyptDateInfo().isoDate, timestampParam);
+      if (!deletedFromTodayMonthly) {
+        return res.status(404).json({ error: "Check-in not found." });
+      }
     }
 
     res.json({ success: true, message: "Check-in deleted from daily and monthly sheets." });
@@ -3958,14 +4599,44 @@ app.post("/api/doctors/phone", async (req, res) => {
   }
 });
 
-// Edit check-in doctor's phone number (and update persistent database)
+// Edit check-in doctor's phone number (supports both active today and previous dates, and updates persistent database)
 app.put("/api/checkins/:id/phone", async (req, res) => {
   const { id } = req.params;
-  const { mobileNumber } = req.body;
+  const { mobileNumber, date } = req.body;
   try {
-    // Find the daily check-in
+    const idNorm = normalizeId(id);
+    const targetDate = date ? normalizeSheetDateInput(String(date).trim()) : undefined;
+
+    if (targetDate) {
+      const dateCheckIns = await getCheckInsForSheetDate(targetDate);
+      const targetCheckIn = dateCheckIns.find(c => normalizeId(c.id) === idNorm);
+      if (!targetCheckIn) {
+        return res.status(404).json({ error: "Check-in not found for the selected date." });
+      }
+      await upsertCheckInForDate(
+        {
+          ...targetCheckIn,
+          mobileNumber: mobileNumber || "",
+        },
+        targetDate,
+        {
+          originalId: targetCheckIn.id,
+          originalDate: targetDate,
+          originalTimestamp: targetCheckIn.timestamp,
+          syncMasterProfile: true,
+        }
+      );
+      await saveCustomDoctorPhone(id, mobileNumber || "");
+      return res.json({ success: true, message: "Checked-in doctor phone number updated across all sheets." });
+    }
+
+    // Find the daily check-in (or fallback to today's monthly sheet record)
     const dailyCheckIns = await readCheckIns();
-    const targetCheckIn = dailyCheckIns.find(c => c.id.toLowerCase() === id.toLowerCase());
+    let targetCheckIn = dailyCheckIns.find(c => normalizeId(c.id) === idNorm);
+    if (!targetCheckIn) {
+      const todayCheckIns = await getCheckInsForSheetDate(getEgyptDateInfo().isoDate);
+      targetCheckIn = todayCheckIns.find(c => normalizeId(c.id) === idNorm);
+    }
     if (!targetCheckIn) {
       return res.status(404).json({ error: "Active check-in not found." });
     }
@@ -3976,7 +4647,7 @@ app.put("/api/checkins/:id/phone", async (req, res) => {
       mobileNumber: mobileNumber || ""
     };
 
-    // Update daily AND weekly check-in records!
+    // Update daily AND monthly/weekly check-in records!
     await addCheckIn(updatedCheckIn);
     await addWeeklyCheckIn(updatedCheckIn);
 

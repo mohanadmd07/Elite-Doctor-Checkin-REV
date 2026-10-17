@@ -16,6 +16,7 @@ import {
   Stethoscope,
   Users,
   Layers,
+  ChevronLeft,
   ChevronRight,
   Info,
   Moon,
@@ -272,6 +273,54 @@ export default function App() {
   const [editingCheckedInDoctorId, setEditingCheckedInDoctorId] = useState<string | null>(null);
   const [editingCheckedInPhone, setEditingCheckedInPhone] = useState("");
   const [isUpdatingCheckedInPhone, setIsUpdatingCheckedInPhone] = useState(false);
+
+  // Historical / Date-Specific Roster Selection & Editing states
+  const [rosterDateFilter, setRosterDateFilter] = useState<string>(""); // "" = Live Today, "YYYY-MM-DD" = Specific Date
+  const [rosterDatesList, setRosterDatesList] = useState<Array<{
+    date: string;
+    englishWeekday: string;
+    arabicWeekday: string;
+    formattedDate: string;
+    doctorsCount: number;
+    departmentsCount: number;
+    isToday: boolean;
+  }>>([]);
+  const [activeTodaySheetDate, setActiveTodaySheetDate] = useState<string>("");
+  const [dateCheckins, setDateCheckins] = useState<CheckIn[]>([]);
+  const [loadingDateCheckins, setLoadingDateCheckins] = useState<boolean>(false);
+  const [deleteConfirmTimestamp, setDeleteConfirmTimestamp] = useState<string>("");
+
+  // Full Add / Edit Check-In Modal state (works for any previous date or today)
+  const [isCheckinModalOpen, setIsCheckinModalOpen] = useState<boolean>(false);
+  const [checkinModalMode, setCheckinModalMode] = useState<"add" | "edit">("edit");
+  const [isSavingCheckinModal, setIsSavingCheckinModal] = useState<boolean>(false);
+  const [checkinModalSearch, setCheckinModalSearch] = useState<string>("");
+  const [checkinModalSuggestions, setCheckinModalSuggestions] = useState<Doctor[]>([]);
+  const [checkinFormData, setCheckinFormData] = useState<{
+    originalId: string;
+    originalDate: string;
+    originalTimestamp: string;
+    id: string;
+    doctorName: string;
+    doctorArabicName: string;
+    department: string;
+    shifts: string[];
+    mobileNumber: string;
+    date: string;
+    syncMasterProfile: boolean;
+  }>({
+    originalId: "",
+    originalDate: "",
+    originalTimestamp: "",
+    id: "",
+    doctorName: "",
+    doctorArabicName: "",
+    department: "Internal Medicine",
+    shifts: ["Morning shift"],
+    mobileNumber: "",
+    date: "",
+    syncMasterProfile: true,
+  });
 
   // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase" | "calls")
   const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "calls">("roster");
@@ -728,11 +777,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
           setAdminPasscode("");
           setAdminError("");
         }
-        if (deleteConfirmId) setDeleteConfirmId(null);
+        if (deleteConfirmId) {
+          setDeleteConfirmId(null);
+          setDeleteConfirmTimestamp("");
+        }
         if (showResetConfirm) setShowResetConfirm(false);
         if (showWeeklyResetConfirm) setShowWeeklyResetConfirm(false);
         if (editingCheckedInDoctorId) setEditingCheckedInDoctorId(null);
         if (isDoctorModalOpen) setIsDoctorModalOpen(false);
+        if (isCheckinModalOpen && !isSavingCheckinModal) setIsCheckinModalOpen(false);
         if (deleteModalState.isOpen && !isDeletingDoctor) {
           setDeleteModalState(prev => ({ ...prev, isOpen: false }));
         }
@@ -750,6 +803,8 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     showWeeklyResetConfirm,
     editingCheckedInDoctorId,
     isDoctorModalOpen,
+    isCheckinModalOpen,
+    isSavingCheckinModal,
     deleteModalState.isOpen,
     isDeletingDoctor,
     confirmModalState.isOpen,
@@ -1285,13 +1340,21 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       const res = await fetch(`/api/checkins/${encodeURIComponent(editingCheckedInDoctorId)}/phone`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobileNumber: editingCheckedInPhone })
+        body: JSON.stringify({
+          mobileNumber: editingCheckedInPhone,
+          date: rosterDateFilter || undefined
+        })
       });
       if (res.ok) {
-        // Refresh checkins
+        // Refresh checkins and historical date view
         fetchCheckins();
+        fetchRosterDates();
+        if (rosterDateFilter) {
+          fetchCheckinsForDate(rosterDateFilter);
+        }
+        fetchFullDoctorsDatabase(true);
         setEditingCheckedInDoctorId(null);
-        toast.success("Phone Updated", "Doctor phone number saved successfully.");
+        toast.success("Phone Updated", "Doctor phone number saved across all sheets.");
       } else {
         const err = await res.json();
         toast.error("Update Failed", err.error || "Failed to update phone number.");
@@ -1363,6 +1426,9 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         });
         // Refresh active roster too
         fetchCheckins();
+        if (rosterDateFilter) {
+          fetchCheckinsForDate(rosterDateFilter);
+        }
       } else {
         const err = await res.json();
         setDirectoryMessage(err.error || "Failed to save.");
@@ -1379,6 +1445,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   useEffect(() => {
     fetchCheckins();
     fetchFullDoctorsDatabase();
+    fetchRosterDates();
 
     // Background pre-warm and sync of high-res Retina header to server memory cache for 8 AM Cron
     const timer = setTimeout(async () => {
@@ -1405,13 +1472,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
     fetchCheckins();
     fetchFullDoctorsDatabase();
+    fetchRosterDates();
+    if (rosterDateFilter) {
+      fetchCheckinsForDate(rosterDateFilter, true);
+    }
 
     const intervalId = setInterval(() => {
       fetchCheckins();
+      if (rosterDateFilter) {
+        fetchCheckinsForDate(rosterDateFilter, true);
+      }
     }, 3000);
 
     return () => clearInterval(intervalId);
-  }, [isAdminAuthenticated]);
+  }, [isAdminAuthenticated, rosterDateFilter]);
 
   // Global background poller: ensures any open check-in kiosk or browser tab also triggers Green-API journal sync
   useEffect(() => {
@@ -1526,6 +1600,221 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       toast.error("Network Error", "Unable to load active roster. Please check connection.");
     } finally {
       setLoadingCheckins(false);
+    }
+  };
+
+  // Fetch list of available roster dates with doctor/department counts
+  const fetchRosterDates = async () => {
+    try {
+      const res = await fetch("/api/checkins/dates");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.activeTodayDate) {
+          setActiveTodaySheetDate(data.activeTodayDate);
+        }
+        if (Array.isArray(data.dates)) {
+          setRosterDatesList(data.dates);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching roster dates:", err);
+    }
+  };
+
+  // Fetch check-ins for a specific historical or today date ("YYYY-MM-DD")
+  const fetchCheckinsForDate = async (dateStr: string, silent = false) => {
+    if (!dateStr) return;
+    if (!silent) setLoadingDateCheckins(true);
+    setCheckinsError(null);
+    try {
+      const res = await fetch(`/api/checkins/by-date?date=${encodeURIComponent(dateStr)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDateCheckins(Array.isArray(data.checkins) ? data.checkins : []);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        const errorText = err.error || `Failed to load check-ins for ${dateStr}`;
+        setCheckinsError(errorText);
+        if (!silent) toast.error("Date Roster Error", errorText);
+      }
+    } catch (err: any) {
+      console.error("Error fetching checkins for date:", err);
+      if (!silent) toast.error("Network Error", `Unable to load roster for ${dateStr}.`);
+    } finally {
+      if (!silent) setLoadingDateCheckins(false);
+    }
+  };
+
+  // Helper to shift a YYYY-MM-DD date string by +/- days
+  const shiftIsoDateByDays = (isoDate: string, deltaDays: number): string => {
+    const baseStr = isoDate || activeTodaySheetDate || new Date().toISOString().split("T")[0];
+    const [y, m, d] = baseStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + deltaDays, 12, 0, 0));
+    return dt.toISOString().split("T")[0];
+  };
+
+  // Autocomplete search inside Add/Edit Check-In Modal
+  useEffect(() => {
+    const q = checkinModalSearch.trim();
+    if (!q) {
+      setCheckinModalSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/doctors/search?q=${encodeURIComponent(q)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setCheckinModalSuggestions(Array.isArray(data) ? data : []);
+        }
+      } catch (err) {
+        console.error("Error searching doctors for modal:", err);
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [checkinModalSearch]);
+
+  // Open modal to add a doctor check-in to the currently viewed date (or today)
+  const handleOpenAddCheckinModal = () => {
+    const defaultDate = rosterDateFilter || activeTodaySheetDate || new Date().toISOString().split("T")[0];
+    setCheckinModalMode("add");
+    setCheckinModalSearch("");
+    setCheckinModalSuggestions([]);
+    setCheckinFormData({
+      originalId: "",
+      originalDate: defaultDate,
+      originalTimestamp: "",
+      id: "",
+      doctorName: "",
+      doctorArabicName: "",
+      department: adminDeptFilter !== "All" ? adminDeptFilter : "Internal Medicine",
+      shifts: ["Morning shift"],
+      mobileNumber: "",
+      date: defaultDate,
+      syncMasterProfile: true
+    });
+    setIsCheckinModalOpen(true);
+  };
+
+  // Open modal to edit an existing doctor check-in on the currently viewed date (or today)
+  const handleOpenEditCheckinModal = (c: CheckIn) => {
+    const enriched = enrichCheckInClient(c);
+    const currentViewDate = rosterDateFilter || activeTodaySheetDate || new Date().toISOString().split("T")[0];
+    setCheckinModalMode("edit");
+    setCheckinModalSearch("");
+    setCheckinModalSuggestions([]);
+    setCheckinFormData({
+      originalId: enriched.id,
+      originalDate: currentViewDate,
+      originalTimestamp: c.timestamp || "",
+      id: enriched.id,
+      doctorName: enriched.doctorName || "",
+      doctorArabicName: enriched.doctorArabicName || "",
+      department: enriched.department || "Internal Medicine",
+      shifts: Array.isArray(enriched.shifts) && enriched.shifts.length > 0 ? [...enriched.shifts] : ["Morning shift"],
+      mobileNumber: enriched.mobileNumber && enriched.mobileNumber !== "N/A" ? enriched.mobileNumber : "",
+      date: currentViewDate,
+      syncMasterProfile: true
+    });
+    setIsCheckinModalOpen(true);
+  };
+
+  // Select a doctor from the master database search inside Add/Edit Check-In Modal
+  const handleSelectDoctorForCheckinModal = (doc: Doctor) => {
+    setCheckinFormData((prev) => ({
+      ...prev,
+      id: doc.id,
+      doctorName: doc.name,
+      doctorArabicName: doc.arabicName || doc.name,
+      department: doc.department || prev.department,
+      mobileNumber: doc.mobileNumber && doc.mobileNumber !== "N/A" ? doc.mobileNumber : prev.mobileNumber
+    }));
+    setCheckinModalSearch("");
+    setCheckinModalSuggestions([]);
+  };
+
+  // Toggle shift selection inside Add/Edit Check-In Modal
+  const handleToggleCheckinModalShift = (shiftId: string) => {
+    setCheckinFormData((prev) => {
+      const exists = prev.shifts.includes(shiftId);
+      if (exists) {
+        return { ...prev, shifts: prev.shifts.filter((s) => s !== shiftId) };
+      }
+      return { ...prev, shifts: [...prev.shifts, shiftId] };
+    });
+  };
+
+  // Submit Add or Edit Check-In Modal
+  const handleSaveCheckinModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!checkinFormData.id.trim()) {
+      toast.error("Validation Error", "Please enter a valid Physician Employee ID.");
+      return;
+    }
+    if (!checkinFormData.doctorName.trim() && !checkinFormData.doctorArabicName.trim()) {
+      toast.error("Validation Error", "Please enter the Physician Name (English or Arabic).");
+      return;
+    }
+    if (!checkinFormData.department) {
+      toast.error("Validation Error", "Please select a Clinical Specialty / Department.");
+      return;
+    }
+    if (checkinFormData.shifts.length === 0) {
+      toast.error("Validation Error", "Please select at least one shift.");
+      return;
+    }
+    if (!checkinFormData.date) {
+      toast.error("Validation Error", "Please select a valid Sheet Date (YYYY-MM-DD).");
+      return;
+    }
+
+    setIsSavingCheckinModal(true);
+    try {
+      const isEdit = checkinModalMode === "edit";
+      const res = await fetch("/api/checkins/by-date", {
+        method: isEdit ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          originalId: isEdit ? checkinFormData.originalId : undefined,
+          originalDate: isEdit ? checkinFormData.originalDate : undefined,
+          originalTimestamp: isEdit ? checkinFormData.originalTimestamp : undefined,
+          id: checkinFormData.id.trim(),
+          doctorName: checkinFormData.doctorName.trim() || checkinFormData.doctorArabicName.trim(),
+          doctorArabicName: checkinFormData.doctorArabicName.trim() || checkinFormData.doctorName.trim(),
+          department: checkinFormData.department,
+          shifts: checkinFormData.shifts,
+          mobileNumber: checkinFormData.mobileNumber.trim(),
+          date: checkinFormData.date,
+          syncMasterProfile: checkinFormData.syncMasterProfile
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        toast.success(
+          isEdit ? "Check-In Updated" : "Doctor Added to Date",
+          data.message || `Doctor ${checkinFormData.id} saved for ${checkinFormData.date} and synced across all sheets.`
+        );
+        setIsCheckinModalOpen(false);
+        // Refresh all states so Today, Selected Date, Dates List, and Master Database stay in sync
+        await Promise.all([
+          fetchCheckins(),
+          fetchRosterDates(),
+          fetchFullDoctorsDatabase(true),
+          rosterDateFilter ? fetchCheckinsForDate(rosterDateFilter) : Promise.resolve()
+        ]);
+        // If user edited/added to a different date while in date mode, or if they want to view that date:
+        if (rosterDateFilter && checkinFormData.date !== rosterDateFilter) {
+          fetchCheckinsForDate(checkinFormData.date);
+        }
+      } else {
+        toast.error("Save Failed", data.error || "Failed to save check-in for the selected date.");
+      }
+    } catch (err: any) {
+      console.error("Error saving check-in modal:", err);
+      toast.error("Network Error", "Unable to save check-in changes. Please check connection.");
+    } finally {
+      setIsSavingCheckinModal(false);
     }
   };
 
@@ -1699,37 +1988,61 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   // Delete a single checkin (admin panel) - triggers custom dialog modal
-  const handleDeleteCheckin = (id: string) => {
+  const handleDeleteCheckin = (id: string, timestamp?: string) => {
     setDeleteConfirmId(id);
+    setDeleteConfirmTimestamp(timestamp || "");
   };
 
   const confirmDeleteCheckin = async () => {
     if (!deleteConfirmId) return;
     setIsDeletingCheckin(true);
     const targetId = deleteConfirmId;
+    const targetTimestamp = deleteConfirmTimestamp;
     const prevCheckins = [...checkins];
+    const prevDateCheckins = [...dateCheckins];
     // Optimistic UI update: instantly remove from list
-    setCheckins((prev) => prev.filter((c) => c.id !== targetId));
+    if (rosterDateFilter) {
+      setDateCheckins((prev) => prev.filter((c) => c.id !== targetId));
+    } else {
+      setCheckins((prev) => prev.filter((c) => c.id !== targetId));
+    }
     try {
-      const res = await fetch(`/api/checkins/${encodeURIComponent(targetId)}`, {
+      const params = new URLSearchParams();
+      if (rosterDateFilter) params.set("date", rosterDateFilter);
+      if (targetTimestamp) params.set("timestamp", targetTimestamp);
+      const queryString = params.toString() ? `?${params.toString()}` : "";
+      const res = await fetch(`/api/checkins/${encodeURIComponent(targetId)}${queryString}`, {
         method: "DELETE"
       });
       if (res.ok) {
-        toast.success("Check-In Removed", "Doctor check-in deleted from the active roster.");
+        toast.success(
+          "Check-In Removed",
+          rosterDateFilter
+            ? `Doctor check-in removed from ${rosterDateFilter} across all sheets.`
+            : "Doctor check-in deleted from the active roster and sheets."
+        );
+        fetchCheckins();
+        fetchRosterDates();
+        if (rosterDateFilter) {
+          fetchCheckinsForDate(rosterDateFilter, true);
+        }
       } else {
         const data = await res.json().catch(() => ({}));
         // Revert optimistic update
         setCheckins(prevCheckins);
+        setDateCheckins(prevDateCheckins);
         toast.error("Delete Failed", data.error || "Failed to delete check-in.");
       }
     } catch (err: any) {
       console.error("Error deleting checkin:", err);
       // Revert optimistic update
       setCheckins(prevCheckins);
+      setDateCheckins(prevDateCheckins);
       toast.error("Network Error", "Unable to delete check-in. Please check connection.");
     } finally {
       setIsDeletingCheckin(false);
       setDeleteConfirmId(null);
+      setDeleteConfirmTimestamp("");
     }
   };
 
@@ -2251,16 +2564,19 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     }
   };
 
+  // Active check-ins list for the Roster tab (either the selected historical date or live today)
+  const activeRosterCheckins = rosterDateFilter ? dateCheckins : checkins;
+
   // Download Excel Sheet (.xlsx) with separators and custom color theme matching the template
   const downloadCSVReport = async () => {
-    if (checkins.length === 0) {
-      toast.warning("No Check-Ins", "No check-ins available to export.");
+    if (activeRosterCheckins.length === 0) {
+      toast.warning("No Check-Ins", "No check-ins available to export for the selected date.");
       return;
     }
 
     setIsDownloadingDaily(true);
     // Group check-ins by department (Speciality) after authoritative enrichment
-    const enrichedCheckins = checkins.map((c) => enrichCheckInClient(c));
+    const enrichedCheckins = activeRosterCheckins.map((c) => enrichCheckInClient(c));
     const grouped: { [key: string]: CheckIn[] } = {};
     enrichedCheckins.forEach((c) => {
       if (!grouped[c.department]) {
@@ -2285,15 +2601,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       views: [{ showGridLines: true }]
     });
 
-    const nowEgypt = new Date();
-    const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
-    const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
-    const egyptHour = parseInt(egyptHourStr, 10) || 0;
-    const egyptMin = parseInt(egyptMinStr, 10) || 0;
-    const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
-    const d = new Date(nowEgypt);
-    if (isPastReset) {
-      d.setDate(d.getDate() + 1);
+    let d: Date;
+    if (rosterDateFilter && /^\d{4}-\d{2}-\d{2}$/.test(rosterDateFilter)) {
+      d = new Date(`${rosterDateFilter}T10:00:00.000Z`);
+    } else {
+      const nowEgypt = new Date();
+      const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+      const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+      const egyptHour = parseInt(egyptHourStr, 10) || 0;
+      const egyptMin = parseInt(egyptMinStr, 10) || 0;
+      const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
+      d = new Date(nowEgypt);
+      if (isPastReset) {
+        d.setDate(d.getDate() + 1);
+      }
     }
 
     const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
@@ -2310,16 +2631,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       month: "2-digit",
       day: "2-digit"
     }).format(d);
-    const targetIsoDate = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Africa/Cairo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).format(d);
+    const targetIsoDate = rosterDateFilter && /^\d{4}-\d{2}-\d{2}$/.test(rosterDateFilter)
+      ? rosterDateFilter
+      : new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Africa/Cairo",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        }).format(d);
     const dailyTitle = `الأطباء المتواجدين عن يوم ${arabicWeekday} ${formattedDate}`;
 
     // Fetch header SVG from Node.js backend using backend parameters and embed into worksheet
-    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, englishWeekday, { autoReset: true });
+    const headerBase64 = await fetchHeaderImageBase64(formattedDate, arabicWeekday, undefined, englishWeekday, { autoReset: !rosterDateFilter });
     applySheetHeaderToWorksheet(worksheet, workbook, headerBase64, dailyTitle);
 
     let currentRowNum = 8;
@@ -2426,7 +2749,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      toast.success("Daily Roster Exported", "Styled physician check-in spreadsheet downloaded successfully.");
+      toast.success("Daily Roster Exported", `Styled physician check-in spreadsheet (${targetIsoDate}) downloaded successfully.`);
     } catch (err) {
       console.error("Error exporting styled excel:", err);
       toast.error("Export Failed", "Failed to export styled Excel sheet. Please try again.");
@@ -2439,16 +2762,21 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     if (isSendingWhatsApp) return;
     setIsSendingWhatsApp(true);
     try {
-      // 1. Calculate Egypt date parameters matching the daily sheet
-      const nowEgypt = new Date();
-      const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
-      const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
-      const egyptHour = parseInt(egyptHourStr, 10) || 0;
-      const egyptMin = parseInt(egyptMinStr, 10) || 0;
-      const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
-      const d = new Date(nowEgypt);
-      if (isPastReset) {
-        d.setDate(d.getDate() + 1);
+      // 1. Calculate Egypt date parameters matching the selected date or live daily sheet
+      let d: Date;
+      if (rosterDateFilter && /^\d{4}-\d{2}-\d{2}$/.test(rosterDateFilter)) {
+        d = new Date(`${rosterDateFilter}T10:00:00.000Z`);
+      } else {
+        const nowEgypt = new Date();
+        const egyptHourStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", hour: "numeric", hour12: false });
+        const egyptMinStr = nowEgypt.toLocaleTimeString("en-US", { timeZone: "Africa/Cairo", minute: "numeric" });
+        const egyptHour = parseInt(egyptHourStr, 10) || 0;
+        const egyptMin = parseInt(egyptMinStr, 10) || 0;
+        const isPastReset = egyptHour > 18 || (egyptHour === 18 && egyptMin >= 30);
+        d = new Date(nowEgypt);
+        if (isPastReset) {
+          d.setDate(d.getDate() + 1);
+        }
       }
 
       const arabicWeekday = new Intl.DateTimeFormat("ar-EG", {
@@ -2465,12 +2793,14 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         month: "2-digit",
         day: "2-digit"
       }).format(d);
-      const targetIsoDate = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Africa/Cairo",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-      }).format(d);
+      const targetIsoDate = rosterDateFilter && /^\d{4}-\d{2}-\d{2}$/.test(rosterDateFilter)
+        ? rosterDateFilter
+        : new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Africa/Cairo",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+          }).format(d);
 
       // 2. Fetch the SVG header from Node.js backend parameters and render into high-res PNG
       let headerBase64 = "";
@@ -2480,7 +2810,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
           arabicWeekday,
           undefined,
           englishWeekday,
-          { autoReset: true }
+          { autoReset: !rosterDateFilter }
         );
       } catch (err) {
         console.warn("Could not generate canvas header image:", err);
@@ -2518,7 +2848,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   // Filtered checkins in admin grid
-  const filteredCheckins = checkins.filter((c) => {
+  const filteredCheckins = activeRosterCheckins.filter((c) => {
     const matchesSearch =
       c.id.toLowerCase().includes(adminSearch.toLowerCase()) ||
       c.doctorName.toLowerCase().includes(adminSearch.toLowerCase()) ||
@@ -2530,7 +2860,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   });
 
   // Departments list for filter dropdown
-  const uniqueDepts = Array.from(new Set(checkins.map((c) => c.department)));
+  const uniqueDepts = Array.from(new Set(activeRosterCheckins.map((c) => c.department)));
 
   return (
     <div id="app-root" className="min-h-screen bg-[#d2deda] font-sans flex flex-col text-slate-850">
@@ -4714,6 +5044,165 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                 /*               ACTIVE ROSTER & OPERATIONS TAB            */
                 /* ======================================================= */
                 <div className="space-y-6">
+                  {/* Historical & Date-Specific Roster Selector Bar */}
+                  <div className={`rounded-xl border p-5 shadow-sm transition-all ${
+                    rosterDateFilter
+                      ? "bg-amber-50/90 border-amber-300"
+                      : "bg-white border-[#cbdad5]"
+                  }`}>
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="flex items-start sm:items-center gap-3.5">
+                        <div className={`p-3 rounded-xl shrink-0 ${
+                          rosterDateFilter
+                            ? "bg-amber-500 text-white shadow-xs"
+                            : "bg-[#063b30] text-white shadow-xs"
+                        }`}>
+                          <CalendarDays className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border bg-white text-[#063b30] border-[#cbdad5]">
+                              {rosterDateFilter ? "HISTORICAL / DATE SHEET EDITOR" : "LIVE TODAY ROSTER"}
+                            </span>
+                            {rosterDateFilter && (
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-950 border border-amber-400">
+                                Viewing Date: {rosterDateFilter}
+                              </span>
+                            )}
+                            {!rosterDateFilter && activeTodaySheetDate && (
+                              <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                Active Sheet Date: {activeTodaySheetDate}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="text-base font-extrabold text-slate-900 mt-1">
+                            {rosterDateFilter
+                              ? (() => {
+                                  const matched = rosterDatesList.find((d) => d.date === rosterDateFilter);
+                                  return matched
+                                    ? `Editing Sheet for ${matched.englishWeekday} (${matched.arabicWeekday}) — ${matched.formattedDate}`
+                                    : `Editing Sheet for Date ${rosterDateFilter}`;
+                                })()
+                              : "Live Active Physician Roster & Previous Date Sheet Editor"}
+                          </h3>
+                          <p className="text-xs text-slate-600 font-medium mt-0.5">
+                            Select any previous date below to view, add, edit, or remove doctors — all changes automatically sync to the 30-Day Monthly Excel Sheet, Daily Sheet, WhatsApp Dispatch, and Ward Calls.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Date Navigation & Add Doctor Controls */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Quick Past Sheet Dates Dropdown */}
+                        <select
+                          id="roster-quick-date-select"
+                          aria-label="Select sheet date from history"
+                          value={rosterDateFilter}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setRosterDateFilter(val);
+                            if (val) {
+                              fetchCheckinsForDate(val);
+                            } else {
+                              fetchCheckins();
+                            }
+                          }}
+                          className="bg-white border border-[#cbdad5] text-[#063b30] font-bold text-xs px-3 py-2 rounded-lg outline-none focus:border-[#063b30] transition-all cursor-pointer shadow-2xs"
+                        >
+                          <option value="">
+                            🟢 Live Today ({activeTodaySheetDate || "Current"}) — {checkins.length} Doctors
+                          </option>
+                          {rosterDatesList.map((item) => (
+                            <option key={`roster-date-opt-${item.date}`} value={item.date}>
+                              📅 {item.date} ({item.englishWeekday} / {item.arabicWeekday}) — {item.doctorsCount} {item.doctorsCount === 1 ? "Doctor" : "Doctors"}
+                              {item.isToday ? " [Today]" : ""}
+                            </option>
+                          ))}
+                        </select>
+
+                        {/* Previous Day Button */}
+                        <button
+                          id="roster-prev-day-btn"
+                          type="button"
+                          onClick={() => {
+                            const nextDate = shiftIsoDateByDays(rosterDateFilter || activeTodaySheetDate, -1);
+                            setRosterDateFilter(nextDate);
+                            fetchCheckinsForDate(nextDate);
+                          }}
+                          className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-[#cbdad5] rounded-lg transition-colors cursor-pointer shadow-2xs"
+                          title="Previous Day"
+                          aria-label="Previous Day"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+
+                        {/* Exact Calendar Date Input */}
+                        <input
+                          id="roster-date-picker"
+                          type="date"
+                          aria-label="Pick exact roster date"
+                          value={rosterDateFilter || activeTodaySheetDate}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) {
+                              setRosterDateFilter("");
+                              fetchCheckins();
+                            } else {
+                              setRosterDateFilter(val);
+                              fetchCheckinsForDate(val);
+                            }
+                          }}
+                          className="bg-white border border-[#cbdad5] text-slate-800 font-bold text-xs px-3 py-1.5 rounded-lg outline-none focus:border-[#063b30] transition-all cursor-pointer shadow-2xs"
+                        />
+
+                        {/* Next Day Button */}
+                        <button
+                          id="roster-next-day-btn"
+                          type="button"
+                          onClick={() => {
+                            const nextDate = shiftIsoDateByDays(rosterDateFilter || activeTodaySheetDate, 1);
+                            setRosterDateFilter(nextDate);
+                            fetchCheckinsForDate(nextDate);
+                          }}
+                          className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-[#cbdad5] rounded-lg transition-colors cursor-pointer shadow-2xs"
+                          title="Next Day"
+                          aria-label="Next Day"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+
+                        {/* Return to Live Today Button */}
+                        {rosterDateFilter && (
+                          <button
+                            id="roster-live-today-btn"
+                            type="button"
+                            onClick={() => {
+                              setRosterDateFilter("");
+                              fetchCheckins();
+                            }}
+                            className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer shadow-xs flex items-center gap-1.5"
+                            title="Switch back to Live Today Roster"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Live Today</span>
+                          </button>
+                        )}
+
+                        {/* Add Doctor to Selected Date (or Today) Button */}
+                        <button
+                          id="add-doctor-to-date-btn"
+                          type="button"
+                          onClick={handleOpenAddCheckinModal}
+                          className="px-3.5 py-2 bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs rounded-lg transition-colors cursor-pointer shadow-xs flex items-center gap-1.5"
+                          title="Add a doctor check-in to this date and sync across all sheets"
+                        >
+                          <Plus className="w-4 h-4 text-emerald-300" />
+                          <span>{rosterDateFilter ? `Add Doctor to ${rosterDateFilter}` : "Add Doctor Check-In"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Stats Overview in Geometric Style */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 
@@ -4722,8 +5211,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     <Users className="w-6 h-6" />
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Total On-Duty</span>
-                    <h3 className="text-2xl font-black text-[#063b30] mt-0.5">{checkins.length} Physicians</h3>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                      {rosterDateFilter ? `On-Duty (${rosterDateFilter})` : "Total On-Duty"}
+                    </span>
+                    <h3 className="text-2xl font-black text-[#063b30] mt-0.5">{activeRosterCheckins.length} Physicians</h3>
                   </div>
                 </div>
 
@@ -4734,7 +5225,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Shifts Scheduled</span>
                     <h3 className="text-2xl font-black text-[#063b30] mt-0.5">
-                      {checkins.reduce((acc, curr) => acc + curr.shifts.length, 0)} Slots
+                      {activeRosterCheckins.reduce((acc, curr) => acc + curr.shifts.length, 0)} Slots
                     </h3>
                   </div>
                 </div>
@@ -4758,23 +5249,25 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                 <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
                   <h3 className="font-extrabold text-slate-950 text-base flex items-center gap-2">
                     <Stethoscope className="w-4.5 h-4.5 text-[#063b30]" />
-                    <span>Specialty Attendance Dashboard</span>
+                    <span>Specialty Attendance Dashboard {rosterDateFilter ? `(${rosterDateFilter})` : ""}</span>
                   </h3>
                   <span className="text-[10px] bg-[#e6f2ee] text-[#063b30] font-bold px-2.5 py-1 rounded-full border border-[#cbdad5]">
                     {uniqueDepts.length} ACTIVE {uniqueDepts.length === 1 ? "SPECIALTY" : "SPECIALTIES"}
                   </span>
                 </div>
 
-                {checkins.length === 0 ? (
+                {activeRosterCheckins.length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-6">
-                    No active doctors checked in. Once physicians check in, the specialty distribution will appear here.
+                    {rosterDateFilter
+                      ? `No doctors recorded on ${rosterDateFilter}. Click "+ Add Doctor to ${rosterDateFilter}" above to add physicians to this date's sheet.`
+                      : "No active doctors checked in. Once physicians check in, the specialty distribution will appear here."}
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     {uniqueDepts.map((dept, idx) => {
-                      const deptCheckins = checkins.filter((c) => c.department === dept);
+                      const deptCheckins = activeRosterCheckins.filter((c) => c.department === dept);
                       const count = deptCheckins.length;
-                      const percentage = Math.round((count / checkins.length) * 100);
+                      const percentage = Math.round((count / activeRosterCheckins.length) * 100);
                       
                       // Find shift counts for this specialty
                       const shiftCounts: { [key: string]: number } = {};
@@ -4871,22 +5364,30 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     {/* Daily Operations */}
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2 border-b md:border-b-0 md:border-r border-slate-200 pb-4 md:pb-0 pr-0 md:pr-4">
                       <div className="flex items-center gap-1.5 min-w-[55px]">
-                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider">Daily:</span>
+                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider">
+                          {rosterDateFilter ? "Date:" : "Daily:"}
+                        </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           id="download-report-btn"
                           onClick={downloadCSVReport}
-                          disabled={checkins.length === 0 || isDownloadingDaily}
+                          disabled={activeRosterCheckins.length === 0 || isDownloadingDaily}
                           className="bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                          title="Download today's spreadsheet"
+                          title={rosterDateFilter ? `Download spreadsheet for ${rosterDateFilter}` : "Download today's spreadsheet"}
                         >
                           {isDownloadingDaily ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <FileSpreadsheet className="w-3.5 h-3.5" />
                           )}
-                          <span>{isDownloadingDaily ? "DOWNLOADING..." : "DOWNLOAD TODAY XLS"}</span>
+                          <span>
+                            {isDownloadingDaily
+                              ? "DOWNLOADING..."
+                              : rosterDateFilter
+                                ? `DOWNLOAD ${rosterDateFilter} XLS`
+                                : "DOWNLOAD TODAY XLS"}
+                          </span>
                         </button>
 
                         <button
@@ -4894,14 +5395,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           onClick={handleSendWhatsAppSheet}
                           disabled={isSendingWhatsApp}
                           className="bg-[#128C7E] hover:bg-[#075E54] text-white font-bold text-[11px] py-2 px-3 rounded shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                          title="Send today's spreadsheet directly to the WhatsApp group"
+                          title={rosterDateFilter ? `Send ${rosterDateFilter} spreadsheet directly to the WhatsApp group` : "Send today's spreadsheet directly to the WhatsApp group"}
                         >
                           {isSendingWhatsApp ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <Send className="w-3.5 h-3.5" />
                           )}
-                          <span>{isSendingWhatsApp ? "SENDING TO WHATSAPP..." : "SEND TO WHATSAPP"}</span>
+                          <span>
+                            {isSendingWhatsApp
+                              ? "SENDING TO WHATSAPP..."
+                              : rosterDateFilter
+                                ? `SEND ${rosterDateFilter} TO WHATSAPP`
+                                : "SEND TO WHATSAPP"}
+                          </span>
                         </button>
                         
                         <button
@@ -4956,8 +5463,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                 <div className="bg-[#e6f2ee] rounded-lg p-4 border border-[#cbdad5] flex items-start gap-3 text-xs text-[#063b30]">
                   <Info className="w-4.5 h-4.5 text-emerald-700 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-bold text-[#063b30]">Specialty Group Separators Active:</span>
-                    <p className="mt-0.5 text-slate-600 font-medium">Exported spreadsheet output is automatically partitioned and sorted into individual specialty sections with clear header dividers for convenient team auditing.</p>
+                    <span className="font-bold text-[#063b30]">All-Sheet Live Synchronization Active:</span>
+                    <p className="mt-0.5 text-slate-600 font-medium">
+                      Edits made to any doctor on today's roster or any previous date automatically update the 30-Day Monthly Cumulative Sheet, Daily Excel Sheet, WhatsApp Group Sheet Dispatch, and Inpatient Ward Calls duty roster.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -5085,7 +5594,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     <span>{checkinsError}</span>
                   </div>
                   <button
-                    onClick={fetchCheckins}
+                    onClick={() => (rosterDateFilter ? fetchCheckinsForDate(rosterDateFilter) : fetchCheckins())}
                     className="px-3 py-1 bg-white border border-rose-300 rounded-lg font-bold hover:bg-rose-100 transition-colors cursor-pointer text-xs"
                   >
                     Retry
@@ -5096,10 +5605,24 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
               {/* Live Roster Summary List matching Geometric border style */}
               <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden p-6 space-y-6">
                 
-                <h3 className="font-extrabold text-slate-950 text-base border-b border-slate-100 pb-3 flex items-center gap-2">
-                  <Layers className="w-4.5 h-4.5 text-[#063b30]" />
-                  <span>Active Roster Grouped by Clinic</span>
-                </h3>
+                <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <h3 className="font-extrabold text-slate-950 text-base flex items-center gap-2">
+                    <Layers className="w-4.5 h-4.5 text-[#063b30]" />
+                    <span>
+                      {rosterDateFilter
+                        ? `Roster for ${rosterDateFilter} Grouped by Clinic`
+                        : "Active Roster Grouped by Clinic"}
+                    </span>
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={handleOpenAddCheckinModal}
+                    className="text-xs font-bold text-[#063b30] bg-[#e6f2ee] hover:bg-[#d5e8e1] px-3 py-1.5 rounded-lg border border-[#cbdad5] transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{rosterDateFilter ? `Add Doctor to ${rosterDateFilter}` : "Add Doctor to Today"}</span>
+                  </button>
+                </div>
 
                 {/* Render grouped department rosters exactly like the design HTML */}
                 {(() => {
@@ -5112,7 +5635,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     grouped[c.department].push(c);
                   });
 
-                  if (loadingCheckins && checkins.length === 0) {
+                  if ((loadingCheckins || loadingDateCheckins) && activeRosterCheckins.length === 0) {
                     return <CardGridSkeleton cards={4} />;
                   }
 
@@ -5121,16 +5644,34 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     return (
                       <EmptyState
                         icon={Users}
-                        title={adminSearch || adminDeptFilter !== "All" ? "No Matching Personnel" : "No Active Check-Ins"}
+                        title={
+                          adminSearch || adminDeptFilter !== "All"
+                            ? "No Matching Personnel"
+                            : rosterDateFilter
+                              ? `No Check-Ins Recorded on ${rosterDateFilter}`
+                              : "No Active Check-Ins"
+                        }
                         description={
                           adminSearch || adminDeptFilter !== "All"
                             ? "No personnel match your search query or department filter."
-                            : "No doctors have checked in yet today. The roster will populate automatically as physicians check in."
+                            : rosterDateFilter
+                              ? `No doctors were recorded on ${rosterDateFilter}. You can add a doctor to this date using the button below.`
+                              : "No doctors have checked in yet today. The roster will populate automatically as physicians check in."
                         }
-                        actionLabel={adminSearch || adminDeptFilter !== "All" ? "Clear Filters" : undefined}
+                        actionLabel={
+                          adminSearch || adminDeptFilter !== "All"
+                            ? "Clear Filters"
+                            : rosterDateFilter
+                              ? `Add Doctor to ${rosterDateFilter}`
+                              : "Add Doctor Check-In"
+                        }
                         onAction={() => {
-                          setAdminSearch("");
-                          setAdminDeptFilter("All");
+                          if (adminSearch || adminDeptFilter !== "All") {
+                            setAdminSearch("");
+                            setAdminDeptFilter("All");
+                          } else {
+                            handleOpenAddCheckinModal();
+                          }
                         }}
                       />
                     );
@@ -5179,13 +5720,22 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                     </div>
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-3 shrink-0">
+                                <div className="flex items-center gap-2 shrink-0">
                                   <span className="font-bold text-[#063b30] arabic-font" dir="rtl">{c.doctorArabicName}</span>
                                   <span className="bg-[#e6f2ee] text-[#063b30] px-2 py-0.5 rounded text-[9px] font-bold">
                                     {formatShiftsForDisplay(c.shifts)}
                                   </span>
                                   <button
-                                    onClick={() => handleDeleteCheckin(c.id)}
+                                    id={`edit-checkin-btn-${c.id}`}
+                                    onClick={() => handleOpenEditCheckinModal(c)}
+                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-600 hover:text-[#063b30] hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                    title="Edit physician check-in details (Name, Specialty, Shifts, Phone, Date)"
+                                    aria-label={`Edit check-in for Dr. ${c.doctorName}`}
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteCheckin(c.id, c.timestamp)}
                                     className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                                     title="Delete physician check-in"
                                     aria-label={`Delete check-in for Dr. ${c.doctorName}`}
@@ -5559,6 +6109,284 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                   </button>
                 </div>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Add / Edit Date Check-In Modal (Syncs Across All Sheets) */}
+      <AnimatePresence>
+        {isCheckinModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="checkin-edit-modal-title"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              className="bg-white rounded-xl border border-[#cbdad5] shadow-2xl max-w-xl w-full overflow-hidden my-8"
+            >
+              {/* Modal Header */}
+              <div className="bg-[#063b30] text-white px-6 py-4 flex items-center justify-between">
+                <h3 id="checkin-edit-modal-title" className="font-extrabold text-base flex items-center gap-2">
+                  {checkinModalMode === "add" ? (
+                    <Plus className="w-5 h-5 text-emerald-400" />
+                  ) : (
+                    <Edit className="w-5 h-5 text-emerald-400" />
+                  )}
+                  <span>
+                    {checkinModalMode === "add"
+                      ? `Add Doctor to Sheet (${checkinFormData.date || "Selected Date"})`
+                      : `Edit Checked-In Doctor (${checkinFormData.originalDate || checkinFormData.date})`}
+                  </span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => !isSavingCheckinModal && setIsCheckinModalOpen(false)}
+                  className="text-slate-300 hover:text-white p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full hover:bg-white/10 transition-colors cursor-pointer"
+                  aria-label="Close check-in editor dialog"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <form onSubmit={handleSaveCheckinModal} className="p-6 space-y-4 max-h-[82vh] overflow-y-auto">
+                {/* Quick Lookup from Master Physician Database */}
+                <div className="bg-[#e6f2ee]/70 border border-[#cbdad5] rounded-lg p-3.5 space-y-2">
+                  <label htmlFor="checkin-modal-lookup-input" className="text-[11px] font-extrabold text-[#063b30] uppercase tracking-wider flex items-center gap-1.5">
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Quick Auto-Fill from Master Physician Database (Optional)</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="checkin-modal-lookup-input"
+                      type="text"
+                      placeholder="Type doctor ID, English name, or Arabic name to auto-fill..."
+                      value={checkinModalSearch}
+                      onChange={(e) => setCheckinModalSearch(e.target.value)}
+                      className="w-full px-3.5 py-2 bg-white border border-[#cbdad5] rounded-lg focus:border-[#063b30] outline-none text-slate-800 text-xs font-semibold transition-all"
+                    />
+                    {checkinModalSuggestions.length > 0 && (
+                      <div className="mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto divide-y divide-slate-100 z-20 relative">
+                        {checkinModalSuggestions.map((doc, idx) => (
+                          <button
+                            key={`chk-modal-sug-${doc.id}-${idx}`}
+                            type="button"
+                            onClick={() => handleSelectDoctorForCheckinModal(doc)}
+                            className="w-full px-3.5 py-2 text-left text-xs hover:bg-emerald-50/70 transition-colors flex items-center justify-between cursor-pointer"
+                          >
+                            <div className="truncate pr-2">
+                              <span className="font-mono font-bold bg-slate-100 text-[#063b30] px-1.5 py-0.5 rounded border border-slate-200 text-[10px] mr-2">
+                                {doc.id}
+                              </span>
+                              <span className="font-semibold text-slate-800">{doc.name}</span>
+                              <span className="text-[10px] text-slate-500 ml-2">({doc.department})</span>
+                            </div>
+                            <span className="text-[#063b30] font-bold arabic-font text-right shrink-0" dir="rtl">
+                              {doc.arabicName}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Row 1: Employee ID & Target Sheet Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-id-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Employee ID <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="checkin-modal-id-input"
+                      type="text"
+                      placeholder="e.g., 101"
+                      value={checkinFormData.id}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, id: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-mono font-bold text-slate-900 focus:bg-white focus:border-[#063b30] outline-none transition-all"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-date-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Sheet Date (YYYY-MM-DD) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="checkin-modal-date-input"
+                      type="date"
+                      value={checkinFormData.date}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, date: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-bold text-slate-900 focus:bg-white focus:border-[#063b30] outline-none transition-all"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Row 2: English Name & Arabic Name */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-name-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      English Full Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="checkin-modal-name-input"
+                      type="text"
+                      placeholder="e.g., Dr. Ahmed Hassan"
+                      value={checkinFormData.doctorName}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, doctorName: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-semibold text-slate-900 focus:bg-white focus:border-[#063b30] outline-none transition-all"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-arabic-name-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Arabic Full Name (الاسم بالعربي) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="checkin-modal-arabic-name-input"
+                      type="text"
+                      dir="rtl"
+                      placeholder="أحمد حسن..."
+                      value={checkinFormData.doctorArabicName}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, doctorArabicName: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-bold text-[#063b30] arabic-font focus:bg-white focus:border-[#063b30] outline-none transition-all"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* Row 3: Specialty & Phone Number */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-dept-select" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Clinical Specialty <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      id="checkin-modal-dept-select"
+                      value={checkinFormData.department}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, department: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-bold text-[#063b30] focus:bg-white focus:border-[#063b30] outline-none transition-all cursor-pointer"
+                    >
+                      {SPECIALTY_OPTIONS.map((spec) => (
+                        <option key={`chk-modal-spec-${spec.en}`} value={spec.en}>
+                          {spec.en} — {spec.ar}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="checkin-modal-phone-input" className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                      Mobile Phone Number
+                    </label>
+                    <input
+                      id="checkin-modal-phone-input"
+                      type="text"
+                      placeholder="e.g., 01012345678"
+                      value={checkinFormData.mobileNumber}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, mobileNumber: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#cbdad5] rounded-lg text-sm font-semibold text-slate-900 focus:bg-white focus:border-[#063b30] outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 4: Shifts Selector */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                    Assigned Duty Shifts <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {SHIFT_OPTIONS.map((sh) => {
+                      const isSelected = checkinFormData.shifts.includes(sh.id);
+                      const ShiftIcon = sh.icon;
+                      return (
+                        <button
+                          key={`chk-modal-shift-${sh.id}`}
+                          type="button"
+                          onClick={() => handleToggleCheckinModalShift(sh.id)}
+                          className={`p-2.5 rounded-lg border text-left transition-all flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? "bg-[#063b30] text-white border-[#063b30] shadow-xs"
+                              : "bg-slate-50 text-slate-700 border-[#cbdad5] hover:bg-slate-100"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <ShiftIcon className={`w-4 h-4 ${isSelected ? "text-emerald-300" : "text-[#063b30]"}`} />
+                            <div>
+                              <div className="text-xs font-bold">{sh.labelEn}</div>
+                              <div className={`text-[10px] arabic-font ${isSelected ? "text-emerald-200" : "text-slate-500"}`}>
+                                {sh.labelAr}
+                              </div>
+                            </div>
+                          </div>
+                          {isSelected && <Check className="w-4 h-4 text-emerald-300 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Row 5: Master Profile Cascade Toggle */}
+                <div className="pt-1">
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer hover:bg-slate-100/70 transition-colors">
+                    <input
+                      id="checkin-modal-sync-master-checkbox"
+                      type="checkbox"
+                      checked={checkinFormData.syncMasterProfile}
+                      onChange={(e) => setCheckinFormData({ ...checkinFormData, syncMasterProfile: e.target.checked })}
+                      className="mt-0.5 w-4 h-4 accent-[#063b30] rounded cursor-pointer"
+                    />
+                    <div className="text-xs">
+                      <span className="font-bold text-slate-800 block">
+                        Sync Doctor Profile Across Master Database & All Historical/Future Sheets
+                      </span>
+                      <span className="text-slate-500 text-[11px] block mt-0.5">
+                        When enabled, any updates to this doctor's Name, Arabic Name, Specialty, or Mobile Number will also update their permanent profile and reflect across all 30-day monthly sub-sheets.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Modal Footer */}
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    disabled={isSavingCheckinModal}
+                    onClick={() => setIsCheckinModalOpen(false)}
+                    className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    id="checkin-modal-submit-btn"
+                    type="submit"
+                    disabled={isSavingCheckinModal}
+                    className="px-5 py-2.5 rounded-lg bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSavingCheckinModal ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Syncing All Sheets...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-300" />
+                        <span>{checkinModalMode === "add" ? "Add Doctor & Sync Sheets" : "Save Changes & Sync Sheets"}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </motion.div>
         )}
