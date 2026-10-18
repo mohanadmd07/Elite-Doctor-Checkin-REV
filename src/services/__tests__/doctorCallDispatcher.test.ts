@@ -10,7 +10,10 @@ import {
   previewCustomDoctorCall,
   sendCustomDoctorCall,
   resolveHospitalDutyDate,
-  getHospitalDutyDate
+  getHospitalDutyDate,
+  getCairoActiveShifts,
+  matchesActiveShift,
+  resolveHospitalCallDate
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -710,6 +713,183 @@ describe('Green-API quotaExceeded Webhook Recovery & Journal API Polling', () =>
       process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID = origTarget;
       global.fetch = origFetch;
     }
+  });
+});
+
+describe('Shift Boundaries & After 8 PM Night Shift Doctor Call Rule', () => {
+  it('correctly maps shift intervals across the full 24-hour cycle', () => {
+    // 07:59 AM - Night shift still active
+    const at759AM = new Date("2026-10-18T07:59:00+03:00");
+    const shifts759AM = getCairoActiveShifts(at759AM);
+    expect(shifts759AM).toEqual(["Night shift", "24 shift"]);
+
+    // 08:00 AM - Morning and Long shifts begin
+    const at800AM = new Date("2026-10-18T08:00:00+03:00");
+    const shifts800AM = getCairoActiveShifts(at800AM);
+    expect(shifts800AM).toEqual(["Morning shift", "Long shift", "24 shift"]);
+
+    // 01:59 PM (13:59) - Morning and Long shifts active
+    const at159PM = new Date("2026-10-18T13:59:00+03:00");
+    const shifts159PM = getCairoActiveShifts(at159PM);
+    expect(shifts159PM).toEqual(["Morning shift", "Long shift", "24 shift"]);
+
+    // 02:00 PM (14:00) - Morning ends, Evening begins; Long continues
+    const at200PM = new Date("2026-10-18T14:00:00+03:00");
+    const shifts200PM = getCairoActiveShifts(at200PM);
+    expect(shifts200PM).toEqual(["Long shift", "Evening shift", "24 shift"]);
+
+    // 07:59 PM (19:59) - Evening and Long active
+    const at759PM = new Date("2026-10-18T19:59:00+03:00");
+    const shifts759PM = getCairoActiveShifts(at759PM);
+    expect(shifts759PM).toEqual(["Long shift", "Evening shift", "24 shift"]);
+
+    // 08:00 PM (20:00) - Long & Evening end, Night shift starts
+    const at800PM = new Date("2026-10-18T20:00:00+03:00");
+    const shifts800PM = getCairoActiveShifts(at800PM);
+    expect(shifts800PM).toEqual(["Night shift", "24 shift"]);
+
+    // 11:30 PM (23:30) - Night shift
+    const at1130PM = new Date("2026-10-18T23:30:00+03:00");
+    const shifts1130PM = getCairoActiveShifts(at1130PM);
+    expect(shifts1130PM).toEqual(["Night shift", "24 shift"]);
+
+    // 03:00 AM - Night shift
+    const at3AM = new Date("2026-10-19T03:00:00+03:00");
+    const shifts3AM = getCairoActiveShifts(at3AM);
+    expect(shifts3AM).toEqual(["Night shift", "24 shift"]);
+  });
+
+  it('matchesActiveShift accepts only night shifts after 8 PM', () => {
+    const nightWindow = ["Night shift", "24 shift"];
+
+    // Evening shift only - must NOT match
+    expect(matchesActiveShift(["Evening shift"], nightWindow)).toBe(false);
+    expect(matchesActiveShift(["ايڤينينج"], nightWindow)).toBe(false);
+
+    // Long shift only - must NOT match
+    expect(matchesActiveShift(["Long shift"], nightWindow)).toBe(false);
+    expect(matchesActiveShift(["لونج"], nightWindow)).toBe(false);
+
+    // Morning shift only - must NOT match
+    expect(matchesActiveShift(["Morning shift"], nightWindow)).toBe(false);
+    expect(matchesActiveShift(["مورنينج"], nightWindow)).toBe(false);
+
+    // Night shift - must match
+    expect(matchesActiveShift(["Night shift"], nightWindow)).toBe(true);
+    expect(matchesActiveShift(["نايت"], nightWindow)).toBe(true);
+
+    // 24 shift - must match
+    expect(matchesActiveShift(["24 shift"], nightWindow)).toBe(true);
+    expect(matchesActiveShift(["24"], nightWindow)).toBe(true);
+
+    // Multiple shifts including Night shift - must match
+    expect(matchesActiveShift(["Evening shift", "Night shift"], nightWindow)).toBe(true);
+  });
+
+  it('dispatches only doctors with night shifts when call arrives after 8 PM', async () => {
+    const callAfter8PM =
+      "Type: Request\n" +
+      "Category: DoctorCall\n" +
+      "Group: الجراحة العامة\n" +
+      "By: Nurse Station\n" +
+      "Date: 14/10/2026 8:30:00 م\n" +
+      "Location: Elite 3rd Floor\n" +
+      "Sub.Location: Room 302\n" +
+      "Patient Name: طارق محمود\n" +
+      "Bed: Bed 302";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "msg_after_8pm_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: { textMessage: callAfter8PM }
+      }
+    };
+
+    const mockCheckins = [
+      {
+        id: "doc_eve",
+        doctorName: "Dr. Evening Only",
+        department: "General Surgery",
+        shifts: ["Evening shift"],
+        mobileNumber: "01011111111"
+      },
+      {
+        id: "doc_night",
+        doctorName: "Dr. Night Surgeon",
+        department: "General Surgery",
+        shifts: ["Night shift"],
+        mobileNumber: "01022222222"
+      }
+    ];
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async () => mockCheckins
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.dispatchedDoctors).toHaveLength(1);
+    expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. Night Surgeon");
+  });
+
+  it('does NOT fall back to daytime or evening doctors after 8 PM if no night doctor is present', async () => {
+    const callAfter8PM =
+      "Type: Request\n" +
+      "Category: DoctorCall\n" +
+      "Group: الباطنة العامة\n" +
+      "By: Night Nurse\n" +
+      "Date: 14/10/2026 9:15:00 م\n" +
+      "Location: Elite 2nd Floor\n" +
+      "Sub.Location: Room 205\n" +
+      "Patient Name: خالد علي\n" +
+      "Bed: Bed 205";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "msg_night_no_doc_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: { textMessage: callAfter8PM }
+      }
+    };
+
+    // Only Morning and Evening doctors checked in today, no Night or 24 shift doctors
+    const mockCheckins = [
+      {
+        id: "doc_morning",
+        doctorName: "Dr. Day Doctor",
+        department: "Internal Medicine",
+        shifts: ["Morning shift"],
+        mobileNumber: "01033333333"
+      },
+      {
+        id: "doc_eve",
+        doctorName: "Dr. Evening Doctor",
+        department: "Internal Medicine",
+        shifts: ["Evening shift"],
+        mobileNumber: "01044444444"
+      }
+    ];
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async () => mockCheckins
+    });
+
+    // Must be logged as no_doctor_present and MUST NOT dispatch to off-shift daytime/evening doctors
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.status).toBe("no_doctor_present");
+    expect(result.callRecord?.dispatchedDoctors).toHaveLength(0);
   });
 });
 

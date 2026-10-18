@@ -476,11 +476,19 @@ export function resolveHospitalDutyDate(callDateStr?: string, referenceTime: Dat
 /**
  * Calculates current active shift(s) according to Africa/Cairo local time
  * Hospital shifts defined in Elite Hospital:
- * - Morning shift: 08:00 AM - 04:00 PM (480 - 960 min)
- * - Long shift:    08:00 AM - 09:00 PM (480 - 1260 min)
- * - Evening shift: 03:00 PM - 12:00 AM (midnight) (900 - 1440 min)
- * - Night shift:   11:00 PM - 09:00 AM (1380 - 540 min next day)
+ * - Morning shift: 08:00 AM - 02:00 PM (480 - 840 min)
+ * - Long shift:    08:00 AM - 08:00 PM (480 - 1200 min)
+ * - Evening shift: 02:00 PM - 08:00 PM (840 - 1200 min)
+ * - Night shift:   08:00 PM - 08:00 AM (1200 - 480 min next day)
  * - 24 shift:      Covers all 24 hours
+ *
+ * Operational Rules:
+ * - Morning: 8 AM to 2 PM (08:00 - 14:00)
+ * - Long: 8 AM to 8 PM (08:00 - 20:00) covers Morning and Evening
+ * - Evening: 2 PM to 8 PM (14:00 - 20:00)
+ * - Night: 8 PM to 8 AM (20:00 - 08:00)
+ * - When a call is after 8 PM (20:00 - 08:00 Cairo time), calls are routed strictly to doctors on Night shifts only
+ *   (Night shift and 24 shift). Evening shift and Long shift conclude at 8:00 PM.
  */
 export function getCairoActiveShifts(date: Date = new Date()): string[] {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -496,23 +504,24 @@ export function getCairoActiveShifts(date: Date = new Date()): string[] {
 
   const activeShifts: string[] = [];
 
-  // Morning shift: 8:00 AM (480 min) - 4:00 PM (960 min)
-  if (timeInMinutes >= 8 * 60 && timeInMinutes < 16 * 60) {
+  // Morning shift: 8:00 AM (480 min) - 2:00 PM (840 min)
+  if (timeInMinutes >= 8 * 60 && timeInMinutes < 14 * 60) {
     activeShifts.push("Morning shift");
   }
 
-  // Long shift: 8:00 AM (480 min) - 9:00 PM (1260 min)
-  if (timeInMinutes >= 8 * 60 && timeInMinutes < 21 * 60) {
+  // Long shift: 8:00 AM (480 min) - 8:00 PM (1200 min)
+  if (timeInMinutes >= 8 * 60 && timeInMinutes < 20 * 60) {
     activeShifts.push("Long shift");
   }
 
-  // Evening shift: 3:00 PM (900 min) - 12:00 AM (midnight / 1440 min)
-  if (timeInMinutes >= 15 * 60 && timeInMinutes <= 24 * 60) {
+  // Evening shift: 2:00 PM (840 min) - 8:00 PM (1200 min)
+  if (timeInMinutes >= 14 * 60 && timeInMinutes < 20 * 60) {
     activeShifts.push("Evening shift");
   }
 
-  // Night shift: 11:00 PM (1380 min) - 9:00 AM (540 min)
-  if (timeInMinutes >= 23 * 60 || timeInMinutes < 9 * 60) {
+  // Night shift: 8:00 PM (1200 min) - 8:00 AM (480 min next day)
+  // After 8:00 PM, calls are routed to Night shifts only
+  if (timeInMinutes >= 20 * 60 || timeInMinutes < 8 * 60) {
     activeShifts.push("Night shift");
   }
 
@@ -520,6 +529,89 @@ export function getCairoActiveShifts(date: Date = new Date()): string[] {
   activeShifts.push("24 shift");
 
   return activeShifts;
+}
+
+/**
+ * Resolves the operational Date object in Cairo time for a call message.
+ * Extracts the calendar date and the time from the message string.
+ * If the time is present (e.g. "9:23:12 م", "10:00:00 AM"), returns a Date object
+ * corresponding to that Cairo time.
+ * If no time is found in the message, defaults to referenceTime.
+ */
+export function resolveHospitalCallDate(callDateStr?: string, referenceTime: Date = new Date()): Date {
+  if (!callDateStr || typeof callDateStr !== "string") {
+    return referenceTime;
+  }
+
+  const asciiStr = callDateStr.replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+  const cleaned = asciiStr.replace(/[\u200B-\u200F\u061C\uFEFF\u202A-\u202E]/g, "").trim();
+
+  const timeMatch = cleaned.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([^\d\s\r\n,]+)?/);
+  if (!timeMatch) {
+    return referenceTime;
+  }
+
+  let h = parseInt(timeMatch[1], 10);
+  const min = parseInt(timeMatch[2], 10);
+  const sec = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+  const meridian = (timeMatch[4] || "").trim().toLowerCase();
+  const isPM = meridian.startsWith("م") || meridian.startsWith("p");
+  const isAM = meridian.startsWith("ص") || meridian.startsWith("a");
+
+  if (isPM && h < 12) h += 12;
+  if (isAM && h === 12) h = 0;
+
+  const tzString = referenceTime.toLocaleString("en-US", {
+    timeZone: "Africa/Cairo",
+    timeZoneName: "longOffset"
+  });
+  const offsetMatch = tzString.match(/GMT([+-])(\d+)(?::(\d+))?/);
+  let offsetMinutes = 180; // default UTC+3
+  if (offsetMatch) {
+    const sign = offsetMatch[1] === "+" ? 1 : -1;
+    const hours = parseInt(offsetMatch[2], 10);
+    const mins = offsetMatch[3] ? parseInt(offsetMatch[3], 10) : 0;
+    offsetMinutes = sign * (hours * 60 + mins);
+  }
+
+  let year = "";
+  let month = "";
+  let day = "";
+
+  const isoMatch = cleaned.match(/(\d{4})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{1,2})/);
+  if (isoMatch) {
+    year = isoMatch[1];
+    month = isoMatch[2].padStart(2, "0");
+    day = isoMatch[3].padStart(2, "0");
+  } else {
+    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
+    if (partsMatch) {
+      const first = parseInt(partsMatch[1], 10);
+      const second = parseInt(partsMatch[2], 10);
+      year = partsMatch[3];
+      if (first > 12 && second <= 12) {
+        day = String(first).padStart(2, "0");
+        month = String(second).padStart(2, "0");
+      } else if (second > 12 && first <= 12) {
+        month = String(first).padStart(2, "0");
+        day = String(second).padStart(2, "0");
+      } else {
+        day = String(first).padStart(2, "0");
+        month = String(second).padStart(2, "0");
+      }
+    }
+  }
+
+  if (!year || !month || !day) {
+    return referenceTime;
+  }
+
+  const yNum = parseInt(year, 10);
+  const mNum = parseInt(month, 10);
+  const dNum = parseInt(day, 10);
+
+  const utcMillis = Date.UTC(yNum, mNum - 1, dNum, h, min, sec) - offsetMinutes * 60 * 1000;
+  return new Date(utcMillis);
 }
 
 /**
@@ -1474,7 +1566,8 @@ export async function processDoctorCallWebhook(params: {
   // 3. Resolve active shift and call date in Cairo using 8:00 AM hospital shift cutoff
   // Calls occurring between 00:00 and 07:59:59 AM belong to the previous day's roster
   const now = new Date();
-  const activeShifts = getCairoActiveShifts(now);
+  const callTime = resolveHospitalCallDate(parsed.callDate, now);
+  const activeShifts = getCairoActiveShifts(callTime);
   const targetCallDate = resolveHospitalDutyDate(parsed.callDate, now);
 
   console.log(`[DoctorCall] Received call for Room ${parsed.room}, Dept: "${parsed.departmentRaw}" -> "${parsed.canonicalDepartment}". Resolved Duty Date: "${targetCallDate}". Active Cairo Shifts: [${activeShifts.join(", ")}]`);
@@ -1500,9 +1593,11 @@ export async function processDoctorCallWebhook(params: {
   }
 
   // Resilient Fallback: If no doctor matched current active shift window, but a doctor in that department
-  // checked in today, include them as on-duty coverage so urgent calls are never missed!
+  // checked in today, include them as on-duty coverage during day shifts so urgent calls are never missed.
+  // CRITICAL RULE: When a call is after 9 PM, send to doctors at night shifts only (no off-shift fallback).
   let usedShiftFallback = false;
-  if (matchingDoctors.length === 0) {
+  const isNightOnlyWindow = activeShifts.every(s => s === "Night shift" || s === "24 shift");
+  if (matchingDoctors.length === 0 && !isNightOnlyWindow) {
     for (const c of allCheckins) {
       const docDept = normalizeSpecialty(c.department).department;
       if (docDept.toLowerCase() === parsed.canonicalDepartment.toLowerCase()) {
@@ -1879,9 +1974,11 @@ export async function reDispatchDoctorCall(params: {
   }
 
   const now = new Date();
-  const activeShifts = getCairoActiveShifts(now);
   const referenceDate = target.createdAt ? new Date(target.createdAt) : now;
-  const targetDate = resolveHospitalDutyDate(target.callDate, isNaN(referenceDate.getTime()) ? now : referenceDate);
+  const validRef = isNaN(referenceDate.getTime()) ? now : referenceDate;
+  const targetDate = resolveHospitalDutyDate(target.callDate, validRef);
+  const callTime = resolveHospitalCallDate(target.callDate, validRef);
+  const activeShifts = getCairoActiveShifts(callTime);
   target.callDate = targetDate;
   const allCheckins = await getActiveCheckins(targetDate);
   const matchingDoctors: DispatchedDoctorInfo[] = [];
@@ -1903,7 +2000,8 @@ export async function reDispatchDoctorCall(params: {
   }
 
   let usedShiftFallback = false;
-  if (matchingDoctors.length === 0) {
+  const isNightOnlyWindow = activeShifts.every(s => s === "Night shift" || s === "24 shift");
+  if (matchingDoctors.length === 0 && !isNightOnlyWindow) {
     for (const c of allCheckins) {
       const docDept = normalizeSpecialty(c.department).department;
       if (docDept.toLowerCase() === target.department.toLowerCase()) {
@@ -2008,7 +2106,8 @@ export async function previewCustomDoctorCall(params: {
 
   const now = new Date();
   const targetDate = resolveHospitalDutyDate(payload.date, now);
-  const activeShifts = getCairoActiveShifts(now);
+  const callTime = resolveHospitalCallDate(payload.date, now);
+  const activeShifts = getCairoActiveShifts(callTime);
 
   const allCheckins = await getActiveCheckins(targetDate);
   const onShiftDoctors: DispatchedDoctorInfo[] = [];
@@ -2033,8 +2132,9 @@ export async function previewCustomDoctorCall(params: {
     }
   }
 
-  let finalMatching = onShiftDoctors.length > 0 ? onShiftDoctors : allDeptDoctors;
-  const isOffShiftCoverage = onShiftDoctors.length === 0 && allDeptDoctors.length > 0;
+  const isNightOnlyWindow = activeShifts.every(s => s === "Night shift" || s === "24 shift");
+  let finalMatching = onShiftDoctors.length > 0 ? onShiftDoctors : (isNightOnlyWindow ? [] : allDeptDoctors);
+  const isOffShiftCoverage = !isNightOnlyWindow && onShiftDoctors.length === 0 && allDeptDoctors.length > 0;
 
   // If user explicitly pre-selected doctor IDs, filter to those
   if (payload.selectedDoctorIds && payload.selectedDoctorIds.length > 0) {

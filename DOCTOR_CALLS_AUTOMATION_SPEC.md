@@ -61,10 +61,13 @@ All calls are logged in Supabase (`doctor_calls`) with local JSON fallback and m
 ---
 
 ## 4. Shift & Timezone Rules (Africa/Cairo)
-* **Long shift:** 09:00 – 21:00 (9:00 AM – 9:00 PM)
-* **Evening shift:** 15:00 – 23:00 (3:00 PM – 11:00 PM)
-* **Night shift:** 23:00 – 09:00 (11:00 PM – 9:00 AM)
-* **Overlap Behavior:** During 15:00 – 21:00, doctors checked in for either `Long shift` or `Evening shift` qualify as present.
+* **Morning shift:** 08:00 – 14:00 (8:00 AM – 2:00 PM)
+* **Long shift:** 08:00 – 20:00 (8:00 AM – 8:00 PM) - encompasses Morning and Evening coverage
+* **Evening shift:** 14:00 – 20:00 (2:00 PM – 8:00 PM)
+* **Night shift:** 20:00 – 08:00 (8:00 PM – 8:00 AM next day)
+* **24 shift:** 24-hour continuous coverage
+* **Night Window Rule:** Any call arriving between 8:00 PM and 8:00 AM Cairo time (20:00 – 08:00) is routed strictly to doctors on **Night shifts only** (`Night shift` or `24 shift`). Evening shift and Long shift conclude at 20:00. Off-shift fallback to daytime/evening doctors is strictly disallowed during night hours.
+* **Overlap Behavior:** Long shift doctors qualify as on-duty across both the Morning shift (08:00 – 14:00) and the Evening shift (14:00 – 20:00). At 08:00 AM, the hospital operational duty roster resets.
 
 ---
 
