@@ -189,32 +189,23 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
 
   const messageText = cleanWhatsAppText(rawMessageText);
 
-  // Flexible triggers:
-  // 1. Explicit doctor call keywords (English & Arabic)
-  const hasDoctorCallKeyword =
-    /doctor[\s_-]*call/i.test(messageText) ||
-    /(?:category|الفئة)\s*[:：-]?\s*doctor/i.test(messageText) ||
-    /(?:طلب\s*)?استدعاء(?:\s*(?:طبيب|دكتور|أخصائي|اخصائي|استشاري))?/i.test(messageText) ||
-    /مرور\s*على\s*الحالة/i.test(messageText) ||
-    /(?:طلب\s*)?مرور(?:\s*(?:طبيب|دكتور))?/i.test(messageText) ||
-    /(?:طلب\s*)?مناظرة(?:\s*(?:حالة|مريض))?/i.test(messageText) ||
-    /كول\s*(?:طبيب|دكتور)/i.test(messageText) ||
-    /طلب\s*استشارة/i.test(messageText);
-
-  // 2. Structured hospital nurse request: "Type: Request" + department/group header + location/patient
-  const isStructuredNurseRequest =
-    /(?:type|نوع)\s*[:：-]?\s*(?:request|طلب)/i.test(messageText) &&
-    /(?:group|specialty|speciality|department|dept|القسم|قسم|التخصص|تخصص|المجموعة)\s*[:：-]/i.test(messageText) &&
-    /(?:room|bed|sub\.?\s*location|location|patient|غرفة|سرير|مريض|المريض|الدور)\s*[:：-]/i.test(messageText);
-
-  if (!hasDoctorCallKeyword && !isStructuredNurseRequest) return null;
+  // Strict trigger: Message MUST explicitly contain "DoctorCall" (or "Doctor Call")
+  const hasDoctorCallKeyword = /doctor[\s_-]*call/i.test(messageText);
+  if (!hasDoctorCallKeyword) return null;
 
   const getField = (regex: RegExp): string => {
     const m = messageText.match(regex);
     return m ? m[1].trim() : "";
   };
 
-  const category = getField(/(?:category|الفئة)\s*[:：-]\s*([^\r\n]+)/i) || "DoctorCall";
+  const rawCategory = getField(/(?:category|الفئة)\s*[:：-]\s*([^\r\n]+)/i);
+
+  // Strictly reject non-doctor categories (e.g. Catering, Housekeeping, Maintenance, Kitchen, etc.)
+  if (rawCategory && !/doctor[\s_-]*call/i.test(rawCategory) && !/doctor/i.test(rawCategory)) {
+    return null;
+  }
+
+  const category = rawCategory || "DoctorCall";
   let departmentRaw =
     getField(/(?:group|specialty|speciality|department|dept|service|القسم|قسم|التخصص|تخصص|المجموعة)\s*[:：-]\s*([^\r\n]+)/i);
 

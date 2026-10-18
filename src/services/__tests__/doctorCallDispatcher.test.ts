@@ -45,6 +45,106 @@ describe('Doctor Call Message Parsing', () => {
     expect(parseDoctorCallMessage(text)).toBeNull();
   });
 
+  it('strictly rejects Catering messages (custard, warm fluids, lunch meal)', () => {
+    const custardMsg = `Type: Request
+
+Category: Catering
+
+Group: كاستر
+
+By: Mona Hassan
+
+Date: 15/10/2026 11:30:00 AM
+
+Location: Elite 2nd Floor - Elite
+
+Sub.Location: Room 202
+
+Patient Name: احمد ممدوح
+Bed: Bed 202`;
+    expect(parseDoctorCallMessage(custardMsg)).toBeNull();
+
+    const warmFluidsMsg = `Type: Request
+
+Category: Catering
+
+Group: سوائل دافيه
+
+By: Sara Ali
+
+Date: 15/10/2026 12:00:00 PM
+
+Location: Elite 3rd Floor - Elite
+
+Sub.Location: Room 305
+
+Patient Name: فاطمة محمود
+Bed: Bed 305`;
+    expect(parseDoctorCallMessage(warmFluidsMsg)).toBeNull();
+
+    const lunchMsg = `Type: Request
+
+Category: Catering
+
+Group: وجبة غداء
+
+By: Nourhan Ehab
+
+Date: 15/10/2026 01:15:00 PM
+
+Location: Elite 4th Floor - Elite
+
+Sub.Location: Room 410
+
+Patient Name: محمد ابراهيم
+Bed: Bed 410`;
+    expect(parseDoctorCallMessage(lunchMsg)).toBeNull();
+  });
+
+  it('strictly rejects other non-doctor categories (Housekeeping, Maintenance)', () => {
+    const housekeepingMsg = `Type: Request
+
+Category: Housekeeping
+
+Group: نظافة الغرفة
+
+By: Nurse Dina
+
+Location: Elite 3rd Floor
+
+Sub.Location: Room 301
+Bed: Bed 301`;
+    expect(parseDoctorCallMessage(housekeepingMsg)).toBeNull();
+
+    const maintenanceMsg = `Type: Request
+
+Category: Maintenance
+
+Group: صيانة التكييف
+
+By: Front Desk
+
+Location: Elite 2nd Floor
+
+Sub.Location: Room 204`;
+    expect(parseDoctorCallMessage(maintenanceMsg)).toBeNull();
+  });
+
+  it('strictly rejects structured hospital requests when DoctorCall is missing', () => {
+    const requestWithoutDoctorCall = `Type: Request
+
+Group: General Surgery
+
+By: Nurse Sarah
+
+Location: Elite 4th Floor
+
+Sub.Location: Room 402
+Patient: Mohamed Ali
+Bed: Bed 402`;
+    expect(parseDoctorCallMessage(requestWithoutDoctorCall)).toBeNull();
+  });
+
   it('parses valid multiline DoctorCall template', () => {
     const msg = [
       'Category: DoctorCall',
@@ -474,8 +574,8 @@ describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
     expect(parsed?.patientBarcode).toBe("0000263656");
   });
 
-  it('parses structured nurse requests even when Category: DoctorCall header is omitted', () => {
-    const msgWithoutCategory =
+  it('strictly rejects structured requests when DoctorCall is omitted even with notes', () => {
+    const msgWithoutDoctorCall =
       "Type: Request\n\n" +
       "Group:  النساء وتوليد\n\n" +
       "By: Hadeer Ahmed\n\n" +
@@ -488,12 +588,20 @@ describe('WhatsApp Formatting & Flexible Doctor Call Trigger Ingestion', () => {
       "Bed: Bed 302\n\n" +
       "المرور على الحالة";
 
-    const parsed = parseDoctorCallMessage(msgWithoutCategory);
-    expect(parsed).not.toBeNull();
-    expect(parsed?.canonicalDepartment).toBe("Obstetrics and gynecology");
-    expect(parsed?.room).toBe("302");
-    expect(parsed?.patientName).toBe("حنان مصطفى");
-    expect(parsed?.notes).toBe("المرور على الحالة");
+    const parsed = parseDoctorCallMessage(msgWithoutDoctorCall);
+    expect(parsed).toBeNull();
+  });
+
+  it('accepts DoctorCall with varied casings, spacing, and asterisks', () => {
+    const makeMsg = (categoryLine: string) =>
+      `Type: Request\n\n${categoryLine}\n\nGroup:  النساء وتوليد\n\nBy: Hadeer Ahmed\n\nDate: 10/14/2026, 7:16:39 PM\n\nLocation: Elite 3rd Floor - Elite\n\nSub.Location: Room 302\n\nPatient Barcode: 0000085801\nPatient Name: حنان مصطفى\nAdmitting Phys: Mahmoud Elsayed\nBed: Bed 302\n\nالمرور على الحالة`;
+
+    expect(parseDoctorCallMessage(makeMsg("Category: DoctorCall"))).not.toBeNull();
+    expect(parseDoctorCallMessage(makeMsg("Category: Doctor Call"))).not.toBeNull();
+    expect(parseDoctorCallMessage(makeMsg("*Category:* *DoctorCall*"))).not.toBeNull();
+    expect(parseDoctorCallMessage(makeMsg("*Category:* *Doctor Call*"))).not.toBeNull();
+    expect(parseDoctorCallMessage(makeMsg("Category: doctorcall"))).not.toBeNull();
+    expect(parseDoctorCallMessage(makeMsg("category: DOCTOR CALL"))).not.toBeNull();
   });
 
   it('handles outgoingMessageReceived webhooks when sent from the instance phone', async () => {
