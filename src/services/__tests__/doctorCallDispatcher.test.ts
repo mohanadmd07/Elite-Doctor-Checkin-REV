@@ -1001,6 +1001,83 @@ describe('Shift Boundaries & After 8 PM Night Shift Doctor Call Rule', () => {
   });
 });
 
+describe('Cardiology Specialty Normalization & Dispatch Accuracy', () => {
+  it('correctly maps all Arabic and English Cardiology variations to Cardiology, NOT General Surgery', () => {
+    const cardioInputs = [
+      "القلب والأوعية الدموية",
+      "القلب والاوعية الدموية",
+      "أمراض القلب والأوعية الدموية",
+      "امراض القلب",
+      "القلب",
+      "Cardiology",
+      "cardio",
+      "قسطرة القلب"
+    ];
+
+    for (const input of cardioInputs) {
+      const msg = `Type: Request\n\nCategory: DoctorCall\n\nGroup: ${input}\n\nBy: Nurse Station\n\nRoom: 301\n\nPatient Name: احمد سمير\nBed: Bed 301`;
+      const parsed = parseDoctorCallMessage(msg);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.canonicalDepartment).toBe("Cardiology");
+      expect(parsed?.canonicalDepartment).not.toBe("General Surgery");
+    }
+  });
+
+  it('accurately dispatches Cardiology doctor and avoids General Surgery on duty doctors', async () => {
+    const callMsg =
+      "Type: Request\n" +
+      "Category: DoctorCall\n" +
+      "Group: القلب والأوعية الدموية\n" +
+      "By: Ward Nurse\n" +
+      "Date: 14/10/2026 10:00:00 AM\n" +
+      "Location: Elite 3rd Floor\n" +
+      "Sub.Location: Room 305\n" +
+      "Patient Name: يوسف محمد\n" +
+      "Bed: Bed 305";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "msg_cardio_test_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: { textMessage: callMsg }
+      }
+    };
+
+    const mockCheckins = [
+      {
+        id: "gs_101",
+        doctorName: "Dr. General Surgeon",
+        department: "General Surgery",
+        shifts: ["Morning shift", "24 shift"],
+        mobileNumber: "01011111111"
+      },
+      {
+        id: "cardio_202",
+        doctorName: "Dr. Cardiologist OnDuty",
+        department: "Cardiology",
+        shifts: ["Morning shift", "24 shift"],
+        mobileNumber: "01022222222"
+      }
+    ];
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async () => mockCheckins
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.callRecord?.department).toBe("Cardiology");
+    expect(result.callRecord?.dispatchedDoctors).toHaveLength(1);
+    expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. Cardiologist OnDuty");
+    expect(result.callRecord?.dispatchedDoctors[0].id).toBe("cardio_202");
+  });
+});
+
 
 
 

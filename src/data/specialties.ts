@@ -116,8 +116,8 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
   // Cardiothoracic Surgery
   if (
     lower.includes("cardiothoracic") ||
-    aNorm.includes("قلب وصدر") ||
-    aNorm.includes("جراحه قلب")
+    /(?:ال)?قلب\s*و\s*(?:ال)?صدر/.test(aNorm) ||
+    /جراح[هة]\s*(?:ال)?قلب/.test(aNorm)
   ) {
     return { active: true, department: "Cardiothoracic Surgery" };
   }
@@ -149,6 +149,21 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     return { active: true, department: "Urology" };
   }
 
+  // Cardiology (Must be evaluated BEFORE General Surgery because Egyptian hospital nomenclature "القلب والأوعية الدموية" contains "أوعية")
+  if (
+    lower.includes("cardiology") ||
+    lower.includes("cardio") ||
+    aNorm.includes("قلب") ||
+    lower.includes("structural heart") ||
+    lower.includes("heart failure") ||
+    lower.includes("cardiac") ||
+    lower.includes("holter") ||
+    lower.includes("echo") ||
+    aNorm.includes("قسطره")
+  ) {
+    return { active: true, department: "Cardiology" };
+  }
+
   // General Surgery (Includes Vascular Surgery, iVein, Bariatrics, GIT Surgery, Pediatric Surgery, Maxillofacial, etc.)
   if (
     lower.includes("general surgery") ||
@@ -173,20 +188,6 @@ export function normalizeSpecialty(rawDept: string): { active: boolean; departme
     lower.includes("maxillofacial")
   ) {
     return { active: true, department: "General Surgery" };
-  }
-
-  // Cardiology
-  if (
-    lower.includes("cardiology") ||
-    aNorm.includes("قلب") ||
-    lower.includes("structural heart") ||
-    lower.includes("heart failure") ||
-    lower.includes("cardiac") ||
-    lower.includes("holter") ||
-    lower.includes("echo") ||
-    aNorm.includes("قسطره")
-  ) {
-    return { active: true, department: "Cardiology" };
   }
 
   // Internal Medicine (Pulmonology, Hematology, Endocrinology, Rheumatology, Hepatology, Geriatrics, Gastroenterology)
