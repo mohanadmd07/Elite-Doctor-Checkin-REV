@@ -222,18 +222,23 @@ export async function updatePrayerSelectedGroups(selectedGroups: string[]): Prom
   if (supabase) {
     try {
       const isPaused = await isPrayerPaused();
-      await supabase.from("prayer_notifications").upsert(
+      const { error: upsertErr } = await supabase.from("prayer_notifications").upsert(
         {
           prayer_date: "1970-01-01",
           prayer: "__SETTINGS__",
           status: isPaused ? "paused" : "active",
           group_results: { selectedGroups },
-          updated_at: new Date().toISOString(),
+          sent_at: new Date().toISOString(),
         },
         { onConflict: "prayer_date,prayer" }
       );
+      if (upsertErr) {
+        console.error("[prayer] Failed to persist selected groups in Supabase:", upsertErr.message);
+        throw new Error(upsertErr.message);
+      }
     } catch (err: any) {
       console.warn("[prayer] Failed to persist selected groups in Supabase:", err.message);
+      throw err;
     }
   }
   return selectedPrayerGroupsMemory;
@@ -277,19 +282,23 @@ export async function setPrayerPaused(paused: boolean): Promise<boolean> {
   if (supabase) {
     try {
       const currentSelected = await getSelectedPrayerGroups();
-      await supabase.from("prayer_notifications").upsert(
+      const { error: upsertErr } = await supabase.from("prayer_notifications").upsert(
         {
           prayer_date: "1970-01-01",
           prayer: "__SETTINGS__",
           status,
           group_results: currentSelected !== null ? { selectedGroups: currentSelected } : null,
           sent_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
         },
         { onConflict: "prayer_date,prayer" }
       );
+      if (upsertErr) {
+        console.error("[prayer] Failed to persist paused state in Supabase:", upsertErr.message);
+        throw new Error(upsertErr.message);
+      }
     } catch (err: any) {
       console.warn("[prayer] Failed to persist paused state in Supabase:", err.message);
+      throw err;
     }
   }
   return isPrayerPausedMemory;

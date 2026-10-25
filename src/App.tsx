@@ -810,7 +810,28 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     try {
       const res = await fetch("/api/prayer/status", { cache: "no-store" });
       const json = await res.json();
-      setPrayerStatus(json);
+      setPrayerStatus((prev) => {
+        if (!prev) {
+          try {
+            const cached = localStorage.getItem("elite_prayer_selected_groups");
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && json.available_groups && parsed.length !== json.available_groups.length) {
+                return { ...json, selected_groups: parsed };
+              }
+            }
+          } catch (_) {}
+          return json;
+        }
+        // If the user is currently toggling group selection, preserve optimistic selection
+        if (isUpdatingPrayerGroups) {
+          return {
+            ...json,
+            selected_groups: prev.selected_groups,
+          };
+        }
+        return json;
+      });
     } catch (err) {
       console.error("Failed to fetch prayer status:", err);
     } finally {
@@ -903,23 +924,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   const handleTogglePrayerGroup = async (groupId: string) => {
-    let newSelected: string[] = [];
-    let isCurrentlySelected = false;
+    if (!prayerStatus) return;
+    const current = prayerStatus.selected_groups || [];
+    const isCurrentlySelected = current.includes(groupId);
+    const newSelected = isCurrentlySelected
+      ? current.filter((id) => id !== groupId)
+      : [...current, groupId];
 
-    setPrayerStatus((prev) => {
-      if (!prev) return prev;
-      const current = prev.selected_groups || [];
-      isCurrentlySelected = current.includes(groupId);
-      newSelected = isCurrentlySelected
-        ? current.filter((id) => id !== groupId)
-        : [...current, groupId];
-      return {
-        ...prev,
-        selected_groups: newSelected,
-      };
-    });
-
+    // Optimistically update UI immediately
+    setPrayerStatus((prev) => (prev ? { ...prev, selected_groups: newSelected } : prev));
     setIsUpdatingPrayerGroups(true);
+
+    try {
+      localStorage.setItem("elite_prayer_selected_groups", JSON.stringify(newSelected));
+    } catch (_) {}
 
     try {
       const res = await fetch("/api/prayer/groups", {
@@ -928,12 +946,13 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         body: JSON.stringify({ selectedGroups: newSelected }),
       });
       const json = await res.json();
-      if (json.success) {
+      if (json.success && Array.isArray(json.selectedGroups)) {
+        setPrayerStatus((prev) => (prev ? { ...prev, selected_groups: json.selectedGroups } : prev));
         setPrayerActionFeedback({
           type: "success",
           message: isCurrentlySelected
-            ? `Excluded ${groupId} from prayer broadcasts.`
-            : `Included ${groupId} in prayer broadcasts.`,
+            ? `Excluded group from prayer broadcasts.`
+            : `Included group in prayer broadcasts.`,
         });
       } else {
         setPrayerActionFeedback({
@@ -954,19 +973,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   const handleSelectAllPrayerGroups = async (selectAll: boolean) => {
-    let newSelected: string[] = [];
+    if (!prayerStatus) return;
+    const allGroupIds = (prayerStatus.available_groups || []).map((g) => g.id);
+    const newSelected = selectAll ? allGroupIds : [];
 
-    setPrayerStatus((prev) => {
-      if (!prev) return prev;
-      const allGroupIds = (prev.available_groups || []).map((g) => g.id);
-      newSelected = selectAll ? allGroupIds : [];
-      return {
-        ...prev,
-        selected_groups: newSelected,
-      };
-    });
-
+    setPrayerStatus((prev) => (prev ? { ...prev, selected_groups: newSelected } : prev));
     setIsUpdatingPrayerGroups(true);
+
+    try {
+      localStorage.setItem("elite_prayer_selected_groups", JSON.stringify(newSelected));
+    } catch (_) {}
 
     try {
       const res = await fetch("/api/prayer/groups", {
@@ -975,13 +991,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         body: JSON.stringify({ selectedGroups: newSelected }),
       });
       const json = await res.json();
-      if (json.success) {
+      if (json.success && Array.isArray(json.selectedGroups)) {
+        setPrayerStatus((prev) => (prev ? { ...prev, selected_groups: json.selectedGroups } : prev));
         setPrayerActionFeedback({
           type: "success",
           message: selectAll
             ? "All WhatsApp groups marked for prayer notifications."
             : "All WhatsApp groups unmarked (excluded from prayer notifications).",
         });
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || "Failed to update groups",
+        });
+        await fetchPrayerStatus();
       }
     } catch (err: any) {
       setPrayerActionFeedback({
