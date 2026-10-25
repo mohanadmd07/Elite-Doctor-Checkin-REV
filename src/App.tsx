@@ -360,6 +360,8 @@ export default function App() {
     cairo_now: string;
     cairo_time: string;
     configured_groups_count: number;
+    available_groups?: Array<{ id: string; name: string; sourceEnv: string }>;
+    selected_groups?: string[];
     today: {
       date: string;
       times: Array<{ id?: string; prayer: string; prayer_time: string }>;
@@ -372,6 +374,8 @@ export default function App() {
   const [isTogglingPrayerPause, setIsTogglingPrayerPause] = useState(false);
   const [isTriggeringPrayerFetch, setIsTriggeringPrayerFetch] = useState(false);
   const [isSendingPrayerTest, setIsSendingPrayerTest] = useState(false);
+  const [isUpdatingPrayerGroups, setIsUpdatingPrayerGroups] = useState(false);
+  const [testingGroupId, setTestingGroupId] = useState<string | null>(null);
   const [copiedPrayerSql, setCopiedPrayerSql] = useState(false);
   const [prayerActionFeedback, setPrayerActionFeedback] = useState<{
     type: "success" | "error" | "info";
@@ -895,6 +899,121 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       });
     } finally {
       setIsSendingPrayerTest(false);
+    }
+  };
+
+  const handleTogglePrayerGroup = async (groupId: string) => {
+    if (!prayerStatus) return;
+    const currentSelected = prayerStatus.selected_groups || [];
+    const isCurrentlySelected = currentSelected.includes(groupId);
+    const newSelected = isCurrentlySelected
+      ? currentSelected.filter((id) => id !== groupId)
+      : [...currentSelected, groupId];
+
+    // Optimistic UI update
+    setPrayerStatus({
+      ...prayerStatus,
+      selected_groups: newSelected,
+    });
+    setIsUpdatingPrayerGroups(true);
+
+    try {
+      const res = await fetch("/api/prayer/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selectedGroups: newSelected }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: isCurrentlySelected
+            ? `Excluded ${groupId} from prayer broadcasts.`
+            : `Included ${groupId} in prayer broadcasts.`,
+        });
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || "Failed to update target groups",
+        });
+        await fetchPrayerStatus();
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err.message || "Failed to update target groups",
+      });
+      await fetchPrayerStatus();
+    } finally {
+      setIsUpdatingPrayerGroups(false);
+    }
+  };
+
+  const handleSelectAllPrayerGroups = async (selectAll: boolean) => {
+    if (!prayerStatus) return;
+    const allGroupIds = (prayerStatus.available_groups || []).map((g) => g.id);
+    const newSelected = selectAll ? allGroupIds : [];
+
+    setPrayerStatus({
+      ...prayerStatus,
+      selected_groups: newSelected,
+    });
+    setIsUpdatingPrayerGroups(true);
+
+    try {
+      const res = await fetch("/api/prayer/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selectedGroups: newSelected }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: selectAll
+            ? "All WhatsApp groups marked for prayer notifications."
+            : "All WhatsApp groups unmarked (excluded from prayer notifications).",
+        });
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err.message || "Failed to update groups",
+      });
+      await fetchPrayerStatus();
+    } finally {
+      setIsUpdatingPrayerGroups(false);
+    }
+  };
+
+  const handleTestSpecificPrayerGroup = async (groupId: string) => {
+    setTestingGroupId(groupId);
+    setPrayerActionFeedback(null);
+    try {
+      const res = await fetch("/api/prayer/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: groupId }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: `Test prayer notification sent to ${groupId}!`,
+        });
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || "Failed to send test message to group",
+        });
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err.message || "Error sending test notification",
+      });
+    } finally {
+      setTestingGroupId(null);
     }
   };
 
@@ -5453,16 +5572,147 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     {/* Card 4: WhatsApp Destination */}
                     <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm">
                       <div className="flex items-center justify-between text-slate-500 mb-2">
-                        <span className="text-xs font-bold uppercase tracking-wider">WhatsApp Destination</span>
+                        <span className="text-xs font-bold uppercase tracking-wider">WhatsApp Groups</span>
                         <Phone className="w-4 h-4 text-emerald-600" />
                       </div>
                       <div className="text-xl font-bold text-slate-900">
-                        {prayerStatus?.configured_groups_count || 1} Group(s)
+                        {(prayerStatus?.selected_groups ?? []).length} of {prayerStatus?.configured_groups_count || 3} Active
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-1 truncate" title="Resolved from WHATSAPP_GROUP_ID">
-                        Configured via WHATSAPP_GROUP_ID
+                      <div className="text-[11px] text-slate-500 mt-1 truncate" title="Customizable below">
+                        {(prayerStatus?.selected_groups ?? []).length === 0 ? "All groups excluded" : "Selected groups receiving azan"}
                       </div>
                     </div>
+                  </div>
+
+                  {/* WHATSAPP TARGET GROUPS MULTI-SELECTION CARD */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                            <span className="text-base">📲</span>
+                            <span>Target WhatsApp Groups Dispatch Selection</span>
+                          </h4>
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-100 text-[#063b30] border border-emerald-300 shadow-2xs">
+                            {(prayerStatus?.selected_groups || []).length} of {(prayerStatus?.available_groups || []).length || 3} Groups Active
+                          </span>
+                          {isUpdatingPrayerGroups && (
+                            <span className="text-[10px] text-emerald-700 flex items-center gap-1 font-semibold animate-pulse">
+                              <Loader2 className="w-3 h-3 animate-spin" /> Saving...
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Select which of the hospital groups receive the azan notifications. Unmarking a group excludes it from automated and test broadcasts.
+                        </p>
+                      </div>
+
+                      {/* Quick Select All / Deselect All */}
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAllPrayerGroups(true)}
+                          disabled={isUpdatingPrayerGroups}
+                          className="px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAllPrayerGroups(false)}
+                          disabled={isUpdatingPrayerGroups}
+                          className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                        >
+                          Deselect All
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Groups Grid with Multiple Selection */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {(prayerStatus?.available_groups && prayerStatus.available_groups.length > 0
+                        ? prayerStatus.available_groups
+                        : [
+                            { id: "Group 1", name: "Hospital WhatsApp Group #1", sourceEnv: "WHATSAPP_GROUP_ID" },
+                            { id: "Group 2", name: "Hospital WhatsApp Group #2", sourceEnv: "WHATSAPP_GROUP_ID" },
+                            { id: "Group 3", name: "Hospital WhatsApp Group #3", sourceEnv: "WHATSAPP_GROUP_ID" },
+                          ]
+                      ).map((group, idx) => {
+                        const isSelected = (prayerStatus?.selected_groups ?? []).includes(group.id);
+
+                        return (
+                          <div
+                            key={group.id}
+                            onClick={() => handleTogglePrayerGroup(group.id)}
+                            className={`p-4 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                              isSelected
+                                ? "bg-[#f0f9f5] border-[#063b30]/50 shadow-xs"
+                                : "bg-slate-50/80 border-slate-200 opacity-60 hover:opacity-100 hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <label className="flex items-center gap-2.5 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}} // toggled by parent div
+                                  className="w-4 h-4 rounded text-[#063b30] focus:ring-[#063b30] border-slate-300 accent-[#063b30] cursor-pointer"
+                                />
+                                <span className="font-bold text-slate-900 text-xs">
+                                  {group.name || `WhatsApp Group #${idx + 1}`}
+                                </span>
+                              </label>
+
+                              {isSelected ? (
+                                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300 shrink-0">
+                                  INCLUDED ✅
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full border border-slate-300 shrink-0">
+                                  EXCLUDED ⛔
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="text-[11px] font-mono text-slate-700 truncate bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-2xs">
+                              {group.id}
+                            </div>
+
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {group.sourceEnv}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTestSpecificPrayerGroup(group.id);
+                                }}
+                                disabled={testingGroupId === group.id}
+                                className="text-[10px] font-bold text-emerald-800 hover:text-emerald-950 flex items-center gap-1 hover:underline cursor-pointer"
+                                title={`Send test notification specifically to ${group.id}`}
+                              >
+                                {testingGroupId === group.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin text-[#063b30]" />
+                                ) : (
+                                  <Send className="w-3 h-3 text-emerald-600" />
+                                )}
+                                <span>Test Group</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {(prayerStatus?.selected_groups ?? []).length === 0 && (
+                      <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>
+                          <strong>All groups are currently excluded:</strong> No WhatsApp messages will be sent at prayer times until you mark at least one group above.
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* TODAY'S PRAYER SCHEDULE & NOTIFICATION STATUS */}

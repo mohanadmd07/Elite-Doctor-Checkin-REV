@@ -125,25 +125,119 @@ export function formatPrayerMessage(prayer: string, scheduledTime: string, isTes
   return `${prefix}🕌 حان الآن موعد أذان ${prayerAr} بتوقيت الإسكندرية\n🕐 ${time12h}`;
 }
 
+export interface PrayerGroupConfig {
+  id: string;
+  name: string;
+  sourceEnv: string;
+}
+
 /**
- * Resolves target WhatsApp group IDs from WHATSAPP_GROUP_ID (handles single or comma-separated IDs).
+ * Resolves all unique configured WhatsApp groups across environment variables.
+ */
+export function getAllConfiguredPrayerGroups(): PrayerGroupConfig[] {
+  const map = new Map<string, PrayerGroupConfig>();
+
+  const processEnvVar = (val: string | undefined, defaultName: string, envName: string) => {
+    if (!val) return;
+    const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
+    parts.forEach((raw, idx) => {
+      const cleanNum = raw.replace(/@.*$/, "").trim();
+      if (!cleanNum) return;
+      const fullId = `${cleanNum}@g.us`;
+      if (!map.has(fullId)) {
+        const name = parts.length > 1 ? `${defaultName} #${idx + 1}` : defaultName;
+        map.set(fullId, { id: fullId, name, sourceEnv: envName });
+      }
+    });
+  };
+
+  processEnvVar(process.env.WHATSAPP_GROUP_ID, "Hospital Main Group", "WHATSAPP_GROUP_ID");
+  processEnvVar(process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID, "Doctors Target Group", "WHATSAPP_DOCTORS_TARGET_GROUP_ID");
+  processEnvVar(process.env.WHATSAPP_CALLS_SOURCE_GROUP_ID, "Nurse Calls Group", "WHATSAPP_CALLS_SOURCE_GROUP_ID");
+
+  return Array.from(map.values());
+}
+
+/**
+ * Resolves target WhatsApp group IDs from configured groups.
  */
 export function resolvePrayerWhatsAppGroupIds(): string[] {
-  const raw = process.env.WHATSAPP_GROUP_ID?.trim() || "";
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((id) => {
-      const cleanNum = id.replace(/@.*$/, "").trim();
-      return `${cleanNum}@g.us`;
-    })
-    .filter((id, idx, arr) => arr.indexOf(id) === idx);
+  return getAllConfiguredPrayerGroups().map((g) => g.id);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let isPrayerPausedMemory = false;
+let selectedPrayerGroupsMemory: string[] | null = null;
+
+/**
+ * Gets the list of currently selected group IDs for prayer notifications.
+ * If no custom setting is saved yet, returns null (meaning default: all groups).
+ */
+export async function getSelectedPrayerGroups(): Promise<string[] | null> {
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from("prayer_notifications")
+        .select("status, group_results")
+        .eq("prayer_date", "1970-01-01")
+        .eq("prayer", "__SETTINGS__")
+        .maybeSingle();
+
+      if (data) {
+        if (typeof data.status === "string") {
+          isPrayerPausedMemory = data.status === "paused";
+        }
+        if (data.group_results && Array.isArray((data.group_results as any).selectedGroups)) {
+          selectedPrayerGroupsMemory = (data.group_results as any).selectedGroups;
+          return selectedPrayerGroupsMemory;
+        }
+      }
+    } catch (_) {}
+  }
+  return selectedPrayerGroupsMemory;
+}
+
+/**
+ * Resolves active groups for sending by intersecting configured groups with user selection.
+ */
+export async function getActivePrayerWhatsAppGroupIds(): Promise<string[]> {
+  const allConfigured = getAllConfiguredPrayerGroups().map((g) => g.id);
+  const selected = await getSelectedPrayerGroups();
+
+  if (selected === null) {
+    return allConfigured;
+  }
+
+  return allConfigured.filter((id) => selected.includes(id));
+}
+
+/**
+ * Updates the selected WhatsApp groups in Supabase and memory.
+ */
+export async function updatePrayerSelectedGroups(selectedGroups: string[]): Promise<string[]> {
+  selectedPrayerGroupsMemory = selectedGroups;
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const isPaused = await isPrayerPaused();
+      await supabase.from("prayer_notifications").upsert(
+        {
+          prayer_date: "1970-01-01",
+          prayer: "__SETTINGS__",
+          status: isPaused ? "paused" : "active",
+          group_results: { selectedGroups },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "prayer_date,prayer" }
+      );
+    } catch (err: any) {
+      console.warn("[prayer] Failed to persist selected groups in Supabase:", err.message);
+    }
+  }
+  return selectedPrayerGroupsMemory;
+}
 
 /**
  * Checks whether prayer automation (fetching & sending) is paused by admin.
@@ -155,14 +249,18 @@ export async function isPrayerPaused(): Promise<boolean> {
     try {
       const { data } = await supabase
         .from("prayer_notifications")
-        .select("status")
+        .select("status, group_results")
         .eq("prayer_date", "1970-01-01")
         .eq("prayer", "__SETTINGS__")
         .maybeSingle();
 
-      if (data && typeof data.status === "string") {
-        isPrayerPausedMemory = data.status === "paused";
-        return isPrayerPausedMemory;
+      if (data) {
+        if (typeof data.status === "string") {
+          isPrayerPausedMemory = data.status === "paused";
+        }
+        if (data.group_results && Array.isArray((data.group_results as any).selectedGroups)) {
+          selectedPrayerGroupsMemory = (data.group_results as any).selectedGroups;
+        }
       }
     } catch (_) {}
   }
@@ -170,7 +268,7 @@ export async function isPrayerPaused(): Promise<boolean> {
 }
 
 /**
- * Persists the pause/resume state in Supabase and memory.
+ * Persists the pause/resume state in Supabase and memory while preserving selected groups.
  */
 export async function setPrayerPaused(paused: boolean): Promise<boolean> {
   isPrayerPausedMemory = paused;
@@ -178,12 +276,15 @@ export async function setPrayerPaused(paused: boolean): Promise<boolean> {
   const supabase = getSupabase();
   if (supabase) {
     try {
+      const currentSelected = await getSelectedPrayerGroups();
       await supabase.from("prayer_notifications").upsert(
         {
           prayer_date: "1970-01-01",
           prayer: "__SETTINGS__",
           status,
+          group_results: currentSelected !== null ? { selectedGroups: currentSelected } : null,
           sent_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
         { onConflict: "prayer_date,prayer" }
       );
@@ -492,21 +593,21 @@ export async function executePrayerDispatch(): Promise<{
 
   console.log(`[prayer] Successfully claimed "${prayerName}" on ${today}. Beginning WhatsApp dispatch...`);
 
-  // 4. Resolve target WhatsApp groups
-  const targetGroupIds = resolvePrayerWhatsAppGroupIds();
+  // 4. Resolve destination WhatsApp groups from active admin selection
+  const targetGroupIds = await getActivePrayerWhatsAppGroupIds();
   if (targetGroupIds.length === 0) {
-    const errMsg = "No valid WhatsApp group IDs resolved from WHATSAPP_GROUP_ID.";
-    console.error(`[prayer] ${errMsg}`);
+    const msg = "All WhatsApp groups are currently unmarked/excluded in prayer settings. Dispatch skipped.";
+    console.log(`[prayer] ${msg}`);
     await supabase
       .from("prayer_notifications")
       .update({
-        status: "failed",
+        status: "skipped",
         sent_at: new Date().toISOString(),
-        error: errMsg,
+        error: msg,
       })
       .eq("prayer_date", today)
       .eq("prayer", prayerName);
-    return { success: false, prayer: prayerName, reason: errMsg };
+    return { success: true, skipped: true, prayer: prayerName, reason: msg };
   }
 
   // 5. Construct message
@@ -563,7 +664,7 @@ export async function executePrayerDispatch(): Promise<{
 }
 
 /**
- * Returns read-only status for today and upcoming stored prayer times.
+ * Returns read-only status for today and upcoming stored prayer times along with group selection.
  */
 export async function getPrayerStatus(): Promise<{
   enabled: boolean;
@@ -571,6 +672,8 @@ export async function getPrayerStatus(): Promise<{
   cairo_now: string;
   cairo_time: string;
   configured_groups_count: number;
+  available_groups: PrayerGroupConfig[];
+  selected_groups: string[];
   today: { date: string; times: any[]; notifications: any[] };
   upcoming_days_cached: number;
   upcoming_dates: string[];
@@ -583,7 +686,8 @@ export async function getPrayerStatus(): Promise<{
     cairoParts.second
   ).padStart(2, "0")}`;
 
-  const groups = resolvePrayerWhatsAppGroupIds();
+  const availableGroups = getAllConfiguredPrayerGroups();
+  const activeSelected = await getActivePrayerWhatsAppGroupIds();
   const supabase = getSupabase();
 
   if (!supabase) {
@@ -592,7 +696,9 @@ export async function getPrayerStatus(): Promise<{
       isPaused,
       cairo_now: `${today} ${cairoTime}`,
       cairo_time: cairoTime,
-      configured_groups_count: groups.length,
+      configured_groups_count: availableGroups.length,
+      available_groups: availableGroups,
+      selected_groups: activeSelected,
       today: { date: today, times: [], notifications: [] },
       upcoming_days_cached: 0,
       upcoming_dates: [],
@@ -614,7 +720,9 @@ export async function getPrayerStatus(): Promise<{
     isPaused,
     cairo_now: `${today} ${cairoTime}`,
     cairo_time: cairoTime,
-    configured_groups_count: groups.length,
+    configured_groups_count: availableGroups.length,
+    available_groups: availableGroups,
+    selected_groups: activeSelected,
     today: {
       date: today,
       times: allUpcomingTimes.filter((t) => t.prayer_date === today),
@@ -648,8 +756,9 @@ export async function sendTestPrayerMessage(options: {
     };
   }
 
-  const targetGroups = resolvePrayerWhatsAppGroupIds();
-  const targetChatId = (options.chatId || targetGroups[0] || "").trim();
+  const availableGroups = getAllConfiguredPrayerGroups();
+  const activeSelected = await getActivePrayerWhatsAppGroupIds();
+  const targetChatId = (options.chatId || activeSelected[0] || availableGroups[0]?.id || "").trim();
 
   if (!targetChatId) {
     throw new Error("No target WhatsApp group available to send test message.");

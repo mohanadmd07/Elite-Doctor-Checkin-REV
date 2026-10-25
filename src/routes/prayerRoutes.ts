@@ -6,6 +6,7 @@ import {
   sendTestPrayerMessage,
   isPrayerPaused,
   setPrayerPaused,
+  updatePrayerSelectedGroups,
 } from "../services/prayerService.js";
 
 export const prayerRouter = express.Router();
@@ -115,6 +116,35 @@ prayerRouter.post("/toggle-pause", async (req, res) => {
     });
   } catch (err: any) {
     console.error("[prayer] Toggle pause error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+/**
+ * POST /api/prayer/groups
+ * Updates the list of selected WhatsApp groups to dispatch prayer notifications to.
+ */
+prayerRouter.post("/groups", async (req, res) => {
+  try {
+    const selectedGroups = req.body?.selectedGroups;
+    if (!Array.isArray(selectedGroups)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request payload: 'selectedGroups' must be an array of group chat IDs.",
+      });
+    }
+
+    const updated = await updatePrayerSelectedGroups(selectedGroups);
+    res.status(200).json({
+      success: true,
+      selectedGroups: updated,
+      message: `Updated target groups. ${updated.length} group(s) selected for prayer notifications.`,
+    });
+  } catch (err: any) {
+    console.error("[prayer] Update groups error:", err);
     res.status(500).json({
       success: false,
       error: err.message || String(err),
