@@ -4,6 +4,8 @@ import {
   executePrayerDispatch,
   getPrayerStatus,
   sendTestPrayerMessage,
+  isPrayerPaused,
+  setPrayerPaused,
 } from "../services/prayerService.js";
 
 export const prayerRouter = express.Router();
@@ -36,16 +38,14 @@ export function prayerKillSwitchMiddleware(req: express.Request, res: express.Re
   next();
 }
 
-// All /api/prayer/* routes require auth first
-prayerRouter.use(prayerAuthMiddleware);
-
 /**
  * GET /api/prayer/fetch
  * Weekly fetch of Alexandria, Egypt prayer times (pre-fetches 8 days in advance).
  * Scheduled: Each Friday at 06:00 AM Africa/Cairo.
  * Guard: only runs on Friday at 06:00 AM unless ?force=1 is passed.
+ * Protected by CRON_SECRET.
  */
-prayerRouter.get("/fetch", prayerKillSwitchMiddleware, async (req, res) => {
+prayerRouter.get("/fetch", prayerAuthMiddleware, prayerKillSwitchMiddleware, async (req, res) => {
   try {
     const force = req.query.force === "1" || req.query.force === "true";
     const result = await executePrayerFetch({ force });
@@ -64,8 +64,9 @@ prayerRouter.get("/fetch", prayerKillSwitchMiddleware, async (req, res) => {
  * Per-minute dispatcher called by external scheduler (e.g. cron-job.org).
  * Checks if current Cairo minute matches any stored prayer (tolerance: 0 to +2 min).
  * Atomically claims row and dispatches to WhatsApp groups.
+ * Protected by CRON_SECRET.
  */
-prayerRouter.get("/dispatch", prayerKillSwitchMiddleware, async (req, res) => {
+prayerRouter.get("/dispatch", prayerAuthMiddleware, prayerKillSwitchMiddleware, async (req, res) => {
   try {
     const result = await executePrayerDispatch();
     res.status(200).json(result);
@@ -80,7 +81,8 @@ prayerRouter.get("/dispatch", prayerKillSwitchMiddleware, async (req, res) => {
 
 /**
  * GET /api/prayer/status
- * Read-only status endpoint returning cached times and send logs for today and tomorrow.
+ * Read-only status endpoint returning cached times and send logs for today and upcoming week.
+ * Accessible to Admin Dashboard and authorized monitoring scripts.
  */
 prayerRouter.get("/status", async (req, res) => {
   try {
@@ -88,6 +90,49 @@ prayerRouter.get("/status", async (req, res) => {
     res.status(200).json(status);
   } catch (err: any) {
     console.error("[prayer] Status endpoint error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+/**
+ * POST /api/prayer/toggle-pause
+ * Toggle automation state (pause / resume).
+ * When paused, scheduled weekly fetching and azan WhatsApp sending are suspended.
+ */
+prayerRouter.post("/toggle-pause", async (req, res) => {
+  try {
+    const current = await isPrayerPaused();
+    const updated = await setPrayerPaused(!current);
+    res.status(200).json({
+      success: true,
+      isPaused: updated,
+      message: updated
+        ? "Prayer automation has been PAUSED. Scheduled fetching and azan messages are halted."
+        : "Prayer automation has been RESUMED and is ACTIVE.",
+    });
+  } catch (err: any) {
+    console.error("[prayer] Toggle pause error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+    });
+  }
+});
+
+/**
+ * POST /api/prayer/fetch-now
+ * Trigger an immediate weekly fetch from the Admin Panel without needing CRON_SECRET.
+ * Pre-fetches the upcoming week in advance.
+ */
+prayerRouter.post("/fetch-now", prayerKillSwitchMiddleware, async (req, res) => {
+  try {
+    const result = await executePrayerFetch({ force: true });
+    res.status(200).json(result);
+  } catch (err: any) {
+    console.error("[prayer] Fetch-now endpoint error:", err);
     res.status(500).json({
       success: false,
       error: err.message || String(err),

@@ -322,8 +322,8 @@ export default function App() {
     syncMasterProfile: true,
   });
 
-  // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase" | "calls")
-  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "calls">("roster");
+  // Admin Navigation Sub-Tab ("roster" | "database" | "duplicates" | "supabase" | "calls" | "prayer")
+  const [adminTab, setAdminTab] = useState<"roster" | "database" | "duplicates" | "calls" | "prayer">("roster");
 
   // Inpatient Ward Doctor Calls states
   const [doctorCalls, setDoctorCalls] = useState<any[]>([]);
@@ -352,6 +352,67 @@ export default function App() {
     supabaseErrorMessage?: string;
   } | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
+
+  // Muslim Prayer Times WhatsApp Automation states
+  const [prayerStatus, setPrayerStatus] = useState<{
+    enabled: boolean;
+    isPaused: boolean;
+    cairo_now: string;
+    cairo_time: string;
+    configured_groups_count: number;
+    today: {
+      date: string;
+      times: Array<{ id?: string; prayer: string; prayer_time: string }>;
+      notifications: Array<{ id?: string; prayer: string; status: string; sent_at?: string; error?: string }>;
+    };
+    upcoming_days_cached: number;
+    upcoming_dates: string[];
+  } | null>(null);
+  const [loadingPrayerStatus, setLoadingPrayerStatus] = useState(false);
+  const [isTogglingPrayerPause, setIsTogglingPrayerPause] = useState(false);
+  const [isTriggeringPrayerFetch, setIsTriggeringPrayerFetch] = useState(false);
+  const [isSendingPrayerTest, setIsSendingPrayerTest] = useState(false);
+  const [copiedPrayerSql, setCopiedPrayerSql] = useState(false);
+  const [prayerActionFeedback, setPrayerActionFeedback] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+
+  const PRAYER_MIGRATION_SQL = `-- Alexandria Egypt Prayer Times Schema
+CREATE TABLE IF NOT EXISTS public.prayer_times (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  prayer_date DATE NOT NULL,
+  prayer TEXT NOT NULL,
+  prayer_time TIME NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  UNIQUE (prayer_date, prayer)
+);
+
+CREATE TABLE IF NOT EXISTS public.prayer_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  prayer_date DATE NOT NULL,
+  prayer TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  sent_at TIMESTAMPTZ,
+  group_results JSONB,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  UNIQUE (prayer_date, prayer)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prayer_times_lookup ON public.prayer_times (prayer_date, prayer);
+CREATE INDEX IF NOT EXISTS idx_prayer_notifications_lookup ON public.prayer_notifications (prayer_date, prayer, status);
+
+ALTER TABLE public.prayer_times ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prayer_notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow public read-write for prayer_times" ON public.prayer_times
+  FOR ALL USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow public read-write for prayer_notifications" ON public.prayer_notifications
+  FOR ALL USING (true) WITH CHECK (true);`;
 
   const DOCTOR_CALLS_SQL = `-- Execute this script in your Supabase SQL Editor:
 CREATE TABLE IF NOT EXISTS public.doctor_calls (
@@ -715,6 +776,125 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       });
     } finally {
       setIsPollingQueue(false);
+    }
+  };
+
+  // Muslim Prayer Times Automation Handlers & Helpers
+  const PRAYER_DISPLAY_MAP: Record<string, { ar: string; en: string; icon: string }> = {
+    Fajr: { ar: "الفجر", en: "Fajr (Dawn)", icon: "🌅" },
+    Dhuhr: { ar: "الظهر", en: "Dhuhr (Noon)", icon: "☀️" },
+    Asr: { ar: "العصر", en: "Asr (Afternoon)", icon: "🌤️" },
+    Maghrib: { ar: "المغرب", en: "Maghrib (Sunset)", icon: "🌇" },
+    Isha: { ar: "العشاء", en: "Isha (Night)", icon: "🌙" },
+  };
+
+  const formatPrayer12Hour = (time24?: string): string => {
+    if (!time24) return "--:--";
+    const clean = time24.trim().split(" ")[0];
+    const [hStr, mStr] = clean.split(":");
+    let hour = parseInt(hStr, 10);
+    if (isNaN(hour)) return time24;
+    const min = (mStr || "00").substring(0, 2);
+    const period = hour >= 12 ? "م" : "ص";
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+    return `${String(hour).padStart(2, "0")}:${min} ${period}`;
+  };
+
+  const fetchPrayerStatus = async () => {
+    setLoadingPrayerStatus(true);
+    try {
+      const res = await fetch("/api/prayer/status", { cache: "no-store" });
+      const json = await res.json();
+      setPrayerStatus(json);
+    } catch (err) {
+      console.error("Failed to fetch prayer status:", err);
+    } finally {
+      setLoadingPrayerStatus(false);
+    }
+  };
+
+  const handleTogglePrayerPause = async () => {
+    setIsTogglingPrayerPause(true);
+    setPrayerActionFeedback(null);
+    try {
+      const res = await fetch("/api/prayer/toggle-pause", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: json.message || (json.isPaused ? "Prayer automation PAUSED" : "Prayer automation RESUMED"),
+        });
+        await fetchPrayerStatus();
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || "Failed to toggle pause state",
+        });
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err?.message || "Failed to toggle pause state",
+      });
+    } finally {
+      setIsTogglingPrayerPause(false);
+    }
+  };
+
+  const handleTriggerPrayerFetch = async () => {
+    setIsTriggeringPrayerFetch(true);
+    setPrayerActionFeedback(null);
+    try {
+      const res = await fetch("/api/prayer/fetch-now", { method: "POST" });
+      const json = await res.json();
+      if (json.success || json.saved !== undefined) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: `Successfully fetched prayer times for Alexandria! (${json.saved ?? json.fetched ?? 0} records updated)`,
+        });
+        await fetchPrayerStatus();
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || "Failed to fetch prayer times",
+        });
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err?.message || "Failed to trigger prayer times fetch",
+      });
+    } finally {
+      setIsTriggeringPrayerFetch(false);
+    }
+  };
+
+  const handleSendPrayerTest = async () => {
+    setIsSendingPrayerTest(true);
+    setPrayerActionFeedback(null);
+    try {
+      const res = await fetch("/api/prayer/test", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        setPrayerActionFeedback({
+          type: "success",
+          message: `Test prayer notification delivered successfully to WhatsApp (${json.chatId || "Group"})!`,
+        });
+        await fetchPrayerStatus();
+      } else {
+        setPrayerActionFeedback({
+          type: "error",
+          message: json.error || json.message || "Failed to send test prayer message",
+        });
+      }
+    } catch (err: any) {
+      setPrayerActionFeedback({
+        type: "error",
+        message: err?.message || "Error sending test prayer notification",
+      });
+    } finally {
+      setIsSendingPrayerTest(false);
     }
   };
 
@@ -1519,6 +1699,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
     return () => clearInterval(intervalId);
   }, [isAdminAuthenticated, adminTab, callsDateFilter, callsDeptFilter, callsStatusFilter, callsSearch]);
+
+  // Live-sync Prayer Status when on "prayer" tab (polls every 10 seconds)
+  useEffect(() => {
+    if (!isAdminAuthenticated || adminTab !== "prayer") return;
+
+    fetchPrayerStatus();
+    const intervalId = setInterval(() => {
+      fetchPrayerStatus();
+    }, 10000);
+
+    return () => clearInterval(intervalId);
+  }, [isAdminAuthenticated, adminTab]);
 
   // Auto-lookup doctor as they type and fetch autocomplete suggestions
   useEffect(() => {
@@ -3372,6 +3564,30 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       </span>
                     )}
                   </button>
+
+                  <button
+                    onClick={() => {
+                      setAdminTab("prayer");
+                      fetchPrayerStatus();
+                    }}
+                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
+                      adminTab === "prayer"
+                        ? "bg-[#063b30] text-emerald-300 shadow-sm border border-emerald-600"
+                        : "text-slate-600 hover:text-[#063b30] hover:bg-slate-50"
+                    }`}
+                  >
+                    <Moon className="w-4 h-4 text-emerald-400" />
+                    <span>Prayer Times</span>
+                    {prayerStatus?.isPaused ? (
+                      <span className="ml-1 bg-amber-500 text-slate-950 text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                        PAUSED
+                      </span>
+                    ) : (
+                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                        LIVE
+                      </span>
+                    )}
+                  </button>
                 </div>
 
                 {adminTab === "database" && (
@@ -5036,6 +5252,370 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           )}
                         </tbody>
                       </table>
+                    </div>
+                  </div>
+                </div>
+              ) : adminTab === "prayer" ? (
+                /* ======================================================= */
+                /*             PRAYER TIMES WHATSAPP AUTOMATION TAB         */
+                /* ======================================================= */
+                <div className="space-y-6">
+                  {/* Top Header Banner */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm">
+                    <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 bg-[#e6f2ee] text-[#063b30] rounded-xl border border-emerald-200">
+                          <Moon className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-lg font-bold text-slate-900">Alexandria Prayer Times WhatsApp Automation</h3>
+                            {prayerStatus?.isPaused ? (
+                              <span className="bg-amber-100 text-amber-900 text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-amber-300 flex items-center gap-1.5 shadow-2xs">
+                                <Pause className="w-2.5 h-2.5 text-amber-600 fill-current" />
+                                Automation Paused
+                              </span>
+                            ) : (
+                              <span className="bg-emerald-100 text-[#063b30] text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5 shadow-2xs">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Automation Active
+                              </span>
+                            )}
+                            {prayerStatus?.enabled ? (
+                              <span className="bg-emerald-50 text-emerald-800 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-emerald-300">
+                                Feature Flag: ON
+                              </span>
+                            ) : (
+                              <span className="bg-slate-100 text-slate-600 text-[10px] font-mono px-2 py-0.5 rounded border border-slate-300">
+                                Feature Flag: OFF
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Pre-fetches Alexandria weekly prayer schedule each Friday at 06:00 AM (Africa/Cairo) and broadcasts azan alerts in 12-hour format.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Top Action Controls */}
+                      <div className="flex items-center gap-2 flex-wrap w-full lg:w-auto">
+                        {/* PAUSE / RESUME BUTTON */}
+                        <button
+                          onClick={handleTogglePrayerPause}
+                          disabled={isTogglingPrayerPause}
+                          title={prayerStatus?.isPaused ? "Resume automated prayer notifications" : "Pause all automated prayer notifications"}
+                          className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer ${
+                            prayerStatus?.isPaused
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-700/20"
+                              : "bg-amber-600 hover:bg-amber-700 text-white shadow-amber-700/20"
+                          }`}
+                        >
+                          {isTogglingPrayerPause ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : prayerStatus?.isPaused ? (
+                            <Play className="w-4 h-4 fill-current" />
+                          ) : (
+                            <Pause className="w-4 h-4 fill-current" />
+                          )}
+                          <span>{prayerStatus?.isPaused ? "Resume Automation" : "Pause Automation"}</span>
+                        </button>
+
+                        {/* FETCH TIMES NOW BUTTON */}
+                        <button
+                          onClick={handleTriggerPrayerFetch}
+                          disabled={isTriggeringPrayerFetch}
+                          title="Pre-fetch Alexandria Egypt prayer times for the upcoming week from Aladhan API"
+                          className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all border border-slate-300 flex items-center gap-2 cursor-pointer"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isTriggeringPrayerFetch ? "animate-spin text-emerald-600" : "text-slate-600"}`} />
+                          <span>{isTriggeringPrayerFetch ? "Fetching..." : "Fetch Upcoming Week"}</span>
+                        </button>
+
+                        {/* SEND TEST MESSAGE BUTTON */}
+                        <button
+                          onClick={handleSendPrayerTest}
+                          disabled={isSendingPrayerTest}
+                          title="Send a sample [TEST] notification formatted in 12-hour Arabic to WhatsApp group"
+                          className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-[#063b30] rounded-xl text-xs font-bold transition-all border border-emerald-300 flex items-center gap-2 cursor-pointer"
+                        >
+                          {isSendingPrayerTest ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-[#063b30]" />
+                          ) : (
+                            <Send className="w-4 h-4 text-emerald-600" />
+                          )}
+                          <span>{isSendingPrayerTest ? "Sending..." : "Send Test to WhatsApp"}</span>
+                        </button>
+
+                        {/* REFRESH STATUS */}
+                        <button
+                          onClick={fetchPrayerStatus}
+                          disabled={loadingPrayerStatus}
+                          className="p-2.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl transition-all border border-slate-200 cursor-pointer"
+                          title="Refresh status"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${loadingPrayerStatus ? "animate-spin text-[#063b30]" : ""}`} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PAUSED WARNING BANNER */}
+                  {prayerStatus?.isPaused && (
+                    <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 flex items-start gap-3 shadow-xs">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="text-sm font-bold text-amber-900">Prayer Time Automation is Paused</h4>
+                        <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                          All automated prayer-time fetching and per-minute azan WhatsApp notifications are currently suspended.
+                          Incoming check-ins and doctor calls are unaffected. Click <strong>Resume Automation</strong> when ready to restart notifications.
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleTogglePrayerPause}
+                        disabled={isTogglingPrayerPause}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer"
+                      >
+                        Resume Now
+                      </button>
+                    </div>
+                  )}
+
+                  {/* FEEDBACK ALERT */}
+                  {prayerActionFeedback && (
+                    <div
+                      className={`p-4 rounded-xl border flex items-center justify-between text-xs font-semibold ${
+                        prayerActionFeedback.type === "success"
+                          ? "bg-emerald-50 text-emerald-900 border-emerald-300"
+                          : "bg-rose-50 text-rose-900 border-rose-300"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {prayerActionFeedback.type === "success" ? (
+                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        )}
+                        <span>{prayerActionFeedback.message}</span>
+                      </div>
+                      <button
+                        onClick={() => setPrayerActionFeedback(null)}
+                        className="text-slate-400 hover:text-slate-700 p-1"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* DIAGNOSTIC / METRIC STAT CARDS */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Card 1: Cairo Time */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm">
+                      <div className="flex items-center justify-between text-slate-500 mb-2">
+                        <span className="text-xs font-bold uppercase tracking-wider">Cairo Time (DST-Safe)</span>
+                        <Clock className="w-4 h-4 text-emerald-600" />
+                      </div>
+                      <div className="text-2xl font-bold font-mono text-slate-900">
+                        {prayerStatus?.cairo_time || "--:--:--"}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        Africa/Cairo • {prayerStatus?.today?.date || "Today"}
+                      </div>
+                    </div>
+
+                    {/* Card 2: Location & Calculation Method */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm">
+                      <div className="flex items-center justify-between text-slate-500 mb-2">
+                        <span className="text-xs font-bold uppercase tracking-wider">Target City</span>
+                        <Moon className="w-4 h-4 text-emerald-600" />
+                      </div>
+                      <div className="text-xl font-bold text-slate-900">
+                        Alexandria, Egypt
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        Method 5 (Egyptian General Survey)
+                      </div>
+                    </div>
+
+                    {/* Card 3: Pre-fetched Days Cached */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm">
+                      <div className="flex items-center justify-between text-slate-500 mb-2">
+                        <span className="text-xs font-bold uppercase tracking-wider">Advance Schedule</span>
+                        <CalendarDays className="w-4 h-4 text-emerald-600" />
+                      </div>
+                      <div className="text-2xl font-bold font-mono text-slate-900">
+                        {prayerStatus?.upcoming_days_cached ?? 0} <span className="text-sm font-normal text-slate-500">Days Cached</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        Weekly fetch Fridays @ 06:00 AM
+                      </div>
+                    </div>
+
+                    {/* Card 4: WhatsApp Destination */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-4 shadow-sm">
+                      <div className="flex items-center justify-between text-slate-500 mb-2">
+                        <span className="text-xs font-bold uppercase tracking-wider">WhatsApp Destination</span>
+                        <Phone className="w-4 h-4 text-emerald-600" />
+                      </div>
+                      <div className="text-xl font-bold text-slate-900">
+                        {prayerStatus?.configured_groups_count || 1} Group(s)
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1 truncate" title="Resolved from WHATSAPP_GROUP_ID">
+                        Configured via WHATSAPP_GROUP_ID
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TODAY'S PRAYER SCHEDULE & NOTIFICATION STATUS */}
+                  <div className="bg-white rounded-xl border border-[#cbdad5] overflow-hidden shadow-sm">
+                    <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#f8faf9]">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-base">
+                          Today's Alexandria Prayer Schedule
+                        </h4>
+                        <p className="text-xs text-slate-500">
+                          Times in 12-hour format with Arabic period markers (ص / م) and delivery status
+                        </p>
+                      </div>
+                      <span className="text-xs font-mono font-bold px-3 py-1 bg-white rounded-lg border border-slate-200 text-slate-700 shadow-2xs">
+                        📅 {prayerStatus?.today?.date || "Today"}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50/75 border-b border-slate-200 text-slate-600 uppercase font-semibold">
+                          <tr>
+                            <th className="py-3 px-4">Prayer (الصلاة)</th>
+                            <th className="py-3 px-4">Identifier</th>
+                            <th className="py-3 px-4">Scheduled Time (12-Hour)</th>
+                            <th className="py-3 px-4">24-Hour</th>
+                            <th className="py-3 px-4">WhatsApp Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"].map((prayerKey) => {
+                            const info = PRAYER_DISPLAY_MAP[prayerKey] || { ar: prayerKey, en: prayerKey, icon: "🕌" };
+                            const timeRecord = prayerStatus?.today?.times?.find((t) => t.prayer === prayerKey);
+                            const notifRecord = prayerStatus?.today?.notifications?.find((n) => n.prayer === prayerKey);
+
+                            const time24 = timeRecord?.prayer_time ? String(timeRecord.prayer_time).substring(0, 5) : "--:--";
+                            const time12 = timeRecord?.prayer_time ? formatPrayer12Hour(timeRecord.prayer_time) : "--:--";
+
+                            return (
+                              <tr key={prayerKey} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="py-3.5 px-4 font-bold text-slate-900 text-sm flex items-center gap-2">
+                                  <span className="text-base">{info.icon}</span>
+                                  <span>{info.ar}</span>
+                                </td>
+                                <td className="py-3.5 px-4 font-mono text-slate-600 font-semibold">
+                                  {info.en}
+                                </td>
+                                <td className="py-3.5 px-4 font-bold text-emerald-800 text-sm font-mono">
+                                  {time12}
+                                </td>
+                                <td className="py-3.5 px-4 font-mono text-slate-500">
+                                  {time24}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  {prayerStatus?.isPaused ? (
+                                    <span className="bg-amber-100 text-amber-900 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-amber-300">
+                                      <Pause className="w-3 h-3 text-amber-600" />
+                                      Paused
+                                    </span>
+                                  ) : notifRecord?.status === "sent" ? (
+                                    <span className="bg-emerald-100 text-[#063b30] font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-emerald-300">
+                                      <CheckCircle className="w-3 h-3 text-emerald-600" />
+                                      Sent {notifRecord.sent_at ? `(${new Date(notifRecord.sent_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo" })})` : ""}
+                                    </span>
+                                  ) : notifRecord?.status === "sending" ? (
+                                    <span className="bg-blue-100 text-blue-900 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-blue-300">
+                                      <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
+                                      Sending...
+                                    </span>
+                                  ) : (
+                                    <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-slate-200">
+                                      <Clock className="w-3 h-3 text-slate-500" />
+                                      Scheduled
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* BOTTOM ROW: MESSAGE PREVIEW & DATABASE INFO */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Live WhatsApp Message Template Preview */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                          <span>💬</span>
+                          <span>WhatsApp Notification Preview (12h Format)</span>
+                        </h4>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                          Exact Arabic Text
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        Sent to the hospital WhatsApp group at the scheduled minute with 0 to +2 minute tolerance:
+                      </p>
+                      <div className="bg-[#e7f7ee] border border-emerald-300 rounded-xl p-4 font-sans text-slate-900 text-sm leading-relaxed shadow-inner">
+                        <div className="text-right" dir="rtl">
+                          <p className="font-bold text-slate-900 text-base">🕌 حان الآن موعد أذان الظهر بتوقيت الإسكندرية</p>
+                          <p className="font-bold text-emerald-900 text-base mt-1 font-mono">🕐 12:44 م</p>
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-slate-500 space-y-1">
+                        <p>• <strong>Fajr:</strong> <code>🕌 حان الآن موعد أذان الفجر بتوقيت الإسكندرية</code></p>
+                        <p>• <strong>Dhuhr:</strong> <code>🕌 حان الآن موعد أذان الظهر بتوقيت الإسكندرية</code></p>
+                        <p>• <strong>Asr:</strong> <code>🕌 حان الآن موعد أذان العصر بتوقيت الإسكندرية</code></p>
+                        <p>• <strong>Maghrib:</strong> <code>🕌 حان الآن موعد أذان المغرب بتوقيت الإسكندرية</code></p>
+                        <p>• <strong>Isha:</strong> <code>🕌 حان الآن موعد أذان العشاء بتوقيت الإسكندرية</code></p>
+                      </div>
+                    </div>
+
+                    {/* Supabase Schema & Verification */}
+                    <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                          <Database className="w-4 h-4 text-emerald-600" />
+                          <span>Supabase Tables Setup</span>
+                        </h4>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(PRAYER_MIGRATION_SQL);
+                            setCopiedPrayerSql(true);
+                            setTimeout(() => setCopiedPrayerSql(false), 2500);
+                          }}
+                          className="px-3 py-1 bg-[#063b30] hover:bg-[#084e40] text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          {copiedPrayerSql ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-300" />
+                              <span>Copied SQL!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Copy Migration SQL</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        The feature uses two dedicated tables in Supabase with atomic row-locking & RLS:
+                      </p>
+                      <ul className="text-xs text-slate-600 space-y-1.5 font-mono bg-slate-50 p-3 rounded-lg border border-slate-200">
+                        <li>• <strong>prayer_times:</strong> Stores weekly pre-fetched Alexandria times</li>
+                        <li>• <strong>prayer_notifications:</strong> Tracks atomic dispatch & deduplication</li>
+                      </ul>
+                      <p className="text-[11px] text-slate-500">
+                        To apply the tables in Supabase, click <strong>Copy Migration SQL</strong> and run it in the Supabase SQL Editor.
+                      </p>
                     </div>
                   </div>
                 </div>

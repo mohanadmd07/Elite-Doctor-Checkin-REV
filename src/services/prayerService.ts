@@ -143,6 +143,57 @@ export function resolvePrayerWhatsAppGroupIds(): string[] {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let isPrayerPausedMemory = false;
+
+/**
+ * Checks whether prayer automation (fetching & sending) is paused by admin.
+ * Checks Supabase settings row with in-memory fallback.
+ */
+export async function isPrayerPaused(): Promise<boolean> {
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data } = await supabase
+        .from("prayer_notifications")
+        .select("status")
+        .eq("prayer_date", "1970-01-01")
+        .eq("prayer", "__SETTINGS__")
+        .maybeSingle();
+
+      if (data && typeof data.status === "string") {
+        isPrayerPausedMemory = data.status === "paused";
+        return isPrayerPausedMemory;
+      }
+    } catch (_) {}
+  }
+  return isPrayerPausedMemory;
+}
+
+/**
+ * Persists the pause/resume state in Supabase and memory.
+ */
+export async function setPrayerPaused(paused: boolean): Promise<boolean> {
+  isPrayerPausedMemory = paused;
+  const status = paused ? "paused" : "active";
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      await supabase.from("prayer_notifications").upsert(
+        {
+          prayer_date: "1970-01-01",
+          prayer: "__SETTINGS__",
+          status,
+          sent_at: new Date().toISOString(),
+        },
+        { onConflict: "prayer_date,prayer" }
+      );
+    } catch (err: any) {
+      console.warn("[prayer] Failed to persist paused state in Supabase:", err.message);
+    }
+  }
+  return isPrayerPausedMemory;
+}
+
 /**
  * Fetches prayer timings from Aladhan API for a specific date with retry backoff.
  */
@@ -215,6 +266,11 @@ export async function executePrayerFetch(options: { force?: boolean; daysCount?:
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
   if (!isEnabled) {
     return { skipped: true, success: true, reason: "PRAYER_NOTIFICATIONS_ENABLED is false" };
+  }
+
+  // Guard: Pause check
+  if (await isPrayerPaused()) {
+    return { skipped: true, success: true, due: false, reason: "Prayer automation is paused by admin", isPaused: true };
   }
 
   const supabase = getSupabase();
@@ -324,6 +380,11 @@ export async function executePrayerDispatch(): Promise<{
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
   if (!isEnabled) {
     return { skipped: true, success: true, reason: "PRAYER_NOTIFICATIONS_ENABLED is false" };
+  }
+
+  // Guard: Pause check
+  if (await isPrayerPaused()) {
+    return { skipped: true, success: true, due: false, reason: "Prayer automation is paused by admin", isPaused: true };
   }
 
   const supabase = getSupabase();
@@ -503,6 +564,7 @@ export async function executePrayerDispatch(): Promise<{
  */
 export async function getPrayerStatus(): Promise<{
   enabled: boolean;
+  isPaused: boolean;
   cairo_now: string;
   cairo_time: string;
   configured_groups_count: number;
@@ -511,6 +573,7 @@ export async function getPrayerStatus(): Promise<{
   upcoming_dates: string[];
 }> {
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
+  const isPaused = await isPrayerPaused();
   const cairoParts = getCairoParts();
   const today = getCairoDateString();
   const cairoTime = `${String(cairoParts.hour).padStart(2, "0")}:${String(cairoParts.minute).padStart(2, "0")}:${String(
@@ -523,6 +586,7 @@ export async function getPrayerStatus(): Promise<{
   if (!supabase) {
     return {
       enabled: isEnabled,
+      isPaused,
       cairo_now: `${today} ${cairoTime}`,
       cairo_time: cairoTime,
       configured_groups_count: groups.length,
@@ -544,6 +608,7 @@ export async function getPrayerStatus(): Promise<{
 
   return {
     enabled: isEnabled,
+    isPaused,
     cairo_now: `${today} ${cairoTime}`,
     cairo_time: cairoTime,
     configured_groups_count: groups.length,
