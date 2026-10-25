@@ -260,7 +260,9 @@ export async function fetchAladhanTimingsForDate(
 export async function executePrayerFetch(options: { force?: boolean; daysCount?: number } = {}): Promise<{
   success: boolean;
   skipped?: boolean;
+  due?: boolean;
   reason?: string;
+  isPaused?: boolean;
   data?: any;
 }> {
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
@@ -376,6 +378,7 @@ export async function executePrayerDispatch(): Promise<{
   prayer?: string;
   results?: any;
   reason?: string;
+  isPaused?: boolean;
 }> {
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
   if (!isEnabled) {
