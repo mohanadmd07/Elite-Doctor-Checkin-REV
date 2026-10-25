@@ -3618,7 +3618,7 @@ async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckI
   // Fallback: If no records match on monthly sheet for this date, also check daily checkins matching this exact sheet date
   if (docMap.size === 0) {
     try {
-      const dailyList = await readDailyCheckIns();
+      const dailyList = await readCheckIns();
       const dailyMatched = dailyList.filter(c => {
         const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
         const sheetDate = directDate || getEgyptDateStr(c.timestamp);

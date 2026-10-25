@@ -903,18 +903,22 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   const handleTogglePrayerGroup = async (groupId: string) => {
-    if (!prayerStatus) return;
-    const currentSelected = prayerStatus.selected_groups || [];
-    const isCurrentlySelected = currentSelected.includes(groupId);
-    const newSelected = isCurrentlySelected
-      ? currentSelected.filter((id) => id !== groupId)
-      : [...currentSelected, groupId];
+    let newSelected: string[] = [];
+    let isCurrentlySelected = false;
 
-    // Optimistic UI update
-    setPrayerStatus({
-      ...prayerStatus,
-      selected_groups: newSelected,
+    setPrayerStatus((prev) => {
+      if (!prev) return prev;
+      const current = prev.selected_groups || [];
+      isCurrentlySelected = current.includes(groupId);
+      newSelected = isCurrentlySelected
+        ? current.filter((id) => id !== groupId)
+        : [...current, groupId];
+      return {
+        ...prev,
+        selected_groups: newSelected,
+      };
     });
+
     setIsUpdatingPrayerGroups(true);
 
     try {
@@ -950,14 +954,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   const handleSelectAllPrayerGroups = async (selectAll: boolean) => {
-    if (!prayerStatus) return;
-    const allGroupIds = (prayerStatus.available_groups || []).map((g) => g.id);
-    const newSelected = selectAll ? allGroupIds : [];
+    let newSelected: string[] = [];
 
-    setPrayerStatus({
-      ...prayerStatus,
-      selected_groups: newSelected,
+    setPrayerStatus((prev) => {
+      if (!prev) return prev;
+      const allGroupIds = (prev.available_groups || []).map((g) => g.id);
+      newSelected = selectAll ? allGroupIds : [];
+      return {
+        ...prev,
+        selected_groups: newSelected,
+      };
     });
+
     setIsUpdatingPrayerGroups(true);
 
     try {
@@ -5651,17 +5659,17 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             }`}
                           >
                             <div className="flex items-start justify-between gap-2">
-                              <label className="flex items-center gap-2.5 cursor-pointer">
+                              <div className="flex items-center gap-2.5 pointer-events-none select-none">
                                 <input
                                   type="checkbox"
                                   checked={isSelected}
-                                  onChange={() => {}} // toggled by parent div
-                                  className="w-4 h-4 rounded text-[#063b30] focus:ring-[#063b30] border-slate-300 accent-[#063b30] cursor-pointer"
+                                  readOnly
+                                  className="w-4 h-4 rounded text-[#063b30] focus:ring-[#063b30] border-slate-300 accent-[#063b30] pointer-events-none"
                                 />
                                 <span className="font-bold text-slate-900 text-xs">
                                   {group.name || `WhatsApp Group #${idx + 1}`}
                                 </span>
-                              </label>
+                              </div>
 
                               {isSelected ? (
                                 <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300 shrink-0">
@@ -5751,6 +5759,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             const time24 = timeRecord?.prayer_time ? String(timeRecord.prayer_time).substring(0, 5) : "--:--";
                             const time12 = timeRecord?.prayer_time ? formatPrayer12Hour(timeRecord.prayer_time) : "--:--";
 
+                            // Determine if this prayer was already earlier today (past scheduled minute + 2m tolerance)
+                            const isPastPrayer = (() => {
+                              if (!timeRecord?.prayer_time || !prayerStatus?.cairo_time) return false;
+                              const [cH, cM] = prayerStatus.cairo_time.split(":").map((v) => parseInt(v, 10));
+                              const [pH, pM] = timeRecord.prayer_time.split(":").map((v) => parseInt(v, 10));
+                              if (isNaN(cH) || isNaN(pH)) return false;
+                              return cH * 60 + cM > pH * 60 + pM + 2;
+                            })();
+
                             return (
                               <tr key={prayerKey} className="hover:bg-slate-50/80 transition-colors">
                                 <td className="py-3.5 px-4 font-bold text-slate-900 text-sm flex items-center gap-2">
@@ -5782,9 +5799,19 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                       <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
                                       Sending...
                                     </span>
+                                  ) : notifRecord?.status === "skipped" ? (
+                                    <span className="bg-amber-50 text-amber-800 font-semibold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-amber-200">
+                                      <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                      Excluded
+                                    </span>
+                                  ) : isPastPrayer ? (
+                                    <span className="bg-slate-100 text-slate-500 font-medium px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-slate-200">
+                                      <Check className="w-3 h-3 text-slate-400" />
+                                      Past
+                                    </span>
                                   ) : (
-                                    <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-slate-200">
-                                      <Clock className="w-3 h-3 text-slate-500" />
+                                    <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1 border border-emerald-200">
+                                      <Clock className="w-3 h-3 text-emerald-600" />
                                       Scheduled
                                     </span>
                                   )}

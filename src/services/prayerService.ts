@@ -317,7 +317,7 @@ export async function fetchAladhanTimingsForDate(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`[prayer] Fetching Aladhan timings for ${dateYMD} (attempt ${attempt}/${maxRetries})...`);
-      const res = await fetch(url, { redirect: "follow" });
+      const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8000) });
       if (!res.ok) {
         throw new Error(`Aladhan API responded with status ${res.status}`);
       }
@@ -400,17 +400,17 @@ export async function executePrayerFetch(options: { force?: boolean; daysCount?:
       };
     }
 
-    // Check if the starting date already has 5 prayers stored
+    // Check if the end date of the rolling week already has 5 prayers stored
     const { data: existingRows } = await supabase
       .from("prayer_times")
       .select("prayer")
-      .eq("prayer_date", startDate);
+      .eq("prayer_date", endDate);
 
     if (existingRows && existingRows.length >= 5) {
       return {
         skipped: true,
         success: true,
-        reason: `Prayer times for the week starting ${startDate} have already been fetched`,
+        reason: `Prayer times through ${endDate} have already been fetched and cached`,
       };
     }
   }
@@ -544,6 +544,25 @@ export async function executePrayerDispatch(): Promise<{
   }
 
   if (!duePrayerRow) {
+    // Proactive Pre-caching: If no prayer is due right now (idle minute),
+    // ensure tomorrow's prayer times are already fetched and cached in Supabase.
+    // This prevents any cold-start delay or network hiccup during early morning Fajr.
+    const tomorrow = getCairoDatesRange(new Date(), 2)[1];
+    if (tomorrow) {
+      try {
+        const { data: tomorrowRows } = await supabase
+          .from("prayer_times")
+          .select("prayer")
+          .eq("prayer_date", tomorrow);
+        if (!tomorrowRows || tomorrowRows.length < 5) {
+          console.log(`[prayer] Tomorrow (${tomorrow}) prayer times not yet cached. Proactively fetching in idle minute...`);
+          await executePrayerFetch({ force: true });
+        }
+      } catch (err: any) {
+        console.warn(`[prayer] Proactive tomorrow pre-cache check non-fatal error: ${err.message}`);
+      }
+    }
+
     return {
       success: true,
       due: false,
@@ -710,8 +729,28 @@ export async function getPrayerStatus(): Promise<{
     supabase.from("prayer_notifications").select("*").eq("prayer_date", today),
   ]);
 
-  const allUpcomingTimes = timesRes.data || [];
+  let allUpcomingTimes = timesRes.data || [];
   const todayNotifs = notifsRes.data || [];
+
+  // Self-healing on status view: If today has fewer than 5 cached prayers, auto-fetch immediately
+  let todayTimes = allUpcomingTimes.filter((t) => t.prayer_date === today);
+  if (todayTimes.length < 5 && isEnabled && !isPaused) {
+    try {
+      console.log(`[prayer] Status check detected missing prayer times for ${today}. Auto-fetching...`);
+      await executePrayerFetch({ force: true });
+      const { data: refreshedTimes } = await supabase
+        .from("prayer_times")
+        .select("*")
+        .gte("prayer_date", today)
+        .order("prayer_date", { ascending: true });
+      if (refreshedTimes) {
+        allUpcomingTimes = refreshedTimes;
+        todayTimes = allUpcomingTimes.filter((t) => t.prayer_date === today);
+      }
+    } catch (err: any) {
+      console.warn(`[prayer] Auto-fetch in getPrayerStatus non-fatal error: ${err.message}`);
+    }
+  }
 
   const uniqueDates = Array.from(new Set(allUpcomingTimes.map((t) => t.prayer_date))).sort();
 
@@ -725,7 +764,7 @@ export async function getPrayerStatus(): Promise<{
     selected_groups: activeSelected,
     today: {
       date: today,
-      times: allUpcomingTimes.filter((t) => t.prayer_date === today),
+      times: todayTimes,
       notifications: todayNotifs,
     },
     upcoming_days_cached: uniqueDates.length,

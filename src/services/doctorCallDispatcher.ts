@@ -13,7 +13,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { normalizeSpecialty } from "../data/specialties.js";
+import { normalizeSpecialty, SPECIALTY_OPTIONS } from "../data/specialties.js";
 import { getSupabase } from "../db/supabase.js";
 
 const DATA_DIR = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), "data");
@@ -955,6 +955,7 @@ export async function getGreenApiSettings(): Promise<{
   settings?: {
     webhookUrl?: string;
     incomingWebhook?: string;
+    incomingBlockWebhook?: string;
     stateWebhook?: string;
     outgoingWebhook?: string;
     outgoingMessageWebhook?: string;
