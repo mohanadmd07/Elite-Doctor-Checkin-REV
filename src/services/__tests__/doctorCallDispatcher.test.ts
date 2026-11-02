@@ -13,7 +13,10 @@ import {
   getHospitalDutyDate,
   getCairoActiveShifts,
   matchesActiveShift,
-  resolveHospitalCallDate
+  resolveHospitalCallDate,
+  disambiguateDateParts,
+  repairCorruptedCallRecord,
+  runCorruptedCallDatesRepair
 } from '../doctorCallDispatcher';
 
 describe('Egyptian WhatsApp Phone Normalization', () => {
@@ -1075,6 +1078,148 @@ describe('Cardiology Specialty Normalization & Dispatch Accuracy', () => {
     expect(result.callRecord?.dispatchedDoctors).toHaveLength(1);
     expect(result.callRecord?.dispatchedDoctors[0].name).toBe("Dr. Cardiologist OnDuty");
     expect(result.callRecord?.dispatchedDoctors[0].id).toBe("cardio_202");
+  });
+});
+
+describe('Disambiguation of Dates & Month Boundary (Nov 1 / Oct 31 Transition)', () => {
+  it('disambiguateDateParts correctly identifies DD/MM when first > 12', () => {
+    const res = disambiguateDateParts(15, 10, '2026');
+    expect(res).toEqual({ month: '10', day: '15', year: '2026' });
+  });
+
+  it('disambiguateDateParts correctly identifies MM/DD when second > 12', () => {
+    const res = disambiguateDateParts(10, 31, '2026');
+    expect(res).toEqual({ month: '10', day: '31', year: '2026' });
+  });
+
+  it('disambiguateDateParts disambiguates 11/1/2026 on Nov 1, 2026 as Nov 1 (not Jan 11)', () => {
+    const nov1Ref = new Date('2026-11-01T00:30:00Z');
+    const res = disambiguateDateParts(11, 1, '2026', nov1Ref);
+    expect(res).toEqual({ month: '11', day: '01', year: '2026' });
+  });
+
+  it('disambiguateDateParts disambiguates 01/11/2026 on Nov 1, 2026 as Nov 1 (Candidate B wins)', () => {
+    const nov1Ref = new Date('2026-11-01T00:30:00Z');
+    const res = disambiguateDateParts(1, 11, '2026', nov1Ref);
+    expect(res).toEqual({ month: '11', day: '01', year: '2026' });
+  });
+
+  it('disambiguateDateParts handles 2-digit years correctly', () => {
+    const nov1Ref = new Date('2026-11-01T00:30:00Z');
+    const res = disambiguateDateParts(11, 1, '26', nov1Ref);
+    expect(res).toEqual({ month: '11', day: '01', year: '2026' });
+  });
+
+  it('parseDoctorCallDate parses 11/1/2026 on Nov 1 to 2026-11-01', () => {
+    const nov1Ref = new Date('2026-11-01T00:30:00Z');
+    expect(parseDoctorCallDate('11/1/2026', nov1Ref)).toBe('2026-11-01');
+    expect(parseDoctorCallDate('11/01/2026', nov1Ref)).toBe('2026-11-01');
+    expect(parseDoctorCallDate('1/11/2026', nov1Ref)).toBe('2026-11-01');
+  });
+
+  it('resolveHospitalDutyDate on Nov 1 at 12:30 AM maps to Oct 31 duty roster', () => {
+    const nov1EarlyMorning = new Date('2026-10-31T22:30:00Z'); // 12:30 AM Nov 1 Cairo
+    // When EHR outputs: "11/1/2026, 12:30:00 AM"
+    expect(resolveHospitalDutyDate('11/1/2026, 12:30:00 AM', nov1EarlyMorning)).toBe('2026-10-31');
+    expect(resolveHospitalDutyDate('11/01/2026 12:30:00 ص', nov1EarlyMorning)).toBe('2026-10-31');
+  });
+
+  it('resolveHospitalDutyDate on Nov 1 at 09:30 AM maps to Nov 1 duty roster', () => {
+    const nov1Morning = new Date('2026-11-01T07:30:00Z'); // 09:30 AM Nov 1 Cairo
+    expect(resolveHospitalDutyDate('11/1/2026, 9:30:00 AM', nov1Morning)).toBe('2026-11-01');
+    expect(resolveHospitalDutyDate('11/01/2026 09:30:00 ص', nov1Morning)).toBe('2026-11-01');
+  });
+
+  it('resolveHospitalDutyDate on Nov 2 at 01:15 AM maps to Nov 1 duty roster', () => {
+    const nov2EarlyMorning = new Date('2026-11-01T23:15:00Z'); // 01:15 AM Nov 2 Cairo
+    expect(resolveHospitalDutyDate('11/2/2026, 1:15:00 AM', nov2EarlyMorning)).toBe('2026-11-01');
+  });
+
+  it('resolveHospitalDutyDate on Nov 2 at 10:00 AM maps to Nov 2 duty roster', () => {
+    const nov2Day = new Date('2026-11-02T08:00:00Z'); // 10:00 AM Nov 2 Cairo
+    expect(resolveHospitalDutyDate('11/2/2026, 10:00:00 AM', nov2Day)).toBe('2026-11-02');
+  });
+
+  it('repairCorruptedCallRecord auto-heals corrupted 2026-01-10 or 2026-01-11 calls', async () => {
+    const corruptedRecord: any = {
+      id: 'corrupted_call_1',
+      callDate: '2026-01-10',
+      createdAt: '2026-11-01T00:30:00.000Z',
+      rawMessage: `Type: Request\nCategory: DoctorCall\nGroup: General Surgery\nDate: 11/1/2026, 12:30:00 AM\nRoom: 201`,
+      room: '201',
+      department: 'General Surgery',
+      status: 'no_doctor_present'
+    };
+
+    const repaired = await repairCorruptedCallRecord(corruptedRecord);
+    expect(repaired).toBe(true);
+    expect(corruptedRecord.callDate).toBe('2026-10-31');
+
+    const daytimeCorrupted: any = {
+      id: 'corrupted_call_2',
+      callDate: '2026-01-11',
+      createdAt: '2026-11-01T08:30:00.000Z',
+      rawMessage: `Type: Request\nCategory: DoctorCall\nGroup: General Surgery\nDate: 11/1/2026, 10:30:00 AM\nRoom: 301`,
+      room: '301',
+      department: 'General Surgery',
+      status: 'no_doctor_present'
+    };
+
+    const repairedDay = await repairCorruptedCallRecord(daytimeCorrupted);
+    expect(repairedDay).toBe(true);
+    expect(daytimeCorrupted.callDate).toBe('2026-11-01');
+  });
+
+  it('webhook end-to-end accurately dispatches night-shift doctors on Nov 1 at 12:30 AM', async () => {
+    let queriedDutyDate = '';
+    const nov1EarlyCallMsg =
+      "Type: Request\n" +
+      "Category: DoctorCall\n" +
+      "Group: الجراحة العامة\n" +
+      "By: Night Ward Nurse\n" +
+      "Date: 11/1/2026, 12:30:00 AM\n" +
+      "Location: Elite 3rd Floor\n" +
+      "Sub.Location: Room 302\n" +
+      "Patient Name: علي كامل\n" +
+      "Bed: Bed 302";
+
+    const payload = {
+      typeWebhook: "incomingMessageReceived",
+      idMessage: "msg_nov1_night_" + Date.now(),
+      senderData: {
+        chatId: "120363345000178212@g.us",
+        senderName: "Elite Hospital"
+      },
+      messageData: {
+        typeMessage: "textMessage",
+        textMessageData: {
+          textMessage: nov1EarlyCallMsg
+        }
+      }
+    };
+
+    const result = await processDoctorCallWebhook({
+      rawBody: payload,
+      getActiveCheckins: async (dutyDate?: string) => {
+        queriedDutyDate = dutyDate || '';
+        return [
+          {
+            id: "surgeon_oct31_night",
+            doctorName: "Dr. Oct31 Night Surgeon",
+            department: "General Surgery",
+            shifts: ["Night shift", "24 shift"],
+            mobileNumber: "01099998888"
+          }
+        ];
+      }
+    });
+
+    expect(result.handled).toBe(true);
+    // Verified: Queried duty date MUST be 2026-10-31 (not 2026-01-10!)
+    expect(queriedDutyDate).toBe('2026-10-31');
+    expect(result.callRecord?.callDate).toBe('2026-10-31');
+    expect(result.callRecord?.dispatchedDoctors).toHaveLength(1);
+    expect(result.callRecord?.dispatchedDoctors[0].name).toBe('Dr. Oct31 Night Surgeon');
   });
 });
 

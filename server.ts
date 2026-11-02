@@ -26,7 +26,8 @@ import {
   previewCustomDoctorCall,
   sendCustomDoctorCall,
   getHospitalDutyDate,
-  resolveHospitalDutyDate
+  resolveHospitalDutyDate,
+  runCorruptedCallDatesRepair
 } from "./src/services/doctorCallDispatcher.js";
 import { prayerRouter } from "./src/routes/prayerRoutes.js";
 
@@ -3592,7 +3593,15 @@ app.use(["/api/prayer", "/prayer"], prayerRouter);
 async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckIn[]> {
   const monthlyList = await readMonthlyCheckIns();
   const defaultDutyDate = getHospitalDutyDate(new Date());
-  const dateToMatch = targetDateStr ? resolveHospitalDutyDate(targetDateStr, new Date()) : defaultDutyDate;
+  let dateToMatch = defaultDutyDate;
+  if (targetDateStr) {
+    const trimmed = targetDateStr.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      dateToMatch = trimmed;
+    } else {
+      dateToMatch = resolveHospitalDutyDate(trimmed, new Date());
+    }
+  }
 
   console.log(`[DoctorCall Roster] Querying monthly sheet for exact duty date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
 

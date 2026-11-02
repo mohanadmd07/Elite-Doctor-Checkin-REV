@@ -291,14 +291,96 @@ export function parseDoctorCallMessage(rawMessageText: string): ParsedDoctorCall
 }
 
 /**
+ * Disambiguates date parts (first, second, year) between MM/DD/YYYY and DD/MM/YYYY.
+ *
+ * Rules:
+ * 1. If first > 12 && second <= 12: first must be Day, second must be Month (DD/MM/YYYY).
+ * 2. If second > 12 && first <= 12: first must be Month, second must be Day (MM/DD/YYYY).
+ * 3. If both first <= 12 && second <= 12 (e.g. 11/1/2026 or 1/11/2026):
+ *    Compare Candidate A (MM/DD/YYYY, standard EHR/HIS format) vs Candidate B (DD/MM/YYYY)
+ *    against referenceTime in Cairo timezone. The candidate with the smallest absolute
+ *    calendar distance to referenceTime wins. If tied, default to Candidate A (MM/DD/YYYY).
+ */
+export function disambiguateDateParts(
+  first: number,
+  second: number,
+  rawYear: string | number,
+  referenceTime: Date = new Date()
+): { month: string; day: string; year: string } {
+  let yearNum = typeof rawYear === "number" ? rawYear : parseInt(String(rawYear).trim(), 10);
+  if (isNaN(yearNum)) {
+    yearNum = 2026;
+  } else if (yearNum < 100) {
+    yearNum = yearNum >= 70 ? 1900 + yearNum : 2000 + yearNum;
+  }
+  const year = String(yearNum);
+
+  // If first > 12, it must be the day (DD/MM/YYYY)
+  if (first > 12 && second <= 12) {
+    return {
+      month: String(second).padStart(2, "0"),
+      day: String(first).padStart(2, "0"),
+      year
+    };
+  }
+
+  // If second > 12, it must be the day (MM/DD/YYYY)
+  if (second > 12 && first <= 12) {
+    return {
+      month: String(first).padStart(2, "0"),
+      day: String(second).padStart(2, "0"),
+      year
+    };
+  }
+
+  // Both first <= 12 and second <= 12: disambiguate against referenceTime in Cairo timezone
+  const refFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const refParts = refFormatter.formatToParts(referenceTime);
+  const refY = parseInt(refParts.find(p => p.type === "year")?.value || String(yearNum), 10);
+  const refM = parseInt(refParts.find(p => p.type === "month")?.value || "1", 10);
+  const refD = parseInt(refParts.find(p => p.type === "day")?.value || "1", 10);
+  const refUtc = Date.UTC(refY, refM - 1, refD);
+
+  // Candidate A: MM/DD/YYYY (first = month, second = day)
+  const candAUtc = Date.UTC(yearNum, first - 1, second);
+  // Candidate B: DD/MM/YYYY (first = day, second = month)
+  const candBUtc = Date.UTC(yearNum, second - 1, first);
+
+  const diffA = Math.abs(candAUtc - refUtc);
+  const diffB = Math.abs(candBUtc - refUtc);
+
+  if (diffB < diffA) {
+    // Candidate B is strictly closer to the current Cairo operational date
+    return {
+      month: String(second).padStart(2, "0"),
+      day: String(first).padStart(2, "0"),
+      year
+    };
+  }
+
+  // Default to Candidate A (MM/DD/YYYY from EHR format) or when tied
+  return {
+    month: String(first).padStart(2, "0"),
+    day: String(second).padStart(2, "0"),
+    year
+  };
+}
+
+/**
  * Parses diverse date formats found in DoctorCall messages into ISO YYYY-MM-DD
  * Handles:
  * - Egyptian/Arabic date strings: "14‏/10‏/2026 9:23:12 م" -> "2026-10-14"
  * - US formatted date strings: "10/14/2026, 7:16:39 PM" -> "2026-10-14"
  * - ISO date strings: "2026-10-14" -> "2026-10-14"
+ * - Disambiguates ambiguous dates (e.g. 11/1/2026 on Nov 1st -> 2026-11-01)
  * - Normalizes Arabic numerals (٠-٩) and Unicode RTL/LTR markers
  */
-export function parseDoctorCallDate(dateStr?: string): string | null {
+export function parseDoctorCallDate(dateStr?: string, referenceTime: Date = new Date()): string | null {
   if (!dateStr || typeof dateStr !== "string") return null;
 
   // Convert Arabic numerals to ASCII
@@ -315,23 +397,13 @@ export function parseDoctorCallDate(dateStr?: string): string | null {
     return `${y}-${m}-${d}`;
   }
 
-  // 2. Check for DD/MM/YYYY or MM/DD/YYYY
-  const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
+  // 2. Check for DD/MM/YYYY or MM/DD/YYYY (support 2 or 4 digit years)
+  const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{2,4})/);
   if (partsMatch) {
     const first = parseInt(partsMatch[1], 10);
     const second = parseInt(partsMatch[2], 10);
-    const year = partsMatch[3];
-
-    // If first part > 12, it must be the day: DD/MM/YYYY
-    if (first > 12 && second <= 12) {
-      return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
-    }
-    // If second part > 12, it must be the day: MM/DD/YYYY
-    if (second > 12 && first <= 12) {
-      return `${year}-${String(first).padStart(2, "0")}-${String(second).padStart(2, "0")}`;
-    }
-    // In Egypt hospital context, day/month/year (DD/MM/YYYY) is standard
-    return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+    const { year, month, day } = disambiguateDateParts(first, second, partsMatch[3], referenceTime);
+    return `${year}-${month}-${day}`;
   }
 
   return null;
@@ -391,21 +463,14 @@ export function resolveHospitalDutyDate(callDateStr?: string, referenceTime: Dat
     month = isoMatch[2].padStart(2, "0");
     day = isoMatch[3].padStart(2, "0");
   } else {
-    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
+    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{2,4})/);
     if (partsMatch) {
       const first = parseInt(partsMatch[1], 10);
       const second = parseInt(partsMatch[2], 10);
-      year = partsMatch[3];
-      if (first > 12 && second <= 12) {
-        day = String(first).padStart(2, "0");
-        month = String(second).padStart(2, "0");
-      } else if (second > 12 && first <= 12) {
-        month = String(first).padStart(2, "0");
-        day = String(second).padStart(2, "0");
-      } else {
-        day = String(first).padStart(2, "0");
-        month = String(second).padStart(2, "0");
-      }
+      const parts = disambiguateDateParts(first, second, partsMatch[3], referenceTime);
+      year = parts.year;
+      month = parts.month;
+      day = parts.day;
     }
   }
 
@@ -575,21 +640,14 @@ export function resolveHospitalCallDate(callDateStr?: string, referenceTime: Dat
     month = isoMatch[2].padStart(2, "0");
     day = isoMatch[3].padStart(2, "0");
   } else {
-    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{4})/);
+    const partsMatch = cleaned.match(/(\d{1,2})\s*[-\/\.]\s*(\d{1,2})\s*[-\/\.]\s*(\d{2,4})/);
     if (partsMatch) {
       const first = parseInt(partsMatch[1], 10);
       const second = parseInt(partsMatch[2], 10);
-      year = partsMatch[3];
-      if (first > 12 && second <= 12) {
-        day = String(first).padStart(2, "0");
-        month = String(second).padStart(2, "0");
-      } else if (second > 12 && first <= 12) {
-        month = String(first).padStart(2, "0");
-        day = String(second).padStart(2, "0");
-      } else {
-        day = String(first).padStart(2, "0");
-        month = String(second).padStart(2, "0");
-      }
+      const parts = disambiguateDateParts(first, second, partsMatch[3], referenceTime);
+      year = parts.year;
+      month = parts.month;
+      day = parts.day;
     }
   }
 
@@ -832,12 +890,128 @@ export async function saveDoctorCallRecord(record: DoctorCallRecord): Promise<vo
   }
 }
 
+let repairedCorruptedOnce = false;
+
+/**
+ * Automatically repairs corrupted call records where callDate was stored as 2026-01-10 or 2026-01-11
+ * due to the ambiguous MM/DD vs DD/MM parsing bug on November 1st, 2026.
+ */
+export async function repairCorruptedCallRecord(record: DoctorCallRecord): Promise<boolean> {
+  if (!record) return false;
+  const isCorruptedJan = /^2026-01-(01|10|11|12)/.test(record.callDate || "");
+  const createdMonth = (record.createdAt || "").slice(0, 7);
+  if (isCorruptedJan && (createdMonth === "2026-10" || createdMonth === "2026-11")) {
+    const refDate = record.createdAt ? new Date(record.createdAt) : new Date();
+    const validRef = isNaN(refDate.getTime()) ? new Date() : refDate;
+    let repairedDate: string | undefined;
+
+    if (record.rawMessage) {
+      const parsed = parseDoctorCallMessage(record.rawMessage);
+      if (parsed?.callDate) {
+        repairedDate = resolveHospitalDutyDate(parsed.callDate, validRef);
+      }
+    }
+    if (!repairedDate) {
+      repairedDate = getHospitalDutyDate(validRef);
+    }
+
+    if (repairedDate && repairedDate !== record.callDate) {
+      console.log(`[DoctorCalls Self-Healing] Auto-repaired corrupted call date for ${record.id}: ${record.callDate} -> ${repairedDate}`);
+      record.callDate = repairedDate;
+      await saveDoctorCallRecord(record);
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function runCorruptedCallDatesRepair(): Promise<number> {
+  const supabase = getSupabase();
+  let repairedCount = 0;
+
+  // 1. Repair in Supabase
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("doctor_calls")
+        .select("*")
+        .in("call_date", ["2026-01-10", "2026-01-11"])
+        .gte("created_at", "2026-10-30T00:00:00Z");
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        for (const row of data) {
+          const rec: DoctorCallRecord = {
+            id: row.id,
+            callDate: row.call_date,
+            createdAt: row.created_at,
+            room: row.room,
+            department: row.department,
+            rawDepartment: row.raw_department,
+            patientName: row.patient_name,
+            patientBarcode: row.patient_barcode,
+            admittingPhysician: row.admitting_physician,
+            callerName: row.caller_name,
+            dispatchedDoctors: row.dispatched_doctors || [],
+            status: row.status,
+            rawMessage: row.raw_message
+          };
+          const didRepair = await repairCorruptedCallRecord(rec);
+          if (didRepair) repairedCount++;
+        }
+      }
+    } catch (err: any) {
+      console.warn("[DoctorCalls] Error during Supabase corrupted dates repair:", err.message);
+    }
+  }
+
+  // 2. Repair in local storage
+  try {
+    const localCalls = readDoctorCallsLocal();
+    let localChanged = false;
+    for (const rec of localCalls) {
+      const isCorrupted = /^2026-01-(10|11)/.test(rec.callDate || "");
+      const createdMonth = (rec.createdAt || "").slice(0, 7);
+      if (isCorrupted && (createdMonth === "2026-10" || createdMonth === "2026-11")) {
+        const refDate = rec.createdAt ? new Date(rec.createdAt) : new Date();
+        const validRef = isNaN(refDate.getTime()) ? new Date() : refDate;
+        let repairedDate: string | undefined;
+        if (rec.rawMessage) {
+          const parsed = parseDoctorCallMessage(rec.rawMessage);
+          if (parsed?.callDate) {
+            repairedDate = resolveHospitalDutyDate(parsed.callDate, validRef);
+          }
+        }
+        if (!repairedDate) {
+          repairedDate = getHospitalDutyDate(validRef);
+        }
+        if (repairedDate && repairedDate !== rec.callDate) {
+          console.log(`[DoctorCalls Self-Healing] Auto-repaired local call date for ${rec.id}: ${rec.callDate} -> ${repairedDate}`);
+          rec.callDate = repairedDate;
+          localChanged = true;
+          repairedCount++;
+        }
+      }
+    }
+    if (localChanged) {
+      writeDoctorCallsLocal(localCalls);
+    }
+  } catch (_) {}
+
+  return repairedCount;
+}
+
 export async function getDoctorCallRecords(filter?: {
   date?: string;
   department?: string;
   status?: string;
   search?: string;
 }): Promise<DoctorCallRecord[]> {
+  // Proactively repair corrupted dates once per process lifecycle
+  if (!repairedCorruptedOnce) {
+    repairedCorruptedOnce = true;
+    await runCorruptedCallDatesRepair().catch(() => 0);
+  }
+
   const supabase = getSupabase();
   let calls: DoctorCallRecord[] = [];
 
@@ -1968,8 +2142,18 @@ export async function reDispatchDoctorCall(params: {
   const now = new Date();
   const referenceDate = target.createdAt ? new Date(target.createdAt) : now;
   const validRef = isNaN(referenceDate.getTime()) ? now : referenceDate;
-  const targetDate = resolveHospitalDutyDate(target.callDate, validRef);
-  const callTime = resolveHospitalCallDate(target.callDate, validRef);
+
+  // Extract original raw message date if available to accurately recover any corrupted callDates
+  let rawDateToResolve = target.callDate;
+  if (target.rawMessage) {
+    const parsed = parseDoctorCallMessage(target.rawMessage);
+    if (parsed?.callDate) {
+      rawDateToResolve = parsed.callDate;
+    }
+  }
+
+  const targetDate = resolveHospitalDutyDate(rawDateToResolve, validRef);
+  const callTime = resolveHospitalCallDate(rawDateToResolve, validRef);
   const activeShifts = getCairoActiveShifts(callTime);
   target.callDate = targetDate;
   const allCheckins = await getActiveCheckins(targetDate);
