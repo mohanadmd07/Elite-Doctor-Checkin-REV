@@ -753,7 +753,16 @@ function getEgyptResetTime(timestampStr: string): Date {
   }
 }
 
+let lastCleanupCheckTime = 0;
+const CLEANUP_CHECK_INTERVAL_MS = 60000; // Check at most once per 60 seconds
+
 async function cleanupExpiredCheckIns(): Promise<void> {
+  const nowMs = Date.now();
+  if (nowMs - lastCleanupCheckTime < CLEANUP_CHECK_INTERVAL_MS) {
+    return;
+  }
+  lastCleanupCheckTime = nowMs;
+
   try {
     const list = await readCheckInsRaw();
     const now = new Date();
@@ -785,9 +794,11 @@ async function cleanupExpiredCheckIns(): Promise<void> {
   }
 }
 
+const CHECKIN_SLIM_COLUMNS = "doctor_id,doctor_name,doctor_arabic_name,department,shifts,mobile_number,checkin_timestamp,checkin_date";
+
 let checkinsCache: CheckIn[] | null = null;
 let lastCheckinsFetchTime = 0;
-const CHECKINS_CACHE_TTL = 2500; // 2.5 seconds cache
+const CHECKINS_CACHE_TTL = 8000; // 8 seconds cache (invalidated immediately on any write)
 
 function invalidateCheckinsCache() {
   checkinsCache = null;
@@ -804,9 +815,11 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      // Fetch all active checkins safely across pagination limits
-      const data = await fetchAllRowsFromSupabase("checkins", (q) =>
-        q.order("checkin_timestamp", { ascending: false })
+      // Fetch active checkins with slim column projection across pagination limits
+      const data = await fetchAllRowsFromSupabase(
+        "checkins",
+        (q) => q.order("checkin_timestamp", { ascending: false }),
+        CHECKIN_SLIM_COLUMNS
       );
 
       if (Array.isArray(data)) {
@@ -2051,14 +2064,18 @@ async function readMonthlyCheckIns(): Promise<CheckIn[]> {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      let data = await fetchAllRowsFromSupabase("monthly_checkins", (q) =>
-        q.order("checkin_timestamp", { ascending: false })
+      let data = await fetchAllRowsFromSupabase(
+        "monthly_checkins",
+        (q) => q.order("checkin_timestamp", { ascending: false }),
+        CHECKIN_SLIM_COLUMNS
       );
 
       // If monthly_checkins table is empty, check legacy weekly_checkins table
       if (!Array.isArray(data) || data.length === 0) {
-        const weeklyData = await fetchAllRowsFromSupabase("weekly_checkins", (q) =>
-          q.order("checkin_timestamp", { ascending: false })
+        const weeklyData = await fetchAllRowsFromSupabase(
+          "weekly_checkins",
+          (q) => q.order("checkin_timestamp", { ascending: false }),
+          CHECKIN_SLIM_COLUMNS
         );
         if (Array.isArray(weeklyData) && weeklyData.length > 0) {
           data = weeklyData;
@@ -3591,7 +3608,6 @@ app.use(["/api/prayer", "/prayer"], prayerRouter);
  * Includes 8:00 AM hospital duty day cutoff matching, local Cairo calendar matching, and checkin date.
  */
 async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckIn[]> {
-  const monthlyList = await readMonthlyCheckIns();
   const defaultDutyDate = getHospitalDutyDate(new Date());
   let dateToMatch = defaultDutyDate;
   if (targetDateStr) {
@@ -3603,15 +3619,61 @@ async function getMonthlyCheckinsForDate(targetDateStr?: string): Promise<CheckI
     }
   }
 
-  console.log(`[DoctorCall Roster] Querying monthly sheet for exact duty date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
+  let matched: CheckIn[] = [];
+  const now = Date.now();
+  const isMonthlyCacheWarm = Boolean(monthlyCheckinsCache && (now - lastMonthlyFetchTime < MONTHLY_CACHE_TTL));
 
-  // Match checkins strictly by their Monthly Sheet date (getEgyptDateStr, where inputs >= 7 PM belong to next day's sheet)
-  // This prevents next-day pre-registrations (entered after 7 PM on day D for day D+1) from polluting day D's duty roster before 8:00 AM on day D+1.
-  const matched = monthlyList.filter(c => {
-    const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
-    const sheetDate = directDate || getEgyptDateStr(c.timestamp);
-    return sheetDate === dateToMatch;
-  });
+  if (isMonthlyCacheWarm && monthlyCheckinsCache) {
+    console.log(`[DoctorCall Roster] Using warm in-memory monthly cache for duty date "${dateToMatch}"`);
+    matched = monthlyCheckinsCache.filter(c => {
+      const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
+      const sheetDate = directDate || getEgyptDateStr(c.timestamp);
+      return sheetDate === dateToMatch;
+    });
+  } else {
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        // Query ONLY the target date (plus a +/- 1 day timestamp buffer around the date for safety) instead of all 938+ rows
+        const { data, error } = await supabase
+          .from("monthly_checkins")
+          .select(CHECKIN_SLIM_COLUMNS)
+          .eq("checkin_date", dateToMatch)
+          .order("checkin_timestamp", { ascending: false });
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          console.log(`[DoctorCall Roster] Narrow Supabase query returned ${data.length} row(s) for duty date "${dateToMatch}"`);
+          matched = data
+            .map((row: any) => ({
+              id: String(row.doctor_id || "").replace(/^(emp\.|emp)/i, ""),
+              doctorName: row.doctor_name,
+              doctorArabicName: row.doctor_arabic_name || row.doctor_name,
+              department: row.department,
+              shifts: Array.isArray(row.shifts) ? row.shifts : [],
+              timestamp: row.checkin_timestamp,
+              mobileNumber: row.mobile_number || "",
+            }))
+            .filter(c => {
+              const sheetDate = getEgyptDateStr(c.timestamp);
+              return sheetDate === dateToMatch && c.id.toLowerCase().trim() !== "emp";
+            });
+        }
+      } catch (err: any) {
+        console.warn("[DoctorCall Roster] Narrow date query failed, falling back to full monthly read:", err.message);
+      }
+    }
+
+    // Fallback to full readMonthlyCheckIns if narrow query found 0 rows (e.g. legacy rows where checkin_date differed from getEgyptDateStr) or Supabase wasn't used
+    if (matched.length === 0) {
+      const monthlyList = await readMonthlyCheckIns();
+      console.log(`[DoctorCall Roster] Querying monthly sheet for exact duty date "${dateToMatch}" (total monthly records: ${monthlyList.length})`);
+      matched = monthlyList.filter(c => {
+        const directDate = (c as any).checkinDate || (c as any).checkin_date || (c as any).date;
+        const sheetDate = directDate || getEgyptDateStr(c.timestamp);
+        return sheetDate === dateToMatch;
+      });
+    }
+  }
 
   // Deduplicate by normalized doctor ID/name to return unique attending physicians for this day
   // (monthlyList is ordered newest-first, so keep the first/latest entry for that sheet date)
@@ -3701,19 +3763,11 @@ app.get(["/api/doctor-calls", "/doctor-calls"], async (req, res) => {
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   try {
-    // Proactive Green-API Queue Drain:
-    // When viewing doctor calls, automatically poll up to 3 pending notifications from Green-API queue
-    // to catch any messages delivered while serverless lambda was cold or webhooks were delayed
-    try {
-      await pollGreenApiNotifications({
-        getActiveCheckins: async (callDate?: string) => {
-          return getMonthlyCheckinsForDate(callDate);
-        },
-        maxCount: 3
-      });
-    } catch (pollErr: any) {
-      // Non-blocking
-    }
+    // Piggyback a throttled (15s) opportunistic journal poll instead of running an unthrottled queue drain on every UI list refresh
+    await runOpportunisticJournalPoll(
+      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
+      15000
+    ).catch(() => {});
 
     const date = typeof req.query.date === "string" ? req.query.date : undefined;
     const department = typeof req.query.department === "string" ? req.query.department : undefined;

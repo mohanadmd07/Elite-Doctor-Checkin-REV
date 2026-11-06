@@ -14,7 +14,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { normalizeSpecialty, SPECIALTY_OPTIONS } from "../data/specialties.js";
-import { getSupabase } from "../db/supabase.js";
+import { getSupabase, fetchAllRowsFromSupabase } from "../db/supabase.js";
 
 const DATA_DIR = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), "data");
 const DOCTOR_CALLS_FILE = path.join(DATA_DIR, "doctor_calls.json");
@@ -1000,6 +1000,104 @@ export async function runCorruptedCallDatesRepair(): Promise<number> {
   return repairedCount;
 }
 
+function mapRowToDoctorCallRecord(row: any): DoctorCallRecord {
+  return {
+    id: row.id,
+    callDate: row.call_date,
+    createdAt: row.created_at,
+    room: row.room,
+    department: row.department,
+    rawDepartment: row.raw_department,
+    patientName: row.patient_name,
+    patientBarcode: row.patient_barcode,
+    admittingPhysician: row.admitting_physician,
+    callerName: row.caller_name,
+    dispatchedDoctors: row.dispatched_doctors || [],
+    status: row.status,
+    rawMessage: row.raw_message
+  };
+}
+
+/**
+ * Fetches a single doctor call record by its primary key ID without scanning the whole table.
+ */
+export async function getDoctorCallRecordById(callId: string): Promise<DoctorCallRecord | null> {
+  if (!callId) return null;
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("doctor_calls")
+        .select("*")
+        .eq("id", callId)
+        .maybeSingle();
+      if (!error && data) {
+        return mapRowToDoctorCallRecord(data);
+      }
+    } catch (err: any) {
+      console.warn(`[DoctorCalls] Supabase lookup for ${callId} failed, checking local:`, err.message);
+    }
+  }
+  const localCalls = readDoctorCallsLocal();
+  return localCalls.find(c => c.id === callId) || null;
+}
+
+/**
+ * Lightweight deduplication check against Supabase that queries ONLY the candidate IDs (`id` column only)
+ * instead of downloading the entire `doctor_calls` table on every 15-second journal poll.
+ */
+export async function checkPersistedCallIds(
+  candidateCallIds: string[],
+  options?: { skipInMemoryCache?: boolean }
+): Promise<Set<string>> {
+  const persisted = new Set<string>();
+  if (!candidateCallIds || candidateCallIds.length === 0) return persisted;
+
+  // 1. Check in-memory and local file first
+  const localCalls = readDoctorCallsLocal();
+  const localIdSet = new Set(localCalls.map(c => c.id));
+  const remainingToQuery: string[] = [];
+
+  for (const cid of candidateCallIds) {
+    const rawMsgId = cid.startsWith("call_msg_") ? cid.slice("call_msg_".length) : cid;
+    if ((!options?.skipInMemoryCache && hasProcessedMessageId(rawMsgId)) || localIdSet.has(cid)) {
+      persisted.add(cid);
+      markMessageIdProcessed(rawMsgId);
+    } else {
+      remainingToQuery.push(cid);
+    }
+  }
+
+  if (remainingToQuery.length === 0) {
+    return persisted;
+  }
+
+  // 2. Query Supabase for only the unseen candidate IDs (returns ~40 bytes per match instead of ~800 KB full table)
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("doctor_calls")
+        .select("id")
+        .in("id", remainingToQuery);
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          if (row && row.id) {
+            persisted.add(row.id);
+            if (row.id.startsWith("call_msg_")) {
+              markMessageIdProcessed(row.id.slice("call_msg_".length));
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn("[DoctorCalls] Lightweight ID deduplication query failed:", err.message);
+    }
+  }
+
+  return persisted;
+}
+
 export async function getDoctorCallRecords(filter?: {
   date?: string;
   department?: string;
@@ -1017,33 +1115,21 @@ export async function getDoctorCallRecords(filter?: {
 
   if (supabase) {
     try {
-      let query = supabase.from("doctor_calls").select("*").order("created_at", { ascending: false });
-      if (filter?.date) {
-        query = query.eq("call_date", filter.date);
-      }
-      if (filter?.department && filter.department !== "All") {
-        query = query.eq("department", filter.department);
-      }
-      if (filter?.status && filter.status !== "All") {
-        query = query.eq("status", filter.status);
-      }
-      const { data, error } = await query;
-      if (!error && Array.isArray(data)) {
-        calls = data.map(row => ({
-          id: row.id,
-          callDate: row.call_date,
-          createdAt: row.created_at,
-          room: row.room,
-          department: row.department,
-          rawDepartment: row.raw_department,
-          patientName: row.patient_name,
-          patientBarcode: row.patient_barcode,
-          admittingPhysician: row.admitting_physician,
-          callerName: row.caller_name,
-          dispatchedDoctors: row.dispatched_doctors || [],
-          status: row.status,
-          rawMessage: row.raw_message
-        }));
+      const data = await fetchAllRowsFromSupabase("doctor_calls", (q) => {
+        let query = q.order("created_at", { ascending: false });
+        if (filter?.date) {
+          query = query.eq("call_date", filter.date);
+        }
+        if (filter?.department && filter.department !== "All") {
+          query = query.eq("department", filter.department);
+        }
+        if (filter?.status && filter.status !== "All") {
+          query = query.eq("status", filter.status);
+        }
+        return query;
+      });
+      if (Array.isArray(data)) {
+        calls = data.map(mapRowToDoctorCallRecord);
       }
     } catch (err: any) {
       console.warn("[DoctorCalls] Supabase query failed, falling back to local:", err.message);
@@ -1699,22 +1785,12 @@ export async function processDoctorCallWebhook(params: {
   }
 
   // Persistent deduplication check against Supabase / stored records (prevents duplicate dispatch on serverless cold starts & journal polls)
-  // Deduplicates strictly by deterministic message ID (`call_msg_${idMessage}`), and only falls back to rawMessage for legacy records without `call_msg_`
+  // Queries ONLY the specific message ID (`call_msg_${idMessage}`) instead of downloading the entire doctor_calls table
   if (idMessage && !idMessage.startsWith("sim_") && (source === "poll" || Boolean(getSupabase()))) {
     try {
-      const existingCalls = await getDoctorCallRecords();
       const deterministicId = `call_msg_${idMessage}`;
-      const normalizedIncoming = cleanWhatsAppText(messageText).trim();
-      const alreadyPersisted = existingCalls.some(
-        c =>
-          c.id === deterministicId ||
-          (source === "poll" &&
-            !String(c.id || "").startsWith("call_msg_") &&
-            !String(c.id || "").startsWith("call_custom_") &&
-            normalizedIncoming &&
-            cleanWhatsAppText(c.rawMessage || "").trim() === normalizedIncoming)
-      );
-      if (alreadyPersisted) {
+      const persistedSet = await checkPersistedCallIds([deterministicId], { skipInMemoryCache: true });
+      if (persistedSet.has(deterministicId)) {
         markMessageIdProcessed(idMessage);
         return { handled: false, reason: "Duplicate message ID (already persisted in database)" };
       }
@@ -2026,23 +2102,6 @@ export async function pollGreenApiNotifications(params: {
     }
 
     if (journalMessagesMap.size > 0) {
-      // Load persisted records once to deduplicate across serverless cold starts
-      const existingCalls = await getDoctorCallRecords();
-      const existingIds = new Set<string>();
-      const legacyRawMessages = new Set<string>();
-
-      for (const rec of existingCalls) {
-        if (rec.id) {
-          existingIds.add(rec.id);
-          if (rec.id.startsWith("call_msg_")) {
-            markMessageIdProcessed(rec.id.slice("call_msg_".length));
-          } else if (!rec.id.startsWith("call_custom_") && rec.rawMessage) {
-            // Only deduplicate by rawMessage for legacy records that did not store a WhatsApp idMessage
-            legacyRawMessages.add(cleanWhatsAppText(rec.rawMessage).trim());
-          }
-        }
-      }
-
       const targetGroupId = (
         process.env.WHATSAPP_DOCTORS_TARGET_GROUP_ID?.trim() ||
         process.env.WHATSAPP_GROUP_ID?.trim() ||
@@ -2050,11 +2109,11 @@ export async function pollGreenApiNotifications(params: {
       ).toLowerCase();
       const cleanTargetId = targetGroupId.replace(/@(g|c)\.us$/i, "");
 
-      // Filter to only new, unpersisted DoctorCall messages
-      const newCallMessages: any[] = [];
+      // First pass: filter in memory by processedMessageIds, targetGroup exclusion, and DoctorCall format BEFORE touching Supabase!
+      // This ensures non-DoctorCall chat messages and already-seen IDs trigger ZERO database queries.
+      const candidateMessages: any[] = [];
       for (const [msgId, msg] of journalMessagesMap.entries()) {
-        // Skip if already processed in memory or database
-        if (hasProcessedMessageId(msgId) || existingIds.has(`call_msg_${msgId}`)) {
+        if (hasProcessedMessageId(msgId)) {
           continue;
         }
 
@@ -2084,14 +2143,21 @@ export async function pollGreenApiNotifications(params: {
           continue;
         }
 
-        // Skip only if identical raw message was saved under legacy non-idMessage format
-        const normalizedText = cleanWhatsAppText(msgText).trim();
-        if (normalizedText && legacyRawMessages.has(normalizedText)) {
-          markMessageIdProcessed(msgId);
-          continue;
-        }
+        candidateMessages.push(msg);
+      }
 
-        newCallMessages.push(msg);
+      // Second pass: if there are candidate DoctorCall messages not yet in memory, check only their IDs against Supabase
+      const newCallMessages: any[] = [];
+      if (candidateMessages.length > 0) {
+        const candidateIds = candidateMessages.map(m => `call_msg_${m.idMessage}`);
+        const existingIds = await checkPersistedCallIds(candidateIds);
+        for (const msg of candidateMessages) {
+          if (existingIds.has(`call_msg_${msg.idMessage}`)) {
+            markMessageIdProcessed(msg.idMessage);
+            continue;
+          }
+          newCallMessages.push(msg);
+        }
       }
 
       // Sort chronologically (oldest first)
@@ -2132,8 +2198,7 @@ export async function reDispatchDoctorCall(params: {
   record?: DoctorCallRecord;
 }> {
   const { callId, getActiveCheckins } = params;
-  const existingCalls = await getDoctorCallRecords();
-  const target = existingCalls.find(c => c.id === callId);
+  const target = await getDoctorCallRecordById(callId);
 
   if (!target) {
     return { success: false, message: "Doctor call record not found." };

@@ -331,7 +331,30 @@ export default function App() {
   const [callsSearch, setCallsSearch] = useState("");
   const [callsDeptFilter, setCallsDeptFilter] = useState("All");
   const [callsStatusFilter, setCallsStatusFilter] = useState("All");
-  const [callsDateFilter, setCallsDateFilter] = useState("");
+  const [callsDateFilter, setCallsDateFilter] = useState(() => {
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Africa/Cairo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "numeric",
+        hourCycle: "h23"
+      });
+      const parts = formatter.formatToParts(new Date());
+      const year = parts.find(p => p.type === "year")?.value || "";
+      const month = parts.find(p => p.type === "month")?.value || "";
+      const day = parts.find(p => p.type === "day")?.value || "";
+      const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0", 10);
+      const d = new Date(`${year}-${month}-${day}T12:00:00Z`);
+      if (hour < 8) {
+        d.setUTCDate(d.getUTCDate() - 1);
+      }
+      return d.toISOString().split("T")[0];
+    } catch {
+      return "";
+    }
+  });
   const [redispatchingCallId, setRedispatchingCallId] = useState<string | null>(null);
   const [callActionFeedback, setCallActionFeedback] = useState<{ id: string; success: boolean; message: string } | null>(null);
 
@@ -1796,9 +1819,17 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     return () => clearTimeout(timer);
   }, []);
 
-  // Fetch and live-sync current checkins if admin is authenticated (polls every 3 seconds)
+  // Fetch and live-sync current checkins if admin is authenticated (polls every 10 seconds when tab is visible)
   useEffect(() => {
     if (!isAdminAuthenticated) return;
+
+    const refreshRoster = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      fetchCheckins();
+      if (rosterDateFilter) {
+        fetchCheckinsForDate(rosterDateFilter, true);
+      }
+    };
 
     fetchCheckins();
     fetchFullDoctorsDatabase();
@@ -1807,14 +1838,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       fetchCheckinsForDate(rosterDateFilter, true);
     }
 
-    const intervalId = setInterval(() => {
-      fetchCheckins();
-      if (rosterDateFilter) {
-        fetchCheckinsForDate(rosterDateFilter, true);
+    const intervalId = setInterval(refreshRoster, 10000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshRoster();
       }
-    }, 3000);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [isAdminAuthenticated, rosterDateFilter]);
 
   // Global background poller: ensures any open check-in kiosk or browser tab also triggers Green-API journal sync
@@ -1827,39 +1862,56 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     return () => clearInterval(bgPollId);
   }, []);
 
-  // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 4 seconds)
+  // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 10 seconds when tab is visible)
   useEffect(() => {
     if (!isAdminAuthenticated || adminTab !== "calls") return;
+
+    const refreshCallsTab = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      fetchDoctorCalls();
+      fetchAuditLogs();
+    };
 
     fetchDoctorCalls();
     fetchAutomationStatus();
     fetchAuditLogs();
 
-    const intervalId = setInterval(async () => {
-      fetchDoctorCalls();
-      fetchAuditLogs();
-      try {
-        const res = await fetch("/api/doctor-calls/poll", { method: "POST", cache: "no-store" });
-        const json = await res.json();
-        if (json.success && json.handledCount > 0) {
-          fetchDoctorCalls();
-        }
-      } catch (_) {}
-    }, 4000);
+    const intervalId = setInterval(refreshCallsTab, 10000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshCallsTab();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [isAdminAuthenticated, adminTab, callsDateFilter, callsDeptFilter, callsStatusFilter, callsSearch]);
 
-  // Live-sync Prayer Status when on "prayer" tab (polls every 10 seconds)
+  // Live-sync Prayer Status when on "prayer" tab (polls every 10 seconds when tab is visible)
   useEffect(() => {
     if (!isAdminAuthenticated || adminTab !== "prayer") return;
 
-    fetchPrayerStatus();
-    const intervalId = setInterval(() => {
+    const refreshPrayerTab = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       fetchPrayerStatus();
-    }, 10000);
+    };
 
-    return () => clearInterval(intervalId);
+    fetchPrayerStatus();
+    const intervalId = setInterval(refreshPrayerTab, 10000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshPrayerTab();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [isAdminAuthenticated, adminTab]);
 
   // Auto-lookup doctor as they type and fetch autocomplete suggestions

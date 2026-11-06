@@ -52,7 +52,8 @@ export function resetSupabaseClient(): void {
  */
 export async function fetchAllRowsFromSupabase<T = any>(
   tableName: string,
-  applyQuery?: (query: any) => any
+  applyQuery?: (query: any) => any,
+  columns: string = "*"
 ): Promise<T[]> {
   const supabase = getSupabase();
   if (!supabase) return [];
@@ -64,7 +65,7 @@ export async function fetchAllRowsFromSupabase<T = any>(
   while (true) {
     let query = supabase
       .from(tableName)
-      .select("*")
+      .select(columns)
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
     if (applyQuery) {
