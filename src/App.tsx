@@ -3542,7 +3542,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       <Stethoscope className="w-5 h-5" />
                     </div>
                     <div>
-                      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#063b30]">Personnel Check-In</h2>
+                      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#063b30]">Doctors Check-In</h2>
                       <p className="text-xs text-slate-500 font-medium mt-0.5">Search by Employee ID or Name, then select your duty shifts</p>
                     </div>
                   </div>
@@ -3560,7 +3560,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       <label htmlFor="physician-id-input" className="text-xs font-extrabold text-slate-700 uppercase tracking-wider block cursor-pointer">
                         Enter Employee ID or Name
                       </label>
-                      <span className="text-[#084c3e] font-bold text-xs arabic-font">البحث بالاسم أو الرمز الوظيفي</span>
+                      <span className="text-[#084c3e] font-bold text-xs arabic-font">البحث بالإسم او الكود</span>
                     </div>
 
                     <form onSubmit={handleSearchDoctor} className="flex gap-2">
