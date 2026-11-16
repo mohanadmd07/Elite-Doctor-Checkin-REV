@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Hospital,
@@ -18,10 +18,14 @@ import {
   Layers,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Info,
   Moon,
   Sunset,
   Sun,
+  Sunrise,
+  CloudSun,
   CalendarDays,
   FileSpreadsheet,
   X,
@@ -48,12 +52,15 @@ import {
   Activity,
   Eye,
   Edit3,
-  MessageSquare
+  MessageSquare,
+  Command,
+  Ban
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS, SPECIALTY_OPTIONS } from "./data/specialties.js";
 import { useToast } from "./components/common/Toast.tsx";
 import { EmptyState } from "./components/common/EmptyState.tsx";
 import { TableSkeleton, CardGridSkeleton } from "./components/common/TableSkeleton.tsx";
+import { CommandPalette } from "./components/common/CommandPalette.tsx";
 
 // Shift definition
 interface ShiftOption {
@@ -73,7 +80,7 @@ const SHIFT_OPTIONS: ShiftOption[] = [
     labelAr: "مورنينج",
     descriptionEn: "Morning Shift (8:00 AM - 4:00 PM)",
     descriptionAr: "مناوبة صباحية (٨:٠٠ ص - ٤:٠٠ م)",
-    color: "from-sky-400 to-blue-500",
+    color: "bg-sky-50 text-sky-900 border-sky-200",
     icon: Sun
   },
   {
@@ -82,7 +89,7 @@ const SHIFT_OPTIONS: ShiftOption[] = [
     labelAr: "ايڤينينج",
     descriptionEn: "PM Shift (4:00 PM - 12:00 AM)",
     descriptionAr: "مناوبة مسائية (٤:٠٠ م - ١٢:٠٠ ص)",
-    color: "from-amber-500 to-orange-600",
+    color: "bg-amber-50 text-amber-900 border-amber-200",
     icon: Sunset
   },
   {
@@ -91,7 +98,7 @@ const SHIFT_OPTIONS: ShiftOption[] = [
     labelAr: "نايت",
     descriptionEn: "Overnight Duty (12:00 AM - 8:00 AM)",
     descriptionAr: "مناوبة ليلية (١٢:٠٠ ص - ٨:٠٠ ص)",
-    color: "from-indigo-600 to-blue-800",
+    color: "bg-emerald-950 text-emerald-100 border-emerald-900",
     icon: Moon
   }
 ];
@@ -219,6 +226,42 @@ function LiveClock() {
 
 export default function App() {
   const toast = useToast();
+
+  // Convenience & Ergonomics Refs & States
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+  const physicianInputRef = useRef<HTMLInputElement>(null);
+  const submitResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(0);
+  const [adminShiftFilter, setAdminShiftFilter] = useState<string>("All");
+  const [dbPhoneFilter, setDbPhoneFilter] = useState<"all" | "has_phone" | "missing_phone">("all");
+  const [isPhoneManagerExpanded, setIsPhoneManagerExpanded] = useState(false);
+
+  // Live Cairo Shift Recommendation helper
+  const getRecommendedCairoShift = (): string => {
+    try {
+      const hourStr = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Africa/Cairo",
+        hour: "numeric",
+        hour12: false
+      }).format(new Date());
+      const hour = parseInt(hourStr, 10);
+      if (hour >= 8 && hour < 16) return "Morning shift";
+      if (hour >= 16 && hour < 24) return "Evening shift";
+      return "Night shift";
+    } catch {
+      return "Morning shift";
+    }
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Copied", `${label} copied to clipboard.`);
+    } catch {
+      toast.error("Copy Failed", "Could not access clipboard.");
+    }
+  };
 
   // Navigation & Screen states
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -807,12 +850,36 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   };
 
   // Muslim Prayer Times Automation Handlers & Helpers
-  const PRAYER_DISPLAY_MAP: Record<string, { ar: string; en: string; icon: string }> = {
-    Fajr: { ar: "الفجر", en: "Fajr (Dawn)", icon: "🌅" },
-    Dhuhr: { ar: "الظهر", en: "Dhuhr (Noon)", icon: "☀️" },
-    Asr: { ar: "العصر", en: "Asr (Afternoon)", icon: "🌤️" },
-    Maghrib: { ar: "المغرب", en: "Maghrib (Sunset)", icon: "🌇" },
-    Isha: { ar: "العشاء", en: "Isha (Night)", icon: "🌙" },
+  const PRAYER_DISPLAY_MAP: Record<string, { ar: string; en: string; Icon: React.ComponentType<{ className?: string }> }> = {
+    Fajr: { ar: "الفجر", en: "Fajr (Dawn)", Icon: Sunrise },
+    Dhuhr: { ar: "الظهر", en: "Dhuhr (Noon)", Icon: Sun },
+    Asr: { ar: "العصر", en: "Asr (Afternoon)", Icon: CloudSun },
+    Maghrib: { ar: "المغرب", en: "Maghrib (Sunset)", Icon: Sunset },
+    Isha: { ar: "العشاء", en: "Isha (Night)", Icon: Moon },
+  };
+
+  const getNextAlexandriaPrayer = (): { key: string; ar: string; time12: string; minutesLeft: number } | null => {
+    if (!prayerStatus?.today?.times?.length || !prayerStatus?.cairo_time) return null;
+    const [cH, cM] = prayerStatus.cairo_time.split(":").map((v) => parseInt(v, 10));
+    if (isNaN(cH) || isNaN(cM)) return null;
+    const nowMin = cH * 60 + cM;
+    const order = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
+    for (const key of order) {
+      const rec = prayerStatus.today.times.find((t) => t.prayer === key);
+      if (!rec?.prayer_time) continue;
+      const [pH, pM] = rec.prayer_time.split(":").map((v) => parseInt(v, 10));
+      if (isNaN(pH) || isNaN(pM)) continue;
+      const pMin = pH * 60 + pM;
+      if (pMin >= nowMin) {
+        return {
+          key,
+          ar: PRAYER_DISPLAY_MAP[key]?.ar || key,
+          time12: formatPrayer12Hour(rec.prayer_time),
+          minutesLeft: pMin - nowMin
+        };
+      }
+    }
+    return null;
   };
 
   const formatPrayer12Hour = (time24?: string): string => {
@@ -1121,10 +1188,23 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   const [doctorSaveMsg, setDoctorSaveMsg] = useState("");
   const [isDownloadingDatabase, setIsDownloadingDatabase] = useState(false);
 
-  // Global Escape key listener to close any active modal
+  // Global keyboard shortcuts (Escape, Cmd/Ctrl+K Command Palette) & click-outside autocomplete
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        if (isAdminAuthenticated) {
+          e.preventDefault();
+          setIsCommandPaletteOpen((prev) => !prev);
+        }
+        return;
+      }
+
       if (e.key === "Escape") {
+        if (isCommandPaletteOpen) {
+          setIsCommandPaletteOpen(false);
+          return;
+        }
+        if (showSuggestions) setShowSuggestions(false);
         if (showAdminLogin) {
           setShowAdminLogin(false);
           setAdminPasscode("");
@@ -1147,9 +1227,23 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         }
       }
     };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
   }, [
+    isAdminAuthenticated,
+    isCommandPaletteOpen,
+    showSuggestions,
     showAdminLogin,
     deleteConfirmId,
     showResetConfirm,
@@ -1163,6 +1257,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     confirmModalState.isOpen,
     isConfirmingAction
   ]);
+
+  // Auto-focus Check-In input when entering Check-In mode
+  useEffect(() => {
+    if (!isAdminMode && !showAdminLogin && !submitSuccess) {
+      const timer = setTimeout(() => {
+        physicianInputRef.current?.focus();
+      }, 120);
+      return () => clearTimeout(timer);
+    }
+  }, [isAdminMode, showAdminLogin, submitSuccess]);
 
   const handleToggleSelectDoctor = (id: string) => {
     setSelectedDbDoctorIds((prev) =>
@@ -1518,10 +1622,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         }
 
         const matchesDept = dbDeptFilter === "All" || doc.department === dbDeptFilter;
-        return matchesSearch && matchesDept;
+        const hasPhone = Boolean(doc.mobileNumber && doc.mobileNumber.trim() && doc.mobileNumber.trim().toLowerCase() !== "n/a");
+        const matchesPhone =
+          dbPhoneFilter === "all" ||
+          (dbPhoneFilter === "has_phone" && hasPhone) ||
+          (dbPhoneFilter === "missing_phone" && !hasPhone);
+        return matchesSearch && matchesDept && matchesPhone;
       })
       .sort((a, b) => compareDoctorIds(a.id, b.id));
-  }, [fullDoctorList, dbSearch, dbDeptFilter]);
+  }, [fullDoctorList, dbSearch, dbDeptFilter, dbPhoneFilter]);
 
   const duplicateGroups = React.useMemo(() => {
     const map: Record<string, Doctor[]> = {};
@@ -2251,6 +2360,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
   // Clean form and reset states to allow next check-in
   const handleResetForm = () => {
+    if (submitResetTimerRef.current) {
+      clearTimeout(submitResetTimerRef.current);
+      submitResetTimerRef.current = null;
+    }
     setInputId("");
     setSearched(false);
     setFoundDoctor(null);
@@ -2261,6 +2374,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     setSelectedShifts([]);
     setErrorMessage("");
     setSubmitSuccess(null);
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setActiveSuggestionIdx(0);
+    setTimeout(() => physicianInputRef.current?.focus(), 60);
+  };
+
+  // Toggle 24-hour full duty (all 3 shifts) in 1 tap
+  const handleToggle24HourDuty = () => {
+    setErrorMessage("");
+    if (selectedShifts.length === 3) {
+      setSelectedShifts([]);
+    } else {
+      setSelectedShifts(["Morning shift", "Evening shift", "Night shift"]);
+    }
   };
 
   // Handle shifts checkbox select
@@ -2369,7 +2496,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         setSubmitSuccess(data.checkIn);
         fetchCheckins();
         // Play success and after 5 seconds clear the form automatically for the next physician
-        setTimeout(() => {
+        if (submitResetTimerRef.current) {
+          clearTimeout(submitResetTimerRef.current);
+        }
+        submitResetTimerRef.current = setTimeout(() => {
           handleResetForm();
         }, 5000);
       } else {
@@ -3249,19 +3379,31 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       c.doctorArabicName.includes(adminSearch);
     
     const matchesDept = adminDeptFilter === "All" || c.department === adminDeptFilter;
+
+    let matchesShift = true;
+    if (adminShiftFilter !== "All") {
+      if (adminShiftFilter === "24h") {
+        matchesShift =
+          c.shifts.includes("Morning shift") &&
+          c.shifts.includes("Evening shift") &&
+          c.shifts.includes("Night shift");
+      } else {
+        matchesShift = c.shifts.includes(adminShiftFilter);
+      }
+    }
     
-    return matchesSearch && matchesDept;
+    return matchesSearch && matchesDept && matchesShift;
   });
 
   // Departments list for filter dropdown
   const uniqueDepts = Array.from(new Set(activeRosterCheckins.map((c) => c.department)));
 
   return (
-    <div id="app-root" className="min-h-screen bg-[#d2deda] font-sans flex flex-col text-slate-850">
+    <div id="app-root" className="min-h-screen bg-[#e8efec] font-sans flex flex-col text-slate-900">
       
-      {/* Top Navigation Bar in Geometric Balance style */}
+      {/* Top Navigation Bar in Swiss Clinical Ledger style */}
       <header 
-        className="h-20 flex items-center justify-between px-8 bg-[#dae4e1] border-b border-[#cbdad5] shadow-md sticky top-0 z-40 relative overflow-hidden"
+        className="h-20 flex items-center justify-between px-4 sm:px-8 bg-[#dae4e1] border-b border-[#cbdad5] shadow-sm sticky top-0 z-40 relative overflow-hidden"
         style={{ 
           backgroundImage: "url('/header_bg.png')",
           backgroundSize: "cover",
@@ -3270,26 +3412,36 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         }}
       >
         {/* Impeccable contrast scrim: solid medical sage on left for AAA typography readability, transparent center allowing the heartbeat ECG and hospital telemetry artwork to shine clearly, balanced soft tint on right for actions */}
-        <div className="absolute inset-0 bg-gradient-to-r from-[#dae4e1]/95 via-[#dae4e1]/30 to-[#dae4e1]/75 pointer-events-none z-0"></div>
+        <div className="absolute inset-0 bg-gradient-to-r from-[#dae4e1]/95 via-[#dae4e1]/30 to-[#dae4e1]/80 pointer-events-none z-0"></div>
         {/* Subtle hospital tech accent line at top */}
         <div className="absolute top-0 inset-x-0 h-[1.5px] bg-gradient-to-r from-emerald-600/30 via-emerald-400/50 to-emerald-600/30 pointer-events-none z-0"></div>
         
         <div className="flex items-center gap-3 relative z-10">
-          <div className="w-11 h-11 bg-[#063b30] rounded-xl flex items-center justify-center shadow-md border border-emerald-800/10 overflow-hidden p-1">
+          <div className="w-11 h-11 bg-[#063b30] rounded-xl flex items-center justify-center shadow-sm border border-emerald-900/20 overflow-hidden p-1">
             <img src="/elite_logo.png" alt="Elite Hospital Logo" className="w-8 h-8 object-contain" />
           </div>
           <div className="leading-none">
-            <h1 className="text-lg font-black tracking-tight text-[#063b30] uppercase drop-shadow-sm">Mohanad's Elite Doctors' Registry</h1>
-            <p className="text-[10px] text-emerald-800 font-bold tracking-widest uppercase mt-0.5">All rights reserved to Dr. Mohanad El Ma'moun , MSC</p>
+            <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-[#063b30] uppercase">Mohanad's Elite Doctors' Registry</h1>
+            <p className="text-[10px] text-[#084c3e] font-bold tracking-wider uppercase mt-1">All rights reserved to Dr. Mohanad El Ma'moun , MSC</p>
           </div>
         </div>
-        <div className="flex items-center gap-6 relative z-10">
-          <div className="text-right hidden sm:block leading-none">
+        <div className="flex items-center gap-3 sm:gap-5 relative z-10">
+          <div className="text-right hidden md:block leading-none tabular-nums">
             <LiveClock />
           </div>
           {isAdminAuthenticated ? (
             <div className="flex items-center gap-2">
-              <span className="bg-[#e6f2ee] text-[#063b30] text-[10px] font-black px-2.5 py-1 rounded-full border border-[#cbdad5] flex items-center gap-1 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setIsCommandPaletteOpen(true)}
+                className="hidden sm:inline-flex items-center gap-2 px-3 py-2 bg-white/90 hover:bg-white text-[#063b30] border border-[#cbdad5] text-xs font-bold rounded-lg shadow-2xs tactile-press cursor-pointer"
+                title="Open Quick Command Palette (Cmd+K / Ctrl+K)"
+              >
+                <Command className="w-3.5 h-3.5 text-[#084c3e]" />
+                <span>Quick Jump</span>
+                <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-[#f8fbf9] border border-[#cbdad5] rounded text-emerald-900">⌘K</kbd>
+              </button>
+              <span className="bg-[#e6f2ee] text-[#063b30] text-[10px] font-extrabold px-2.5 py-1.5 rounded-full border border-[#b5d6c9] flex items-center gap-1.5 shadow-2xs">
                 <span className="w-1.5 h-1.5 bg-emerald-600 rounded-full animate-pulse"></span>
                 {adminRole === "coordinator" ? "COORDINATOR ACCESS" : "LIVE OVERVIEW"}
               </span>
@@ -3302,7 +3454,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                   setAdminPasscode("");
                   setAdminTab("roster");
                 }}
-                className="px-4 py-2 bg-rose-950/20 hover:bg-rose-950/30 text-rose-800 border border-rose-950/25 text-xs font-bold rounded shadow transition-colors uppercase"
+                className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-200 text-xs font-bold rounded-lg shadow-2xs tactile-press uppercase cursor-pointer"
                 title={adminRole === "coordinator" ? "Logout Coordinator" : "Logout Admin"}
               >
                 {adminRole === "coordinator" ? "COORDINATOR LOGOUT" : "ADMIN LOGOUT"}
@@ -3312,7 +3464,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
             <button
               id="admin-login-trigger"
               onClick={() => setShowAdminLogin(true)}
-              className="px-4 py-2 bg-[#063b30] hover:bg-[#042d24] text-white text-xs font-bold rounded shadow transition-colors uppercase"
+              className="px-4 py-2 bg-[#063b30] hover:bg-[#042d24] text-white text-xs font-bold rounded-lg shadow-sm tactile-press uppercase cursor-pointer"
             >
               ADMIN PANEL
             </button>
@@ -3326,13 +3478,13 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
         {/* Toggle between Patient Check-in and Admin/Coordinator Dashboard if Authenticated */}
         {isAdminAuthenticated && (
           <div className="mb-6 flex justify-center">
-            <div className="bg-[#cbdad5]/40 p-1 rounded-xl flex items-center gap-1 border border-[#cbdad5]">
+            <div className="bg-white/80 backdrop-blur-xs p-1 rounded-xl flex items-center gap-1 border border-[#cbdad5] shadow-2xs">
               <button
                 onClick={() => setIsAdminMode(false)}
-                className={`px-5 py-2 rounded-lg text-xs font-bold uppercase transition-all duration-150 flex items-center gap-2 ${
+                className={`px-5 py-2 rounded-lg text-xs font-bold uppercase tactile-press flex items-center gap-2 cursor-pointer ${
                   !isAdminMode
-                    ? "bg-[#063b30] text-white shadow-sm"
-                    : "text-emerald-900 hover:text-[#063b30]"
+                    ? "bg-[#063b30] text-white shadow-xs"
+                    : "text-emerald-950 hover:bg-[#e6f2ee]/60"
                 }`}
               >
                 <Stethoscope className="w-4 h-4" />
@@ -3346,10 +3498,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     fetchFullDoctorsDatabase(true);
                   }
                 }}
-                className={`px-5 py-2 rounded-lg text-xs font-bold uppercase transition-all duration-150 flex items-center gap-2 ${
+                className={`px-5 py-2 rounded-lg text-xs font-bold uppercase tactile-press flex items-center gap-2 cursor-pointer ${
                   isAdminMode
-                    ? "bg-[#063b30] text-white shadow-sm"
-                    : "text-emerald-900 hover:text-[#063b30]"
+                    ? "bg-[#063b30] text-white shadow-xs"
+                    : "text-emerald-950 hover:bg-[#e6f2ee]/60"
                 }`}
               >
                 {adminRole === "coordinator" ? (
@@ -3376,32 +3528,45 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
             /* ======================================================= */
             <motion.div
               key="checkin-screen"
-              initial={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.25 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
               className="max-w-2xl mx-auto w-full"
             >
-              <div className="bg-white rounded-xl border border-[#cbdad5] p-8 shadow-sm">
+              <div className="bg-white rounded-2xl border border-[#cbdad5] p-6 sm:p-8 shadow-[0_18px_40px_-20px_rgba(6,59,48,0.16)]">
                 
-                <div className="flex items-center gap-2 mb-8 border-l-4 border-[#063b30] pl-4">
-                  <h2 className="text-2xl font-bold text-[#063b30]">Personnel Check-In</h2>
+                <div className="flex items-center justify-between gap-4 pb-5 mb-7 border-b border-[#e4ece9]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#e6f2ee] border border-[#cbdad5] text-[#063b30] flex items-center justify-center shrink-0">
+                      <Stethoscope className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#063b30]">Personnel Check-In</h2>
+                      <p className="text-xs text-slate-500 font-medium mt-0.5">Search by Employee ID or Name, then select your duty shifts</p>
+                    </div>
+                  </div>
+                  <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-bold text-[#063b30] bg-[#f8fbf9] border border-[#cbdad5] px-2.5 py-1 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                    Live Terminal
+                  </span>
                 </div>
 
                 <div className="space-y-6">
 
                   {/* STEP 1: Enter ID / Code */}
-                  <div className="space-y-2">
+                  <div className="space-y-2" ref={searchBoxRef}>
                     <div className="flex justify-between items-center">
                       <label htmlFor="physician-id-input" className="text-xs font-extrabold text-slate-700 uppercase tracking-wider block cursor-pointer">
                         Enter Employee ID or Name
                       </label>
-                      <span className="text-slate-600 font-bold text-xs font-mono">البحث بالاسم أو الرمز الوظيفي</span>
+                      <span className="text-[#084c3e] font-bold text-xs arabic-font">البحث بالاسم أو الرمز الوظيفي</span>
                     </div>
 
                     <form onSubmit={handleSearchDoctor} className="flex gap-2">
                       <div className="relative flex-1">
                         <input
+                           ref={physicianInputRef}
                            id="physician-id-input"
                            type="text"
                            placeholder="e.g. 1498, Beshoy, عمرو..."
@@ -3409,45 +3574,83 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                            onChange={(e) => {
                              setInputId(e.target.value);
                              setErrorMessage("");
+                             setActiveSuggestionIdx(0);
                            }}
-                           onFocus={() => setShowSuggestions(true)}
-                           onBlur={() => setTimeout(() => setShowSuggestions(false), 250)}
+                           onFocus={() => {
+                             if (suggestions.length > 0) setShowSuggestions(true);
+                           }}
+                           onKeyDown={(e) => {
+                             if (!showSuggestions || suggestions.length === 0) return;
+                             if (e.key === "ArrowDown") {
+                               e.preventDefault();
+                               setActiveSuggestionIdx((prev) => (prev + 1) % suggestions.length);
+                             } else if (e.key === "ArrowUp") {
+                               e.preventDefault();
+                               setActiveSuggestionIdx((prev) => (prev - 1 + suggestions.length) % suggestions.length);
+                             } else if (e.key === "Enter" && suggestions[activeSuggestionIdx]) {
+                               e.preventDefault();
+                               const doc = suggestions[activeSuggestionIdx];
+                               setInputId(doc.id);
+                               setFoundDoctor(doc);
+                               setIsManualReg(false);
+                               setSearched(true);
+                               setSuggestions([]);
+                               setShowSuggestions(false);
+                             }
+                           }}
                            disabled={submitting || !!submitSuccess}
-                           className="w-full h-14 px-4 bg-[#fbfdfc] border-2 border-[#cbdad5] rounded-lg text-lg font-sans focus:border-[#063b30] focus:bg-white outline-none transition-all"
+                           className="w-full h-14 pl-4 pr-20 bg-[#f8fbf9] border-2 border-[#cbdad5] rounded-xl text-base sm:text-lg font-sans font-medium focus:border-[#063b30] focus:bg-white outline-none transition-colors"
                         />
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                          <Search className="w-5 h-5" />
+                        <div className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                          {inputId && !submitting && !submitSuccess && (
+                            <button
+                              type="button"
+                              onClick={handleResetForm}
+                              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                              aria-label="Clear search input"
+                              title="Clear"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                          <Search className="w-5 h-5 text-slate-400 pointer-events-none" />
                         </div>
 
                         {/* Search Autocomplete Suggestions Dropdown */}
                         {showSuggestions && suggestions.length > 0 && (
-                          <div className="absolute left-0 right-0 mt-1.5 bg-white border border-[#cbdad5] rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
-                            {suggestions.map((doc, idx) => (
-                              <button
-                                key={`sug-${doc.id}-${idx}`}
-                                type="button"
-                                onClick={() => {
-                                  setInputId(doc.id);
-                                  setFoundDoctor(doc);
-                                  setIsManualReg(false);
-                                  setSearched(true);
-                                  setSuggestions([]);
-                                  setShowSuggestions(false);
-                                }}
-                                className="w-full text-left px-4 py-3 hover:bg-emerald-50/50 transition-colors flex justify-between items-center text-sm"
-                              >
-                                <div className="text-slate-800 font-semibold">
-                                  <div>{doc.name}</div>
-                                  <div className="text-xs text-slate-500 font-normal">{doc.arabicName}</div>
-                                </div>
-                                <div className="text-right">
-                                  <span className="text-[10px] font-black bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full uppercase">
-                                    {doc.department}
-                                  </span>
-                                  <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {doc.id}</div>
-                                </div>
-                              </button>
-                            ))}
+                          <div className="absolute left-0 right-0 mt-1.5 bg-white border border-[#cbdad5] rounded-xl shadow-[0_16px_40px_-12px_rgba(6,59,48,0.22)] z-50 max-h-64 overflow-y-auto divide-y divide-slate-100">
+                            {suggestions.map((doc, idx) => {
+                              const isHighlighted = idx === activeSuggestionIdx;
+                              return (
+                                <button
+                                  key={`sug-${doc.id}-${idx}`}
+                                  type="button"
+                                  onMouseEnter={() => setActiveSuggestionIdx(idx)}
+                                  onClick={() => {
+                                    setInputId(doc.id);
+                                    setFoundDoctor(doc);
+                                    setIsManualReg(false);
+                                    setSearched(true);
+                                    setSuggestions([]);
+                                    setShowSuggestions(false);
+                                  }}
+                                  className={`w-full text-left px-4 py-3 transition-colors flex justify-between items-center text-sm cursor-pointer ${
+                                    isHighlighted ? "bg-[#e6f2ee]/75" : "hover:bg-[#f8fbf9]"
+                                  }`}
+                                >
+                                  <div className="text-slate-900 font-semibold min-w-0 pr-3">
+                                    <div className="truncate">{doc.name}</div>
+                                    <div className="text-xs text-[#084c3e] font-medium arabic-font mt-0.5">{doc.arabicName}</div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <span className="text-[10px] font-extrabold bg-[#e6f2ee] text-[#063b30] px-2.5 py-0.5 rounded-full uppercase border border-[#cbdad5]">
+                                      {doc.department}
+                                    </span>
+                                    <div className="text-[10px] text-slate-600 font-mono tabular-nums mt-1">ID: {doc.id}</div>
+                                  </div>
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -3456,13 +3659,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         id="search-doctor-btn"
                         type="submit"
                         disabled={!inputId.trim() || submitting || !!submitSuccess}
-                        className="h-14 px-6 bg-[#063b30] hover:bg-[#042d24] text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-sm cursor-pointer"
+                        className="h-14 px-5 sm:px-6 bg-[#063b30] hover:bg-[#042d24] text-white font-bold rounded-xl tactile-press flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-xs cursor-pointer"
                       >
                         Find Profile
                       </button>
                     </form>
-
-
                   </div>
 
                   {/* STEP 2: Doctor Profile details (predefined found, or manual entry) */}
@@ -3472,23 +3673,37 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
                         className="overflow-hidden"
                       >
-                        {foundDoctor ? (
-                          /* Predefined Profile Found Visual Card (Geometric Balance) */
-                          <div className="p-6 bg-[#e6f2ee] rounded-xl border border-[#cbdad5] flex items-center justify-between">
-                            <div className="space-y-1">
-                              <h3 className="text-2xl font-bold text-[#063b30]">{foundDoctor.name}</h3>
-                              <p className="text-xl text-emerald-800 font-medium font-arabic arabic-font" dir="rtl">{foundDoctor.arabicName}</p>
+                        {foundDoctor ? (() => {
+                          const existingTodayCheckin = checkins.find(
+                            (c) => c.id.trim().toLowerCase() === foundDoctor.id.trim().toLowerCase()
+                          );
+                          return (
+                            /* Predefined Profile Found Visual Card */
+                            <div className="p-5 sm:p-6 bg-[#e6f2ee] rounded-xl border border-[#b5d6c9] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h3 className="text-xl sm:text-2xl font-extrabold text-[#063b30] tracking-tight">{foundDoctor.name}</h3>
+                                  {existingTodayCheckin && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-white text-[#063b30] border border-[#b5d6c9]">
+                                      <CheckCircle className="w-3 h-3 text-emerald-700" />
+                                      Checked in today ({formatShiftsForDisplay(existingTodayCheckin.shifts)})
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-lg sm:text-xl text-[#084c3e] font-bold arabic-font" dir="rtl">{foundDoctor.arabicName}</p>
+                              </div>
+                              <div className="sm:text-right shrink-0">
+                                <span className="px-3 py-1 bg-white text-[#063b30] border border-[#b5d6c9] text-[10px] font-extrabold rounded-full uppercase tracking-wider font-mono">
+                                  {foundDoctor.department}
+                                </span>
+                                <p className="text-xs text-[#084c3e] mt-2 font-mono font-bold tabular-nums">Physician ID: {foundDoctor.id}</p>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <span className="px-3 py-1 bg-emerald-100 text-emerald-900 text-[10px] font-black rounded-full uppercase tracking-wider font-mono">
-                                {foundDoctor.department}
-                              </span>
-                              <p className="text-xs text-slate-500 mt-2 font-semibold">Physician ID: {foundDoctor.id}</p>
-                            </div>
-                          </div>
-                        ) : isManualReg ? (
+                          );
+                        })() : isManualReg ? (
                           /* Manual Entry Form formatted in Geometric style */
                           <div className="p-6 bg-[#e6f2ee]/50 rounded-xl border border-[#cbdad5] space-y-4">
                             <div className="flex items-center gap-2 text-[#063b30] font-semibold text-sm">
@@ -3548,53 +3763,84 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
                   {/* STEP 3: Shift Selection */}
                   <div className="space-y-3 transition-all duration-200">
-                    <div className="flex justify-between items-end">
-                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                    <div className="flex flex-wrap justify-between items-center gap-2">
+                      <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider block">
                         Shift Assignment (Select Shifts)
                       </label>
-                      <span className="text-xs text-emerald-900 bg-emerald-100 px-2.5 py-0.5 rounded font-bold font-mono">
-                        {selectedShifts.length} / 3 SELECTED
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleToggle24HourDuty}
+                          disabled={submitting || !!submitSuccess}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border tactile-press cursor-pointer flex items-center gap-1.5 disabled:opacity-50 ${
+                            selectedShifts.length === 3
+                              ? "bg-[#063b30] text-white border-[#063b30]"
+                              : "bg-[#f8fbf9] text-[#063b30] border-[#cbdad5] hover:bg-[#e6f2ee]"
+                          }`}
+                          title="Toggle all 3 shifts (24-Hour Full Duty)"
+                        >
+                          <Clock className="w-3 h-3" />
+                          <span>24h Full Duty</span>
+                        </button>
+                        <span className="text-xs text-[#063b30] bg-[#e6f2ee] border border-[#cbdad5] px-2.5 py-1 rounded-lg font-bold font-mono tabular-nums">
+                          {selectedShifts.length} / 3 SELECTED
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {SHIFT_OPTIONS.map((shift, idx) => {
-                        const isSelected = selectedShifts.includes(shift.id);
-                        
-                        return (
-                          <button
-                            id={`shift-card-${shift.id.replace(/\s+/g, "-")}`}
-                            key={`shift-${shift.id}-${idx}`}
-                            type="button"
-                            aria-pressed={isSelected}
-                            onClick={() => handleToggleShift(shift.id)}
-                            className={`flex items-center p-4 rounded-lg border-2 cursor-pointer transition-all duration-200 text-left justify-between ${
-                              isSelected
-                                ? "border-[#063b30] bg-[#e6f2ee]/30 ring-4 ring-[#063b30]/10 text-[#063b30] font-bold"
-                                : "border-[#cbdad5] bg-[#fbfdfc] hover:border-emerald-300 text-slate-600"
-                            }`}
-                          >
-                            <div className="flex items-center">
-                              <div className={`w-5 h-5 rounded-full border-2 mr-3 flex items-center justify-center shrink-0 ${
-                                isSelected ? "border-4 border-[#063b30] bg-white" : "border-slate-300 bg-white"
-                              }`}>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                      {(() => {
+                        const recommendedShiftId = getRecommendedCairoShift();
+                        return SHIFT_OPTIONS.map((shift, idx) => {
+                          const isSelected = selectedShifts.includes(shift.id);
+                          const isRecommended = shift.id === recommendedShiftId;
+                          const ShiftIcon = shift.icon;
+                          
+                          return (
+                            <button
+                              id={`shift-card-${shift.id.replace(/\s+/g, "-")}`}
+                              key={`shift-${shift.id}-${idx}`}
+                              type="button"
+                              aria-pressed={isSelected}
+                              disabled={submitting || !!submitSuccess}
+                              onClick={() => handleToggleShift(shift.id)}
+                              className={`relative flex items-center p-4 rounded-xl border-2 cursor-pointer tactile-press text-left justify-between disabled:opacity-60 ${
+                                isSelected
+                                  ? "border-[#063b30] bg-[#e6f2ee]/60 ring-2 ring-[#063b30]/15 text-[#063b30]"
+                                  : "border-[#cbdad5] bg-[#f8fbf9] hover:border-[#084c3e]/50 hover:bg-white text-slate-700"
+                              }`}
+                            >
+                              {isRecommended && (
+                                <span className="absolute -top-2.5 left-3 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider bg-[#063b30] text-white shadow-2xs">
+                                  Active Now
+                                </span>
+                              )}
+                              <div className="flex items-center min-w-0">
+                                <div className={`w-5 h-5 rounded-full border-2 mr-3 flex items-center justify-center shrink-0 transition-colors ${
+                                  isSelected ? "border-[#063b30] bg-[#063b30] text-white" : "border-slate-300 bg-white"
+                                }`}>
+                                  {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                </div>
+                                <div className="leading-tight min-w-0">
+                                  <span className={`text-sm font-bold flex items-center gap-1.5 ${isSelected ? "text-[#063b30]" : "text-slate-800"}`}>
+                                    <ShiftIcon className="w-3.5 h-3.5 shrink-0 opacity-75" />
+                                    <span className="truncate">{shift.labelEn}</span>
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 block font-medium mt-0.5">{shift.descriptionEn}</span>
+                                </div>
                               </div>
-                              <div className="leading-tight">
-                                <span className={`text-sm font-bold block ${isSelected ? "text-[#063b30]" : "text-slate-800"}`}>{shift.labelEn}</span>
-                                <span className="text-[10px] text-slate-500 block font-medium mt-0.5">{shift.descriptionEn}</span>
-                              </div>
-                            </div>
-                            <span className="font-bold text-xs arabic-font shrink-0 ml-1">{shift.labelAr}</span>
-                          </button>
-                        );
-                      })}
+                              <span className="font-bold text-xs arabic-font shrink-0 ml-2">{shift.labelAr}</span>
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
 
                   {/* Errors / Warnings */}
                   {errorMessage && (
-                    <div role="alert" aria-live="assertive" className="bg-red-50 text-red-800 px-4 py-3 rounded-lg border border-red-200 flex items-start gap-2 text-xs font-semibold">
-                      <AlertCircle className="w-4.5 h-4.5 shrink-0 text-red-600" />
+                    <div role="alert" aria-live="assertive" className="bg-rose-50 text-rose-900 px-4 py-3 rounded-xl border border-rose-200 flex items-start gap-2.5 text-xs font-semibold">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-700 mt-0.5" />
                       <span>{errorMessage}</span>
                     </div>
                   )}
@@ -3603,18 +3849,19 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                   <AnimatePresence>
                     {submitSuccess && (
                       <motion.div
-                        initial={{ opacity: 0, scale: 0.98 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.98 }}
-                        className="bg-[#e6f2ee] text-[#063b30] border border-[#cbdad5] rounded-xl p-6 flex flex-col items-center text-center space-y-3"
+                        initial={{ opacity: 0, scale: 0.97, y: 6 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.97, y: -4 }}
+                        transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
+                        className="bg-[#e6f2ee] text-[#063b30] border border-[#b5d6c9] rounded-xl p-6 flex flex-col items-center text-center space-y-3.5 relative overflow-hidden"
                       >
-                        <div className="w-12 h-12 bg-[#063b30] text-white rounded-full flex items-center justify-center shadow">
-                          <CheckCircle className="w-6 h-6 animate-bounce" />
+                        <div className="w-12 h-12 bg-[#063b30] text-white rounded-2xl flex items-center justify-center shadow-sm">
+                          <CheckCircle className="w-6 h-6" />
                         </div>
                         <div>
-                          <span className="text-[10px] font-black uppercase text-[#063b30] tracking-wider block">Attendance Saved successfully</span>
-                          <h4 className="text-xl font-bold text-slate-900 mt-0.5">Thank you, Dr. {submitSuccess.doctorName}</h4>
-                          <p className="text-slate-600 font-medium text-sm arabic-font mt-0.5" dir="rtl">تم تسجيل حضوركم بنجاح: د. {submitSuccess.doctorArabicName}</p>
+                          <span className="text-[10px] font-extrabold uppercase text-[#084c3e] tracking-widest block">Attendance Saved Successfully</span>
+                          <h4 className="text-xl font-extrabold text-[#063b30] mt-1">Thank you, Dr. {submitSuccess.doctorName}</h4>
+                          <p className="text-[#084c3e] font-bold text-sm arabic-font mt-0.5" dir="rtl">تم تسجيل حضوركم بنجاح: د. {submitSuccess.doctorArabicName}</p>
                           <div className="mt-3 inline-flex gap-1.5 flex-wrap justify-center">
                             {(() => {
                               let displayShifts = [...submitSuccess.shifts];
@@ -3625,25 +3872,57 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                 displayShifts = ["24 shift"];
                               }
                               return displayShifts.map((sh, idx) => (
-                                <span key={`sh-${sh}-${idx}`} className="bg-[#cbdad5] text-[#063b30] px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider font-mono">
+                                <span key={`sh-${sh}-${idx}`} className="bg-white text-[#063b30] border border-[#b5d6c9] px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider font-mono">
                                   {SHIFT_MAP_AR[sh] || sh}
                                 </span>
                               ));
                             })()}
                           </div>
                         </div>
+
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleResetForm}
+                            className="px-4 py-2 bg-[#063b30] hover:bg-[#042d24] text-white text-xs font-bold rounded-lg tactile-press cursor-pointer shadow-2xs"
+                          >
+                            Check In Another Doctor
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (submitResetTimerRef.current) {
+                                clearTimeout(submitResetTimerRef.current);
+                                submitResetTimerRef.current = null;
+                              }
+                              setSubmitSuccess(null);
+                            }}
+                            className="px-4 py-2 bg-white hover:bg-[#f8fbf9] text-[#063b30] border border-[#b5d6c9] text-xs font-bold rounded-lg tactile-press cursor-pointer"
+                          >
+                            Edit My Shifts
+                          </button>
+                        </div>
+
+                        {/* Smooth 5s Auto-Reset Progress Indicator */}
+                        <motion.div
+                          initial={{ scaleX: 1 }}
+                          animate={{ scaleX: 0 }}
+                          transition={{ duration: 5, ease: "linear" }}
+                          style={{ transformOrigin: "left" }}
+                          className="absolute bottom-0 inset-x-0 h-1 bg-[#063b30]/40"
+                        />
                       </motion.div>
                     )}
                   </AnimatePresence>
 
                   {/* Bottom Action buttons */}
-                  <div className="flex gap-3 pt-4 border-t border-slate-100">
+                  <div className="flex gap-3 pt-4 border-t border-[#e4ece9]">
                     <button
                       id="reset-form-btn"
                       type="button"
                       onClick={handleResetForm}
                       disabled={submitting || !inputId}
-                      className="px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs uppercase border border-slate-200 transition-all disabled:opacity-40"
+                      className="px-5 py-3.5 bg-[#f8fbf9] hover:bg-slate-100 text-slate-700 font-bold rounded-xl text-xs uppercase border border-[#cbdad5] tactile-press disabled:opacity-40 cursor-pointer"
                     >
                       Reset Form
                     </button>
@@ -3653,7 +3932,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       type="button"
                       disabled={!inputId.trim() || selectedShifts.length === 0 || submitting || !!submitSuccess}
                       onClick={handleSubmitCheckin}
-                      className="flex-1 h-16 bg-[#7ea198] hover:bg-[#6b8e86] text-white rounded-lg font-bold text-lg tracking-wide transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                      className="flex-1 h-14 sm:h-16 bg-[#063b30] hover:bg-[#042d24] text-white rounded-xl font-extrabold text-base sm:text-lg tracking-wide tactile-press flex items-center justify-center gap-2 disabled:opacity-45 disabled:cursor-not-allowed shadow-sm cursor-pointer"
                     >
                       {submitting ? (
                         <>
@@ -3730,16 +4009,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           setAdminTab("duplicates");
                           fetchFullDoctorsDatabase(true);
                         }}
-                        className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
+                        className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase tactile-press flex items-center gap-2 cursor-pointer ${
                           adminTab === "duplicates"
                             ? "bg-amber-700 text-white shadow-sm"
-                            : "text-slate-600 hover:text-amber-800 hover:bg-amber-50"
+                            : "text-amber-900 hover:bg-amber-50"
                         }`}
                       >
-                        <Copy className="w-4 h-4 text-amber-500" />
+                        <Copy className="w-4 h-4 text-amber-600" />
                         <span>Duplicated IDs</span>
                         {duplicateGroups.length > 0 && (
-                          <span className="ml-1 bg-rose-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                          <span className="ml-1 bg-rose-600 text-white text-[10px] font-mono tabular-nums px-2 py-0.5 rounded-full font-bold shadow-xs">
                             {duplicateGroups.length}
                           </span>
                         )}
@@ -3752,16 +4031,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       setAdminTab("calls");
                       fetchDoctorCalls();
                     }}
-                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
+                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase tactile-press flex items-center gap-2 cursor-pointer ${
                       adminTab === "calls"
-                        ? "bg-[#063b30] text-emerald-300 shadow-sm border border-emerald-600"
-                        : "text-slate-600 hover:text-[#063b30] hover:bg-slate-50"
+                        ? "bg-[#063b30] text-white shadow-sm"
+                        : "text-slate-700 hover:text-[#063b30] hover:bg-[#f8fbf9]"
                     }`}
                   >
-                    <PhoneCall className="w-4 h-4 text-emerald-400" />
+                    <PhoneCall className={`w-4 h-4 ${adminTab === "calls" ? "text-emerald-300" : "text-[#084c3e]"}`} />
                     <span>Doctor Calls</span>
                     {doctorCalls.length > 0 && (
-                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono tabular-nums px-2 py-0.5 rounded-full font-bold shadow-xs">
                         {doctorCalls.length}
                       </span>
                     )}
@@ -3772,20 +4051,20 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       setAdminTab("prayer");
                       fetchPrayerStatus();
                     }}
-                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase transition-all flex items-center gap-2 ${
+                    className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase tactile-press flex items-center gap-2 cursor-pointer ${
                       adminTab === "prayer"
-                        ? "bg-[#063b30] text-emerald-300 shadow-sm border border-emerald-600"
-                        : "text-slate-600 hover:text-[#063b30] hover:bg-slate-50"
+                        ? "bg-[#063b30] text-white shadow-sm"
+                        : "text-slate-700 hover:text-[#063b30] hover:bg-[#f8fbf9]"
                     }`}
                   >
-                    <Moon className="w-4 h-4 text-emerald-400" />
+                    <Moon className={`w-4 h-4 ${adminTab === "prayer" ? "text-emerald-300" : "text-[#084c3e]"}`} />
                     <span>Prayer Times</span>
                     {prayerStatus?.isPaused ? (
-                      <span className="ml-1 bg-amber-500 text-slate-950 text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                      <span className="ml-1 bg-amber-100 text-amber-950 border border-amber-300 text-[10px] font-mono px-2 py-0.5 rounded-full font-bold">
                         PAUSED
                       </span>
                     ) : (
-                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shadow-xs">
+                      <span className="ml-1 bg-emerald-600 text-white text-[10px] font-mono px-2 py-0.5 rounded-full font-bold">
                         LIVE
                       </span>
                     )}
@@ -3841,12 +4120,23 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         <select
                           value={dbDeptFilter}
                           onChange={(e) => setDbDeptFilter(e.target.value)}
-                          className="bg-slate-50 border border-[#cbdad5] text-[#063b30] font-bold text-xs uppercase px-3.5 py-2.5 rounded-lg outline-none focus:border-[#063b30] cursor-pointer"
+                          className="bg-[#f8fbf9] border border-[#cbdad5] text-[#063b30] font-bold text-xs uppercase px-3.5 py-2.5 rounded-lg outline-none focus:border-[#063b30] cursor-pointer"
                         >
                           <option value="All">All Specialities ({fullDoctorList.length})</option>
                           {Array.from(new Set(fullDoctorList.map(d => d.department))).sort().map((dept, idx) => (
                             <option key={`dbdept-${dept}-${idx}`} value={dept}>{dept}</option>
                           ))}
+                        </select>
+
+                        <select
+                          aria-label="Filter by phone coverage"
+                          value={dbPhoneFilter}
+                          onChange={(e) => setDbPhoneFilter(e.target.value as "all" | "has_phone" | "missing_phone")}
+                          className="bg-[#f8fbf9] border border-[#cbdad5] text-[#063b30] font-bold text-xs uppercase px-3 py-2.5 rounded-lg outline-none focus:border-[#063b30] cursor-pointer"
+                        >
+                          <option value="all">All Phones</option>
+                          <option value="has_phone">Has Phone</option>
+                          <option value="missing_phone">Missing Phone</option>
                         </select>
                       </div>
 
@@ -3912,9 +4202,9 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
                   {/* Database Physicians Table */}
                   <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
                       <table className="w-full text-left border-collapse">
-                        <thead>
+                        <thead className="sticky top-0 z-10 shadow-xs">
                           <tr className="bg-[#063b30] text-white text-[11px] font-bold uppercase tracking-wider">
                             <th className="py-3.5 px-4 w-10 text-center">
                               <input
@@ -3983,10 +4273,16 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                       aria-label={`Select Dr. ${doc.name}`}
                                     />
                                   </td>
-                                  <td className="py-3 px-4 font-mono font-bold text-[#063b30]">
-                                    <span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
-                                      {doc.id}
-                                    </span>
+                                  <td className="py-3 px-4 font-mono font-bold text-[#063b30] tabular-nums">
+                                    <button
+                                      type="button"
+                                      onClick={() => copyToClipboard(doc.id, `ID ${doc.id}`)}
+                                      className="bg-[#f8fbf9] hover:bg-[#e6f2ee] border border-[#cbdad5] px-2 py-0.5 rounded inline-flex items-center gap-1 cursor-pointer transition-colors"
+                                      title="Click to copy Employee ID"
+                                    >
+                                      <span>{doc.id}</span>
+                                      <Copy className="w-2.5 h-2.5 opacity-50" />
+                                    </button>
                                   </td>
                                   <td className="py-3 px-4 font-semibold text-slate-900">{doc.name}</td>
                                   <td className="py-3 px-4 text-right font-bold arabic-font text-slate-800" dir="rtl">{doc.arabicName}</td>
@@ -3995,13 +4291,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                       {doc.department}
                                     </span>
                                   </td>
-                                  <td className="py-3 px-4 font-mono">
+                                  <td className="py-3 px-4 font-mono tabular-nums">
                                     {doc.mobileNumber ? (
                                       <div className="flex items-center gap-1.5">
-                                        <span className="text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1 w-fit">
-                                          <Phone className="w-3 h-3 text-emerald-600" />
-                                          {doc.mobileNumber}
-                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => copyToClipboard(doc.mobileNumber || "", `Phone ${doc.mobileNumber}`)}
+                                          className="text-emerald-900 font-bold bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1 w-fit cursor-pointer transition-colors"
+                                          title="Click to copy phone number"
+                                        >
+                                          <Phone className="w-3 h-3 text-emerald-700" />
+                                          <span>{doc.mobileNumber}</span>
+                                        </button>
                                         <button
                                           onClick={() => handleOpenEditDoctor(doc)}
                                           className="p-2 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-[#063b30] hover:bg-slate-100 rounded transition-colors cursor-pointer"
@@ -4276,10 +4577,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                             {doc.department}
                                           </span>
                                         </td>
-                                        <td className="py-3 px-4 font-mono">
+                                        <td className="py-3 px-4 font-mono tabular-nums">
                                           {doc.mobileNumber ? (
-                                            <span className="text-emerald-700 font-semibold">
-                                              📞 {doc.mobileNumber}
+                                            <span className="text-emerald-800 font-semibold inline-flex items-center gap-1">
+                                              <Phone className="w-3 h-3 text-emerald-600" />
+                                              <span>{doc.mobileNumber}</span>
                                             </span>
                                           ) : (
                                             <span className="text-slate-400 italic">No Phone</span>
@@ -4399,10 +4701,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             setCustomCallSuccess(null);
                             fetchCustomCallPreview({ date: dutyDate });
                           }}
-                          className="px-3.5 py-2 bg-gradient-to-r from-emerald-700 to-teal-800 hover:from-emerald-800 hover:to-teal-900 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow-md active:scale-98"
+                          className="px-3.5 py-2 bg-[#063b30] hover:bg-[#042d24] text-white font-bold text-xs rounded-lg tactile-press flex items-center gap-1.5 cursor-pointer shadow-sm"
                           title="Compose and preview a custom inpatient doctor call message"
                         >
-                          <Send className="w-3.5 h-3.5 text-emerald-200" />
+                          <Send className="w-3.5 h-3.5 text-emerald-300" />
                           <span>Send Custom Call</span>
                         </button>
 
@@ -4542,12 +4844,14 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between">
                             <span className="font-semibold text-slate-600">WhatsApp State:</span>
                             {automationStatus?.stateInstance === "authorized" ? (
-                              <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                ✅ Authorized & Linked
+                              <span className="px-2.5 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 inline-flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3 text-emerald-700" />
+                                Authorized & Linked
                               </span>
                             ) : (
-                              <span className="px-2 py-0.5 rounded-full font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                                ❌ {automationStatus?.stateInstance || "Not Connected"}
+                              <span className="px-2.5 py-0.5 rounded-full font-bold bg-rose-100 text-rose-900 border border-rose-300 inline-flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3 text-rose-700" />
+                                {automationStatus?.stateInstance || "Not Connected"}
                               </span>
                             )}
                           </div>
@@ -4556,12 +4860,14 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between">
                             <span className="font-semibold text-slate-600">Dispatcher Queue:</span>
                             {automationStatus?.isPaused ? (
-                              <span className="px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                ⏸️ Paused by Admin
+                              <span className="px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300 inline-flex items-center gap-1">
+                                <Pause className="w-3 h-3 text-amber-700" />
+                                Paused by Admin
                               </span>
                             ) : (
-                              <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                🟢 Active (Ready for Calls)
+                              <span className="px-2.5 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 inline-flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                                Active (Ready for Calls)
                               </span>
                             )}
                           </div>
@@ -4571,11 +4877,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             <div className="text-slate-500 font-sans font-bold text-xs flex items-center justify-between">
                               <span>Green-API Webhook Settings:</span>
                               <div className="flex items-center gap-2">
-                                <span className={automationStatus?.incomingWebhookEnabled ? "text-emerald-600 font-bold" : "text-amber-600 font-bold"}>
-                                  {automationStatus?.incomingWebhookEnabled ? "✅ In: ON" : "⚠️ In: OFF"}
+                                <span className={automationStatus?.incomingWebhookEnabled ? "text-emerald-700 font-bold" : "text-amber-700 font-bold"}>
+                                  {automationStatus?.incomingWebhookEnabled ? "In: ON" : "In: OFF"}
                                 </span>
-                                <span className={automationStatus?.outgoingMessageWebhookEnabled ? "text-emerald-600 font-bold" : "text-amber-600 font-bold"}>
-                                  {automationStatus?.outgoingMessageWebhookEnabled ? "✅ Out: ON" : "⚠️ Out: OFF"}
+                                <span className={automationStatus?.outgoingMessageWebhookEnabled ? "text-emerald-700 font-bold" : "text-amber-700 font-bold"}>
+                                  {automationStatus?.outgoingMessageWebhookEnabled ? "Out: ON" : "Out: OFF"}
                                 </span>
                               </div>
                             </div>
@@ -4590,11 +4896,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             <div className="text-slate-500 font-bold text-xs flex items-center justify-between">
                               <span>Supabase Cloud Database:</span>
                               {automationStatus?.supabaseTableStatus === "ready" ? (
-                                <span className="font-bold text-emerald-600">✅ Table Ready (Persisted)</span>
+                                <span className="font-bold text-emerald-700 inline-flex items-center gap-1">
+                                  <CheckCircle className="w-3 h-3" /> Table Ready (Persisted)
+                                </span>
                               ) : automationStatus?.supabaseTableStatus === "missing_table" ? (
-                                <span className="font-bold text-rose-600">❌ Table "doctor_calls" Missing</span>
+                                <span className="font-bold text-rose-700 inline-flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" /> Table "doctor_calls" Missing
+                                </span>
                               ) : (
-                                <span className="font-bold text-slate-500">Local Only</span>
+                                <span className="font-bold text-slate-600">Local Only</span>
                               )}
                             </div>
                             {automationStatus?.supabaseTableStatus === "missing_table" && (
@@ -5012,7 +5322,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                                 )}
                                               </div>
                                               <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
-                                                <span>📞 {doc.phone || "No phone"}</span>
+                                                <span className="inline-flex items-center gap-1"><Phone className="w-2.5 h-2.5" /> {doc.phone || "No phone"}</span>
                                                 {doc.waPhone && (
                                                   <span className="text-emerald-700 font-mono font-bold">
                                                     @{doc.waPhone}
@@ -5048,21 +5358,32 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                     <MessageSquare className="w-4 h-4 text-emerald-600" />
                                     <span>WhatsApp Group Message Preview</span>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const next = !customCallForm.isEditingMessageText;
-                                      setCustomCallForm(prev => ({
-                                        ...prev,
-                                        isEditingMessageText: next,
-                                        customMessage: next ? (prev.customMessage || customCallPreview?.formattedMessage || "") : (customCallPreview?.formattedMessage || "")
-                                      }));
-                                    }}
-                                    className="text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <Edit3 className="w-3 h-3" />
-                                    <span>{customCallForm.isEditingMessageText ? "Reset to Template" : "Customize Message"}</span>
-                                  </button>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => copyToClipboard(customCallForm.customMessage || customCallPreview?.formattedMessage || "", "WhatsApp message")}
+                                      className="text-slate-600 hover:text-[#063b30] text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                      title="Copy preview message"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                      <span>Copy</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const next = !customCallForm.isEditingMessageText;
+                                        setCustomCallForm(prev => ({
+                                          ...prev,
+                                          isEditingMessageText: next,
+                                          customMessage: next ? (prev.customMessage || customCallPreview?.formattedMessage || "") : (customCallPreview?.formattedMessage || "")
+                                        }));
+                                      }}
+                                      className="text-emerald-700 hover:text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                      <span>{customCallForm.isEditingMessageText ? "Reset to Template" : "Customize Message"}</span>
+                                    </button>
+                                  </div>
                                 </div>
 
                                 <div className="bg-slate-900 rounded-xl p-3 border border-slate-700 space-y-2 text-white">
@@ -5082,7 +5403,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
                                   <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[10px] text-slate-400">
                                     <span>Target Group: {automationStatus?.targetGroup || "Configured WhatsApp Group"}</span>
-                                    <span>⚡ Markdown & Mentions Enabled</span>
+                                    <span>Markdown & Mentions Enabled</span>
                                   </div>
                                 </div>
                               </div>
@@ -5492,6 +5813,19 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                 Feature Flag: OFF
                               </span>
                             )}
+                            {(() => {
+                              const nextPrayer = getNextAlexandriaPrayer();
+                              if (!nextPrayer) return null;
+                              const h = Math.floor(nextPrayer.minutesLeft / 60);
+                              const m = nextPrayer.minutesLeft % 60;
+                              const countdownStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                              return (
+                                <span className="bg-[#063b30] text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5 font-mono tabular-nums">
+                                  <Clock className="w-3 h-3 text-emerald-300" />
+                                  <span>Next: {nextPrayer.key} in {countdownStr}</span>
+                                </span>
+                              );
+                            })()}
                           </div>
                           <p className="text-xs text-slate-500 mt-1">
                             Pre-fetches Alexandria weekly prayer schedule each Friday at 06:00 AM (Africa/Cairo) and broadcasts azan alerts in 12-hour format.
@@ -5673,7 +6007,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                            <span className="text-base">📲</span>
+                            <MessageSquare className="w-4 h-4 text-[#063b30]" />
                             <span>Target WhatsApp Groups Dispatch Selection</span>
                           </h4>
                           <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-100 text-[#063b30] border border-emerald-300 shadow-2xs">
@@ -5747,12 +6081,12 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                               </div>
 
                               {isSelected ? (
-                                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300 shrink-0">
-                                  INCLUDED ✅
+                                <span className="text-[10px] font-bold text-emerald-900 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300 shrink-0 inline-flex items-center gap-1">
+                                  <CheckCircle className="w-3 h-3 text-emerald-700" /> INCLUDED
                                 </span>
                               ) : (
-                                <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full border border-slate-300 shrink-0">
-                                  EXCLUDED ⛔
+                                <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-0.5 rounded-full border border-slate-300 shrink-0 inline-flex items-center gap-1">
+                                  <Ban className="w-3 h-3 text-slate-500" /> EXCLUDED
                                 </span>
                               )}
                             </div>
@@ -5809,8 +6143,9 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           Times in 12-hour format with Arabic period markers (ص / م) and delivery status
                         </p>
                       </div>
-                      <span className="text-xs font-mono font-bold px-3 py-1 bg-white rounded-lg border border-slate-200 text-slate-700 shadow-2xs">
-                        📅 {prayerStatus?.today?.date || "Today"}
+                      <span className="text-xs font-mono font-bold px-3 py-1 bg-white rounded-lg border border-slate-200 text-slate-700 shadow-2xs inline-flex items-center gap-1.5">
+                        <CalendarDays className="w-3.5 h-3.5 text-[#063b30]" />
+                        <span>{prayerStatus?.today?.date || "Today"}</span>
                       </span>
                     </div>
 
@@ -5827,7 +6162,8 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"].map((prayerKey) => {
-                            const info = PRAYER_DISPLAY_MAP[prayerKey] || { ar: prayerKey, en: prayerKey, icon: "🕌" };
+                            const info = PRAYER_DISPLAY_MAP[prayerKey] || { ar: prayerKey, en: prayerKey, Icon: Moon };
+                            const PrayerIcon = info.Icon;
                             const timeRecord = prayerStatus?.today?.times?.find((t) => t.prayer === prayerKey);
                             const notifRecord = prayerStatus?.today?.notifications?.find((n) => n.prayer === prayerKey);
 
@@ -5846,7 +6182,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                             return (
                               <tr key={prayerKey} className="hover:bg-slate-50/80 transition-colors">
                                 <td className="py-3.5 px-4 font-bold text-slate-900 text-sm flex items-center gap-2">
-                                  <span className="text-base">{info.icon}</span>
+                                  <PrayerIcon className="w-4 h-4 text-[#084c3e]" />
                                   <span>{info.ar}</span>
                                 </td>
                                 <td className="py-3.5 px-4 font-mono text-slate-600 font-semibold">
@@ -5905,7 +6241,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     <div className="bg-white rounded-xl border border-[#cbdad5] p-5 shadow-sm space-y-3">
                       <div className="flex items-center justify-between">
                         <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                          <span>💬</span>
+                          <MessageSquare className="w-4 h-4 text-[#063b30]" />
                           <span>WhatsApp Notification Preview (12h Format)</span>
                         </h4>
                         <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
@@ -6178,13 +6514,25 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
               {/* Specialty Attendance Dashboard */}
               <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
-                <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-                  <h3 className="font-extrabold text-slate-950 text-base flex items-center gap-2">
-                    <Stethoscope className="w-4.5 h-4.5 text-[#063b30]" />
-                    <span>Specialty Attendance Dashboard {rosterDateFilter ? `(${rosterDateFilter})` : ""}</span>
-                  </h3>
+                <div className="border-b border-slate-100 pb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-extrabold text-slate-950 text-base flex items-center gap-2">
+                      <Stethoscope className="w-4.5 h-4.5 text-[#063b30]" />
+                      <span>Specialty Attendance Dashboard {rosterDateFilter ? `(${rosterDateFilter})` : ""}</span>
+                    </h3>
+                    {adminDeptFilter !== "All" && (
+                      <button
+                        type="button"
+                        onClick={() => setAdminDeptFilter("All")}
+                        className="text-[10px] font-bold text-[#063b30] bg-[#e6f2ee] hover:bg-[#d5e8e1] px-2.5 py-1 rounded-full border border-[#b5d6c9] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>Filtered: {adminDeptFilter}</span>
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                   <span className="text-[10px] bg-[#e6f2ee] text-[#063b30] font-bold px-2.5 py-1 rounded-full border border-[#cbdad5]">
-                    {uniqueDepts.length} ACTIVE {uniqueDepts.length === 1 ? "SPECIALTY" : "SPECIALTIES"}
+                    {uniqueDepts.length} ACTIVE {uniqueDepts.length === 1 ? "SPECIALTY" : "SPECIALTIES"} • CLICK TO FILTER
                   </span>
                 </div>
 
@@ -6200,6 +6548,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       const deptCheckins = activeRosterCheckins.filter((c) => c.department === dept);
                       const count = deptCheckins.length;
                       const percentage = Math.round((count / activeRosterCheckins.length) * 100);
+                      const isActiveDept = adminDeptFilter === dept;
                       
                       // Find shift counts for this specialty
                       const shiftCounts: { [key: string]: number } = {};
@@ -6210,26 +6559,38 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                       });
 
                       return (
-                        <div 
-                          key={`stat-dept-${dept}-${idx}`} 
-                          className="bg-gradient-to-br from-slate-50 to-white rounded-lg border border-[#cbdad5] p-4 flex flex-col justify-between transition-all hover:shadow-md hover:border-[#063b30]/30"
+                        <button
+                          type="button"
+                          key={`stat-dept-${dept}-${idx}`}
+                          onClick={() => setAdminDeptFilter(isActiveDept ? "All" : dept)}
+                          aria-pressed={isActiveDept}
+                          className={`text-left rounded-xl border p-4 flex flex-col justify-between tactile-press cursor-pointer ${
+                            isActiveDept
+                              ? "bg-[#e6f2ee] border-[#063b30] ring-2 ring-[#063b30]/15 shadow-sm"
+                              : "bg-[#f8fbf9] border-[#cbdad5] hover:bg-white hover:border-[#063b30]/40 hover:shadow-xs"
+                          }`}
                         >
-                          <div className="space-y-2">
-                            <div className="flex items-start justify-between">
-                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block max-w-full truncate" title={dept}>
+                          <div className="space-y-2 w-full">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className={`text-[10px] font-black uppercase tracking-wider block max-w-full truncate ${isActiveDept ? "text-[#063b30]" : "text-slate-500"}`} title={dept}>
                                 {dept}
                               </span>
+                              {isActiveDept && (
+                                <span className="text-[9px] font-extrabold uppercase bg-[#063b30] text-white px-1.5 py-0.5 rounded">
+                                  Active
+                                </span>
+                              )}
                             </div>
                             
                             <div className="flex items-baseline gap-1.5">
-                              <span className="text-2xl font-black text-[#063b30]">{count}</span>
-                              <span className="text-[10px] text-slate-500 font-medium">
+                              <span className="text-2xl font-black text-[#063b30] tabular-nums">{count}</span>
+                              <span className="text-[10px] text-slate-600 font-medium">
                                 {count === 1 ? "doctor" : "doctors"} active
                               </span>
                             </div>
 
                             {/* visual micro progress bar */}
-                            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                            <div className="w-full bg-white rounded-full h-1.5 overflow-hidden border border-[#cbdad5]/60">
                               <div 
                                 className="bg-[#063b30] h-full rounded-full transition-all duration-500" 
                                 style={{ width: `${percentage}%` }}
@@ -6238,21 +6599,21 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           </div>
 
                           {/* Mini breakdown of shifts */}
-                          <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap gap-1.5">
+                          <div className="mt-4 pt-3 border-t border-[#cbdad5]/60 flex flex-wrap gap-1.5 w-full">
                             {Object.entries(shiftCounts).map(([shiftName, shiftCount], idx) => {
                               const labelAr = SHIFT_MAP_AR[shiftName] || shiftName;
                               return (
                                 <span 
                                   key={`stat-shift-${shiftName}-${idx}`} 
-                                  className="text-[9px] bg-slate-100 border border-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded flex items-center gap-1"
+                                  className="text-[9px] bg-white border border-[#cbdad5] text-slate-700 font-bold px-1.5 py-0.5 rounded flex items-center gap-1"
                                 >
                                   <span>{labelAr}:</span>
-                                  <span className="text-[#063b30] font-black">{shiftCount}</span>
+                                  <span className="text-[#063b30] font-black tabular-nums">{shiftCount}</span>
                                 </span>
                               );
                             })}
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -6289,6 +6650,30 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         <option key={`fltr-dept-${d}-${idx}`} value={d}>{d}</option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Shift Filter Pills */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[
+                      { id: "All", label: "All Shifts" },
+                      { id: "Morning shift", label: "Morning" },
+                      { id: "Evening shift", label: "Evening" },
+                      { id: "Night shift", label: "Night" },
+                      { id: "24h", label: "24h Duty" }
+                    ].map((opt) => (
+                      <button
+                        key={`shift-pill-${opt.id}`}
+                        type="button"
+                        onClick={() => setAdminShiftFilter(opt.id)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border tactile-press cursor-pointer ${
+                          adminShiftFilter === opt.id
+                            ? "bg-[#063b30] text-white border-[#063b30]"
+                            : "bg-[#f8fbf9] text-slate-700 border-[#cbdad5] hover:bg-[#e6f2ee]"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Actions (Download report / Reset - Split into Daily & Weekly Operations) */}
@@ -6403,18 +6788,29 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                 </div>
               </div>
 
-              {/* Persistent Physician Directory & Phone Manager Card */}
-              <div className="bg-white rounded-xl border border-[#cbdad5] p-6 shadow-sm space-y-4">
-                <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-                  <h3 className="font-extrabold text-slate-950 text-base flex items-center gap-2">
+              {/* Persistent Physician Directory & Phone Manager Card (Collapsible for faster roster scanning) */}
+              <div className="bg-white rounded-xl border border-[#cbdad5] shadow-sm overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsPhoneManagerExpanded((prev) => !prev)}
+                  className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#f8fbf9] transition-colors cursor-pointer"
+                  aria-expanded={isPhoneManagerExpanded}
+                >
+                  <div className="flex items-center gap-2.5">
                     <Phone className="w-4.5 h-4.5 text-[#063b30]" />
-                    <span>Persistent Physician Phone Database</span>
-                  </h3>
-                  <span className="text-[10px] bg-[#e6f2ee] text-[#063b30] font-bold px-2.5 py-1 rounded-full border border-[#cbdad5]">
-                    DATABASE MANAGEMENT
-                  </span>
-                </div>
+                    <span className="font-extrabold text-slate-950 text-sm sm:text-base">Persistent Physician Phone Database</span>
+                    <span className="text-[10px] bg-[#e6f2ee] text-[#063b30] font-bold px-2.5 py-0.5 rounded-full border border-[#cbdad5]">
+                      QUICK PHONE LOOKUP & UPDATE
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#063b30]">
+                    <span>{isPhoneManagerExpanded ? "Hide" : "Expand"}</span>
+                    {isPhoneManagerExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </div>
+                </button>
 
+                {isPhoneManagerExpanded && (
+                <div className="p-6 pt-2 border-t border-slate-100">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Left Column: Search & Select Doctor */}
                   <div className="space-y-3">
@@ -6516,6 +6912,8 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                     )}
                   </div>
                 </div>
+                </div>
+                )}
               </div>
 
               {/* Check-ins Error Banner */}
@@ -6621,29 +7019,34 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           
                           <div className="space-y-2">
                             {grouped[dept].map((c, cIdx) => (
-                              <div key={`chk-${c.id}-${c.timestamp || ''}-${cIdx}`} className="flex items-center justify-between text-xs p-3 bg-slate-50 hover:bg-slate-100/80 transition-colors rounded border-l-4 border-[#063b30]">
+                              <div key={`chk-${c.id}-${c.timestamp || ''}-${cIdx}`} className="flex items-center justify-between text-xs p-3.5 bg-[#f8fbf9] hover:bg-white transition-colors rounded-xl border border-[#cbdad5]">
                                 <div className="flex flex-col gap-1 min-w-0">
                                   <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-slate-200 text-[10px] shrink-0">{c.id}</span>
-                                    <span className="font-semibold text-slate-800 truncate">{c.doctorName}</span>
+                                    <span className="font-mono font-bold tabular-nums bg-white px-2 py-0.5 rounded border border-[#cbdad5] text-[#063b30] text-[10px] shrink-0">{c.id}</span>
+                                    <span className="font-bold text-slate-900 truncate">{c.doctorName}</span>
                                   </div>
-                                  <div className="flex items-center gap-3 text-[10px] text-slate-600 font-mono pl-0.5 flex-wrap">
+                                  <div className="flex items-center gap-3 text-[10px] text-slate-600 font-mono tabular-nums pl-0.5 flex-wrap">
                                     <div className="flex items-center gap-1">
                                       <Clock className="w-3 h-3 text-[#063b30] opacity-75" />
                                       <span>{formatTimestamp(c.timestamp)}</span>
                                     </div>
                                     <div className="flex items-center gap-1.5">
                                       {c.mobileNumber ? (
-                                        <div className="flex items-center gap-1 text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-                                          <Phone className="w-2.5 h-2.5 text-emerald-600" />
+                                        <button
+                                          type="button"
+                                          onClick={() => copyToClipboard(c.mobileNumber || "", `Phone ${c.mobileNumber}`)}
+                                          className="flex items-center gap-1 text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200 cursor-pointer transition-colors"
+                                          title="Click to copy phone number"
+                                        >
+                                          <Phone className="w-2.5 h-2.5 text-emerald-700" />
                                           <span>{c.mobileNumber}</span>
-                                        </div>
+                                        </button>
                                       ) : (
                                         <span className="text-[9px] text-slate-500 italic bg-slate-100 px-1.5 py-0.5 rounded">No phone</span>
                                       )}
                                       <button
                                         onClick={() => handleEditCheckedInPhone(c.id, c.mobileNumber || "")}
-                                        className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-[#063b30] hover:bg-slate-200/60 rounded transition-colors cursor-pointer"
+                                        className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-[#084c3e] hover:text-[#063b30] hover:bg-[#e6f2ee] rounded transition-colors cursor-pointer"
                                         title="Edit physician phone number"
                                         aria-label={`Edit phone number for Dr. ${c.doctorName}`}
                                       >
@@ -6654,13 +7057,13 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                   <span className="font-bold text-[#063b30] arabic-font" dir="rtl">{c.doctorArabicName}</span>
-                                  <span className="bg-[#e6f2ee] text-[#063b30] px-2 py-0.5 rounded text-[9px] font-bold">
+                                  <span className="bg-[#e6f2ee] text-[#063b30] border border-[#b5d6c9] px-2 py-0.5 rounded text-[9px] font-bold">
                                     {formatShiftsForDisplay(c.shifts)}
                                   </span>
                                   <button
                                     id={`edit-checkin-btn-${c.id}`}
                                     onClick={() => handleOpenEditCheckinModal(c)}
-                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-600 hover:text-[#063b30] hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-[#063b30] hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
                                     title="Edit physician check-in details (Name, Specialty, Shifts, Phone, Date)"
                                     aria-label={`Edit check-in for Dr. ${c.doctorName}`}
                                   >
@@ -6668,7 +7071,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                                   </button>
                                   <button
                                     onClick={() => handleDeleteCheckin(c.id, c.timestamp)}
-                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                    className="p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center text-rose-700 hover:text-rose-800 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
                                     title="Delete physician check-in"
                                     aria-label={`Delete check-in for Dr. ${c.doctorName}`}
                                   >
@@ -7688,6 +8091,42 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global Quick-Jump Command Palette (Cmd+K / Ctrl+K) */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        adminRole={adminRole}
+        doctors={fullDoctorList}
+        onNavigateTab={(tab) => {
+          setIsAdminMode(true);
+          setAdminTab(tab);
+          if (tab === "database" || tab === "duplicates") fetchFullDoctorsDatabase(true);
+          if (tab === "calls") fetchDoctorCalls();
+          if (tab === "prayer") fetchPrayerStatus();
+        }}
+        onSwitchToCheckin={() => setIsAdminMode(false)}
+        onOpenAddCheckin={() => {
+          setIsAdminMode(true);
+          setAdminTab("roster");
+          handleOpenAddCheckinModal();
+        }}
+        onOpenCustomCall={() => {
+          setIsAdminMode(true);
+          setAdminTab("calls");
+          const dutyDate = getHospitalDutyDateClient();
+          setCustomCallForm((prev) => ({ ...prev, date: dutyDate }));
+          setShowCustomCallModal(true);
+          setCustomCallSuccess(null);
+          fetchCustomCallPreview({ date: dutyDate });
+        }}
+        onDownloadDailyXls={() => downloadCSVReport()}
+        onSelectDoctor={(doc) => {
+          setIsAdminMode(true);
+          setAdminTab("database");
+          handleOpenEditDoctor(doc);
+        }}
+      />
 
       {/* Footer Bar in Geometric Balance style */}
       <footer className="h-10 bg-[#cbdad5] flex items-center px-8 border-t border-[#b2c8c0] justify-between text-[10px] text-[#063b30] font-semibold">
