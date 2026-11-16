@@ -3569,7 +3569,6 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                            ref={physicianInputRef}
                            id="physician-id-input"
                            type="text"
-                           placeholder="e.g. 1498, Beshoy, عمرو..."
                            value={inputId}
                            onChange={(e) => {
                              setInputId(e.target.value);
