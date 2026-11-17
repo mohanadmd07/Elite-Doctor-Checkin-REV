@@ -125,9 +125,9 @@ describe("Telegram Bot Service", () => {
       expect(result.action).toBe("dispatched");
       expect(result.replyText).toBe("Call Dispached");
 
-      // Verify record logged for Admin Dashboard states "Telegram Call"
+      // Verify record logged for Admin Dashboard states "Elite Patient" & "Telegram Call"
       expect(result.callRecord).toBeDefined();
-      expect(result.callRecord?.patientName).toBe("Telegram Call");
+      expect(result.callRecord?.patientName).toBe("Elite Patient");
       expect(result.callRecord?.callerName).toBe("Telegram Call");
       expect(result.callRecord?.department).toBe("General Surgery");
       expect(result.callRecord?.room).toBe("324");
@@ -216,7 +216,7 @@ describe("Telegram Bot Service", () => {
       expect(result.handled).toBe(true);
       expect(result.action).toBe("no_doctor_present");
       expect(saveSpy).toHaveBeenCalledTimes(1);
-      expect(saveSpy.mock.calls[0][0].patientName).toBe("Telegram Call");
+      expect(saveSpy.mock.calls[0][0].patientName).toBe("Elite Patient");
       expect(saveSpy.mock.calls[0][0].callerName).toBe("Telegram Call");
       expect(saveSpy.mock.calls[0][0].status).toBe("no_doctor_present");
 
