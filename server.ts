@@ -30,6 +30,7 @@ import {
   runCorruptedCallDatesRepair
 } from "./src/services/doctorCallDispatcher.js";
 import { prayerRouter } from "./src/routes/prayerRoutes.js";
+import { createTelegramRouter } from "./src/routes/telegramRoutes.js";
 
 // In-memory cache for latest client-rendered Retina header image
 let LATEST_RENDERED_HEADER_BASE64: string | null = null;
@@ -3597,6 +3598,12 @@ app.get(["/api/cron/send-daily-sheet", "/cron/send-daily-sheet"], async (req, re
 
 // Muslim Prayer-Time WhatsApp Notifications (Alexandria, Egypt)
 app.use(["/api/prayer", "/prayer"], prayerRouter);
+
+// Telegram Bot Doctor Call Dispatcher
+app.use(
+  ["/api/telegram", "/telegram"],
+  createTelegramRouter(async (callDate?: string) => getMonthlyCheckinsForDate(callDate))
+);
 
 // =========================================================================
 // WHATSAPP DOCTOR CALL AUTOMATION & DISPATCH WEBHOOK
