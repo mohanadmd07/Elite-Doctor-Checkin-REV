@@ -31,6 +31,7 @@ describe("Telegram Bot Service", () => {
         rawDepartment: "general surgery",
         canonicalDepartment: "General Surgery",
         room: "ER",
+        isOpd: false,
         notes: undefined,
       });
     });
@@ -41,6 +42,7 @@ describe("Telegram Bot Service", () => {
         rawDepartment: "general surgery",
         canonicalDepartment: "General Surgery",
         room: "324",
+        isOpd: false,
         notes: undefined,
       });
     });
@@ -51,6 +53,27 @@ describe("Telegram Bot Service", () => {
         rawDepartment: "general surgery",
         canonicalDepartment: "General Surgery",
         room: "411",
+        isOpd: false,
+        notes: undefined,
+      });
+    });
+
+    it("parses OPD commands ('call cardiology to OPD' and 'call cardiology to OPD cardiology center')", () => {
+      const opdPlain = parseTelegramCallCommand("call cardiology to OPD");
+      expect(opdPlain).toEqual({
+        rawDepartment: "cardiology",
+        canonicalDepartment: "Cardiology",
+        room: "OPD",
+        isOpd: true,
+        notes: undefined,
+      });
+
+      const opdCenter = parseTelegramCallCommand("call cardiology to OPD cardiology center");
+      expect(opdCenter).toEqual({
+        rawDepartment: "cardiology",
+        canonicalDepartment: "Cardiology",
+        room: "OPD Cardiology Center",
+        isOpd: true,
         notes: undefined,
       });
     });
@@ -249,6 +272,53 @@ describe("Telegram Bot Service", () => {
 
       expect(result.handled).toBe(false);
       expect(result.action).toBe("unauthorized");
+    });
+
+    it("dispatches OPD template with stethoscope+siren header, bold location, and 'OPD Patient'", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, idMessage: "wa-opd-1", result: { message_id: 21 } }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      vi.spyOn(doctorCallDispatcher, "recordWebhookAuditLog").mockImplementation(() => {});
+      vi.spyOn(doctorCallDispatcher, "isAutomationPaused").mockReturnValue(false);
+
+      const getActiveCheckins = vi.fn().mockResolvedValue([
+        {
+          id: "202",
+          doctorName: "Sara Ali",
+          department: "Cardiology",
+          shifts: ["24 shift"],
+          mobileNumber: "01099998888",
+        },
+      ]);
+
+      const update: TelegramUpdate = {
+        update_id: 5004,
+        message: {
+          message_id: 20,
+          chat: { id: 777888, type: "private" },
+          text: "call cardiology to OPD cardiology center",
+        },
+      };
+
+      const result = await processTelegramWebhookUpdate({ update, getActiveCheckins });
+
+      expect(result.handled).toBe(true);
+      expect(result.action).toBe("dispatched");
+      expect(result.replyText).toBe("Call Dispached");
+      expect(result.callRecord?.patientName).toBe("OPD Patient");
+      expect(result.callRecord?.callerName).toBe("Telegram Call");
+      expect(result.callRecord?.room).toBe("OPD Cardiology Center");
+
+      const waBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(waBody.message).toContain("🩺🚨 *OPD DOCTOR CALL* 🚨🩺");
+      expect(waBody.message).toContain("📍 *Location:* *OPD Cardiology Center*");
+      expect(waBody.message).toContain("🩺 *Specialty:* Cardiology");
+      expect(waBody.message).toContain("👤 *Patient:* OPD Patient");
+      expect(waBody.message).toContain("@201099998888");
+      expect(waBody.message).toContain("01099998888");
     });
   });
 });

@@ -18,12 +18,14 @@ import {
   recordWebhookAuditLog,
   isAutomationPaused,
   type DoctorCallRecord,
+  type DispatchedDoctorInfo,
 } from "./doctorCallDispatcher.js";
 
 export interface ParsedTelegramCallCommand {
   rawDepartment: string;
   canonicalDepartment: string;
   room: string;
+  isOpd: boolean;
   notes?: string;
 }
 
@@ -141,10 +143,74 @@ function resolveTelegramSpecialty(rawDept: string): { active: boolean; departmen
 }
 
 /**
+ * Formats a multi-word OPD location string so "OPD" stays uppercase
+ * and subsequent words are title-cased (e.g. "opd cardiology center" -> "OPD Cardiology Center").
+ */
+function formatOpdLocation(rawLocation: string): string {
+  const words = rawLocation.trim().split(/\s+/).filter(Boolean);
+  return words
+    .map((word, idx) => {
+      if (idx === 0 || word.toLowerCase() === "opd") return "OPD";
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+/**
+ * Formats the WhatsApp alert message for OPD Doctor Calls.
+ */
+export function formatOpdDoctorCallAlert(params: {
+  doctors: DispatchedDoctorInfo[];
+  specialty: string;
+  location: string;
+  notes?: string;
+  isOffShiftCoverage?: boolean;
+}): string {
+  const { doctors, specialty, location, notes, isOffShiftCoverage } = params;
+  const coverageNote = isOffShiftCoverage ? ` _(On-duty coverage)_` : "";
+  const notesLine = notes ? `📝 *Notes:* ${notes}\n` : "";
+
+  if (doctors.length === 1) {
+    const doc = doctors[0];
+    const mentionTag = doc.waPhone ? `@${doc.waPhone}` : "";
+    const phoneDisplay = doc.phone || "N/A";
+
+    return (
+      `🩺🚨 *OPD DOCTOR CALL* 🚨🩺\n` +
+      `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*${coverageNote}\n\n` +
+      `📍 *Location:* *${location}*\n` +
+      `🩺 *Specialty:* ${specialty}\n` +
+      `👤 *Patient:* OPD Patient\n` +
+      `📞 *Phone:* ${phoneDisplay}\n` +
+      notesLine + `\n` +
+      `⚡ _Please attend to the patient promptly._`
+    );
+  }
+
+  const mentionsLine = doctors
+    .map((d) => `Dr. ${d.waPhone ? `@${d.waPhone}` : ""} *${d.name}*`)
+    .join(" & ");
+  const phonesLine = doctors.map((d) => d.phone || "N/A").join(", ");
+
+  return (
+    `🩺🚨 *OPD DOCTOR CALL* 🚨🩺\n` +
+    `👨‍⚕️ ${mentionsLine}${coverageNote}\n\n` +
+    `📍 *Location:* *${location}*\n` +
+    `🩺 *Specialty:* ${specialty}\n` +
+    `👤 *Patient:* OPD Patient\n` +
+    `📞 *Phones:* ${phonesLine}\n` +
+    notesLine + `\n` +
+    `⚡ _Please attend to the patient promptly._`
+  );
+}
+
+/**
  * Parses natural-language Telegram doctor call commands such as:
  * - "call general surgery to ER"
  * - "call general surgery to 324"
  * - "call general surgery to 411"
+ * - "call cardiology to OPD"
+ * - "call cardiology to OPD cardiology center"
  * - "/call cardiology to room 325"
  * - "استدعاء جراحة عامة الى 324"
  */
@@ -158,7 +224,32 @@ export function parseTelegramCallCommand(rawText: string): ParsedTelegramCallCom
 
   if (!text) return null;
 
-  // English pattern: (call | /call | /call@bot | page | please call) <specialty> (to|in|at|for|room) [room|bed] <room> [optional notes]
+  // 1. Check OPD pattern first (allows multi-word OPD locations like "OPD cardiology center")
+  const opdEnMatch = text.match(
+    /^(?:\/?call(?:@\w+)?|please\s+call|page)\s+(.+?)\s+(?:to|in|at|for)\s+(opd(?:\s+[^-–—:,\n]+)?)(?:\s*[-–—:,]\s*(.+))?$/i
+  );
+  const opdArMatch = !opdEnMatch
+    ? text.match(
+        /^(?:\/?استدعاء|نداء)\s+(.+?)\s+(?:الى|إلى|لـ|ل|بقسم)\s+(opd(?:\s+[^-–—:,\n]+)?)(?:\s*[-–—:,]\s*(.+))?$/i
+      )
+    : null;
+
+  const opdMatch = opdEnMatch || opdArMatch;
+  if (opdMatch) {
+    const rawDepartment = opdMatch[1].trim();
+    const resolved = resolveTelegramSpecialty(rawDepartment);
+    if (!resolved.active) return null;
+
+    return {
+      rawDepartment,
+      canonicalDepartment: resolved.department,
+      room: formatOpdLocation(opdMatch[2]),
+      isOpd: true,
+      notes: opdMatch[3]?.trim() || undefined,
+    };
+  }
+
+  // 2. Standard inpatient room pattern: (call | /call | /call@bot | page | please call) <specialty> (to|in|at|for) [room|bed] <room> [optional notes]
   const enMatch = text.match(
     /^(?:\/?call(?:@\w+)?|please\s+call|page)\s+(.+?)\s+(?:to|in|at|for)\s+(?:(?:room|bed)\s+)?([a-z0-9\-\/]+)(?:\s*[-–—:,]\s*(.+))?$/i
   );
@@ -190,6 +281,7 @@ export function parseTelegramCallCommand(rawText: string): ParsedTelegramCallCom
     rawDepartment,
     canonicalDepartment: resolved.department,
     room,
+    isOpd: false,
     notes,
   };
 }
@@ -360,6 +452,9 @@ export async function processTelegramWebhookUpdate(params: {
     return { handled: false, action: "ignored" };
   }
 
+  const patientLabel = parsed.isOpd ? "OPD Patient" : "Elite Patient";
+  const locationDisplay = parsed.isOpd ? parsed.room : `Room ${parsed.room}`;
+
   // Respect Admin Panel Pause toggle
   if (isAutomationPaused()) {
     const now = new Date();
@@ -374,7 +469,7 @@ export async function processTelegramWebhookUpdate(params: {
       room: parsed.room,
       department: parsed.canonicalDepartment,
       rawDepartment: parsed.rawDepartment,
-      patientName: "Elite Patient",
+      patientName: patientLabel,
       patientBarcode: "N/A",
       admittingPhysician: "N/A",
       callerName: "Telegram Call",
@@ -409,7 +504,7 @@ export async function processTelegramWebhookUpdate(params: {
       room: parsed.room,
       department: parsed.canonicalDepartment,
       rawDepartment: parsed.rawDepartment,
-      patientName: "Elite Patient",
+      patientName: patientLabel,
       patientBarcode: "N/A",
       admittingPhysician: "N/A",
       callerName: "Telegram Call",
@@ -428,23 +523,34 @@ export async function processTelegramWebhookUpdate(params: {
       textSnippet: text.slice(0, 120),
       handled: true,
       status: "no_doctor_present",
-      reason: `No doctor checked in on shift for ${parsed.canonicalDepartment} (Room ${parsed.room})`,
+      reason: `No doctor checked in on shift for ${parsed.canonicalDepartment} (${locationDisplay})`,
       matchedDoctors: [],
     });
 
-    const replyText = `No doctor currently checked in on shift for ${parsed.canonicalDepartment} (Room ${parsed.room}).`;
+    const replyText = `No doctor currently checked in on shift for ${parsed.canonicalDepartment} (${locationDisplay}).`;
     await sendTelegramMessage({ chatId, text: replyText, replyToMessageId: messageId });
     return { handled: true, action: "no_doctor_present", replyText, callRecord: record };
   }
 
   // 3. Dispatch to WhatsApp via Green-API and log to Supabase + local JSON as "Telegram Call"
+  const customMessage = parsed.isOpd
+    ? formatOpdDoctorCallAlert({
+        doctors: preview.matchingDoctors,
+        specialty: parsed.canonicalDepartment,
+        location: parsed.room,
+        notes: parsed.notes,
+        isOffShiftCoverage: preview.isOffShiftCoverage,
+      })
+    : undefined;
+
   const dispatchRes = await sendCustomDoctorCall({
     payload: {
       room: parsed.room,
       department: parsed.canonicalDepartment,
-      patientName: "Elite Patient",
+      patientName: patientLabel,
       callerName: "Telegram Call",
       notes: parsed.notes,
+      customMessage,
     },
     getActiveCheckins,
   });
