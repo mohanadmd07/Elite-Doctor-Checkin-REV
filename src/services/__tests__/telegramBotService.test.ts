@@ -313,7 +313,7 @@ describe("Telegram Bot Service", () => {
       expect(result.callRecord?.room).toBe("OPD Cardiology Center");
 
       const waBody = JSON.parse(fetchMock.mock.calls[0][1].body);
-      expect(waBody.message).toContain("🩺🚨 *OPD DOCTOR CALL* 🚨🩺");
+      expect(waBody.message).toContain("🩺 *OPD DOCTOR CALL* 🩺");
       expect(waBody.message).toContain("📍 *Location:* *OPD Cardiology Center*");
       expect(waBody.message).toContain("🩺 *Specialty:* Cardiology");
       expect(waBody.message).toContain("👤 *Patient:* OPD Patient");

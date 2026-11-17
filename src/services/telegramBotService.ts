@@ -176,7 +176,7 @@ export function formatOpdDoctorCallAlert(params: {
     const phoneDisplay = doc.phone || "N/A";
 
     return (
-      `🩺🚨 *OPD DOCTOR CALL* 🚨🩺\n` +
+      `🩺 *OPD DOCTOR CALL* 🩺\n` +
       `👨‍⚕️ Dr. ${mentionTag} *${doc.name}*${coverageNote}\n\n` +
       `📍 *Location:* *${location}*\n` +
       `🩺 *Specialty:* ${specialty}\n` +
@@ -193,7 +193,7 @@ export function formatOpdDoctorCallAlert(params: {
   const phonesLine = doctors.map((d) => d.phone || "N/A").join(", ");
 
   return (
-    `🩺🚨 *OPD DOCTOR CALL* 🚨🩺\n` +
+    `🩺 *OPD DOCTOR CALL* 🩺\n` +
     `👨‍⚕️ ${mentionsLine}${coverageNote}\n\n` +
     `📍 *Location:* *${location}*\n` +
     `🩺 *Specialty:* ${specialty}\n` +
