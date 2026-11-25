@@ -1,8 +1,70 @@
 [
   {
-    "id": "log_1792277322466_psqi",
-    "timestamp": "2026-10-17T22:48:42.466Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607128481_wcja",
+    "timestamp": "2026-11-25T11:45:28.481Z",
+    "displayTime": "1:45:28 PM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Ward Nurse\nDate: 11/1/2026, 12:30:00 AM\nLocation: Eli",
+    "handled": true,
+    "status": "failed",
+    "reason": "Green-API dispatch failed: {}",
+    "matchedDoctors": [
+      "Dr. Oct31 Night Surgeon"
+    ]
+  },
+  {
+    "id": "log_1795607128364_6gyf",
+    "timestamp": "2026-11-25T11:45:28.363Z",
+    "displayTime": "1:45:28 PM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\nCategory: DoctorCall\nGroup: القلب والأوعية الدموية\nBy: Ward Nurse\nDate: 14/10/2026 10:00:00 AM\nLocation: E",
+    "handled": true,
+    "status": "failed",
+    "reason": "Green-API dispatch failed: {}",
+    "matchedDoctors": [
+      "Dr. Cardiologist OnDuty"
+    ]
+  },
+  {
+    "id": "log_1795607128250_vzfu",
+    "timestamp": "2026-11-25T11:45:28.250Z",
+    "displayTime": "1:45:28 PM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\nCategory: DoctorCall\nGroup: الباطنة العامة\nBy: Night Nurse\nDate: 14/10/2026 9:15:00 م\nLocation: Elite 2nd ",
+    "handled": true,
+    "status": "no_doctor_present",
+    "reason": "No doctor registered/checked-in today for Internal Medicine",
+    "matchedDoctors": []
+  },
+  {
+    "id": "log_1795607128243_sb57",
+    "timestamp": "2026-11-25T11:45:28.243Z",
+    "displayTime": "1:45:28 PM",
+    "source": "webhook",
+    "senderChatId": "120363345000178212@g.us",
+    "senderName": "Elite Hospital",
+    "typeWebhook": "incomingMessageReceived",
+    "textSnippet": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Nurse Station\nDate: 14/10/2026 8:30:00 م\nLocation: Elite 3r",
+    "handled": true,
+    "status": "failed",
+    "reason": "Green-API dispatch failed: {}",
+    "matchedDoctors": [
+      "Dr. Night Surgeon"
+    ]
+  },
+  {
+    "id": "log_1795607127858_db39",
+    "timestamp": "2026-11-25T11:45:27.858Z",
+    "displayTime": "1:45:27 PM",
     "source": "poll",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -16,9 +78,9 @@
     ]
   },
   {
-    "id": "log_1792277322454_v48w",
-    "timestamp": "2026-10-17T22:48:42.454Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127844_whnd",
+    "timestamp": "2026-11-25T11:45:27.844Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "quotaExceeded",
     "senderName": "",
@@ -28,9 +90,9 @@
     "reason": "Green-API quotaExceeded webhook received (active webhook chats: 120363041612395794@g.us, 201203886997-1605102717@g.us, 201000000001@c.us) — fetching source group messages via Journal API"
   },
   {
-    "id": "log_1792277322454_k8qe",
-    "timestamp": "2026-10-17T22:48:42.454Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127843_celj",
+    "timestamp": "2026-11-25T11:45:27.843Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "999999999999@g.us",
     "senderName": "Random Group",
@@ -40,9 +102,9 @@
     "reason": "Ignored message from chat 999999999999@g.us (monitored: 120363345000178212@g.us)"
   },
   {
-    "id": "log_1792277322453_1qag",
-    "timestamp": "2026-10-17T22:48:42.453Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127843_d1mk",
+    "timestamp": "2026-11-25T11:45:27.842Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Hospital Group",
@@ -56,9 +118,9 @@
     ]
   },
   {
-    "id": "log_1792277322452_bytw",
-    "timestamp": "2026-10-17T22:48:42.452Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127841_v3cy",
+    "timestamp": "2026-11-25T11:45:27.841Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -72,9 +134,9 @@
     ]
   },
   {
-    "id": "log_1792277322451_evbq",
-    "timestamp": "2026-10-17T22:48:42.451Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127840_aa05",
+    "timestamp": "2026-11-25T11:45:27.840Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -88,9 +150,9 @@
     ]
   },
   {
-    "id": "log_1792277322450_e3an",
-    "timestamp": "2026-10-17T22:48:42.450Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127837_ap0u",
+    "timestamp": "2026-11-25T11:45:27.837Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
@@ -104,19 +166,17 @@
     ]
   },
   {
-    "id": "log_1792277322447_qumn",
-    "timestamp": "2026-10-17T22:48:42.447Z",
-    "displayTime": "1:48:42 AM",
+    "id": "log_1795607127835_rpfy",
+    "timestamp": "2026-11-25T11:45:27.835Z",
+    "displayTime": "1:45:27 PM",
     "source": "webhook",
     "senderChatId": "120363345000178212@g.us",
     "senderName": "Elite Hospital",
     "typeWebhook": "textMessage",
     "textSnippet": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy Salama Elsayed\n\nDate: 14/10/2026 9:23:12 م\n\n",
     "handled": true,
-    "status": "failed",
-    "reason": "WHATSAPP_DOCTORS_TARGET_GROUP_ID not configured",
-    "matchedDoctors": [
-      "Dr. Ahmed Mohamed"
-    ]
+    "status": "no_doctor_present",
+    "reason": "No doctor registered/checked-in today for General Surgery",
+    "matchedDoctors": []
   }
 ]

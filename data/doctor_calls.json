@@ -1,5 +1,1201 @@
 [
   {
+    "id": "call_msg_msg_nov1_night_1795607128371",
+    "callDate": "2026-10-31",
+    "createdAt": "2026-11-25T11:45:28.371Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "علي كامل",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "surgeon_oct31_night",
+        "name": "Dr. Oct31 Night Surgeon",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Ward Nurse\nDate: 11/1/2026, 12:30:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: علي كامل\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_msg_cardio_test_1795607128255",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:45:28.255Z",
+    "room": "305",
+    "department": "Cardiology",
+    "rawDepartment": "القلب والأوعية الدموية",
+    "patientName": "يوسف محمد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "cardio_202",
+        "name": "Dr. Cardiologist OnDuty",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: القلب والأوعية الدموية\nBy: Ward Nurse\nDate: 14/10/2026 10:00:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 305\nPatient Name: يوسف محمد\nBed: Bed 305"
+  },
+  {
+    "id": "call_msg_msg_night_no_doc_1795607128250",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:45:28.250Z",
+    "room": "205",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "خالد علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [],
+    "status": "no_doctor_present",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الباطنة العامة\nBy: Night Nurse\nDate: 14/10/2026 9:15:00 م\nLocation: Elite 2nd Floor\nSub.Location: Room 205\nPatient Name: خالد علي\nBed: Bed 205"
+  },
+  {
+    "id": "call_msg_msg_after_8pm_1795607127862",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:45:27.862Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "طارق محمود",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "doc_night",
+        "name": "Dr. Night Surgeon",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Nurse Station\nDate: 14/10/2026 8:30:00 م\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: طارق محمود\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_3EB0_QUOTA_RECOVERY_1795607127844",
+    "callDate": "2026-10-15",
+    "createdAt": "2026-11-25T11:45:27.857Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب 1795607127844",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Ahmed Fathy",
+    "dispatchedDoctors": [
+      {
+        "id": "901",
+        "name": "Dr. Recovered Surgeon",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب 1795607127844\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_custom_1795607127845_edc652",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:45:27.845Z",
+    "room": "OPD Cardiology Center",
+    "department": "Cardiology",
+    "rawDepartment": "Cardiology",
+    "patientName": "OPD Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "202",
+        "name": "Sara Ali",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🩺 *OPD DOCTOR CALL* 🩺\n👨‍⚕️ Dr. @201099998888 *Sara Ali*\n\n📍 *Location:* *OPD Cardiology Center*\n🩺 *Specialty:* Cardiology\n👤 *Patient:* OPD Patient\n📞 *Phone:* 01099998888\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795607127842_b300f6",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:45:27.842Z",
+    "room": "ER",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *ER*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_msg_msg_out_1795607127841",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:45:27.841Z",
+    "room": "405",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد خالد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Head Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "301",
+        "name": "Dr. General Surgeon",
+        "phone": "01000000002",
+        "waPhone": "201000000002",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 405\n\nPatient Name: احمد خالد\nBed: Bed 405"
+  },
+  {
+    "id": "call_msg_msg_night_call_1795607127840",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:45:27.840Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد سعيد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "201",
+        "name": "Dr. On-Duty Night Surgeon",
+        "phone": "01000000001",
+        "waPhone": "201000000001",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Nurse\nDate: 15/10/2026 03:45:00 ص\nLocation: Elite 4th Floor\nSub.Location: Room 409\nPatient Name: احمد سعيد\nBed: Bed 409"
+  },
+  {
+    "id": "call_custom_1795607127835_fbf72b",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:45:27.835Z",
+    "room": "324",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "arabicName": "أحمد محمد",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *324*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_msg_msg_nov1_night_1795607007357",
+    "callDate": "2026-10-31",
+    "createdAt": "2026-11-25T11:43:27.357Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "علي كامل",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "surgeon_oct31_night",
+        "name": "Dr. Oct31 Night Surgeon",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Ward Nurse\nDate: 11/1/2026, 12:30:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: علي كامل\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_msg_cardio_test_1795607007218",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:27.219Z",
+    "room": "305",
+    "department": "Cardiology",
+    "rawDepartment": "القلب والأوعية الدموية",
+    "patientName": "يوسف محمد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "cardio_202",
+        "name": "Dr. Cardiologist OnDuty",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: القلب والأوعية الدموية\nBy: Ward Nurse\nDate: 14/10/2026 10:00:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 305\nPatient Name: يوسف محمد\nBed: Bed 305"
+  },
+  {
+    "id": "call_msg_msg_night_no_doc_1795607007217",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:27.217Z",
+    "room": "205",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "خالد علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [],
+    "status": "no_doctor_present",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الباطنة العامة\nBy: Night Nurse\nDate: 14/10/2026 9:15:00 م\nLocation: Elite 2nd Floor\nSub.Location: Room 205\nPatient Name: خالد علي\nBed: Bed 205"
+  },
+  {
+    "id": "call_msg_msg_after_8pm_1795607006811",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:26.811Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "طارق محمود",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "doc_night",
+        "name": "Dr. Night Surgeon",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Nurse Station\nDate: 14/10/2026 8:30:00 م\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: طارق محمود\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_3EB0_QUOTA_RECOVERY_1795607006790",
+    "callDate": "2026-10-15",
+    "createdAt": "2026-11-25T11:43:26.808Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب 1795607006790",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Ahmed Fathy",
+    "dispatchedDoctors": [
+      {
+        "id": "901",
+        "name": "Dr. Recovered Surgeon",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب 1795607006790\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_msg_mismatch_1795607006787",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:26.787Z",
+    "room": "201",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "سمير علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "401",
+        "name": "Dr. Internal Med",
+        "phone": "01000000003",
+        "waPhone": "201000000003",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الباطنة العامة\n\nBy: Nurse Station\n\nDate: 14/10/2026 11:00:00 AM\n\nLocation: Elite 2nd Floor\n\nSub.Location: Room 201\n\nPatient Name: سمير علي\nBed: Bed 201"
+  },
+  {
+    "id": "call_msg_msg_out_1795607006784",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:26.784Z",
+    "room": "405",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد خالد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Head Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "301",
+        "name": "Dr. General Surgeon",
+        "phone": "01000000002",
+        "waPhone": "201000000002",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 405\n\nPatient Name: احمد خالد\nBed: Bed 405"
+  },
+  {
+    "id": "call_msg_msg_night_call_1795607006780",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:26.780Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد سعيد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "201",
+        "name": "Dr. On-Duty Night Surgeon",
+        "phone": "01000000001",
+        "waPhone": "201000000001",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Nurse\nDate: 15/10/2026 03:45:00 ص\nLocation: Elite 4th Floor\nSub.Location: Room 409\nPatient Name: احمد سعيد\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_test_call_date_1795607006774",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:43:26.774Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب محمد خطابي",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Nurse Fatima",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Dr. Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Nurse Fatima\n\nDate: 14‏/10‏/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_custom_1795607006751_a7174f",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:43:26.751Z",
+    "room": "OPD Cardiology Center",
+    "department": "Cardiology",
+    "rawDepartment": "Cardiology",
+    "patientName": "OPD Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "202",
+        "name": "Sara Ali",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🩺 *OPD DOCTOR CALL* 🩺\n👨‍⚕️ Dr. @201099998888 *Sara Ali*\n\n📍 *Location:* *OPD Cardiology Center*\n🩺 *Specialty:* Cardiology\n👤 *Patient:* OPD Patient\n📞 *Phone:* 01099998888\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795607006749_5eb20f",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:43:26.749Z",
+    "room": "ER",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *ER*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795607006746_319ff3",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:43:26.746Z",
+    "room": "324",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "arabicName": "أحمد محمد",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *324*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_msg_msg_nov1_night_1795606936923",
+    "callDate": "2026-10-31",
+    "createdAt": "2026-11-25T11:42:16.924Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "علي كامل",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "surgeon_oct31_night",
+        "name": "Dr. Oct31 Night Surgeon",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Ward Nurse\nDate: 11/1/2026, 12:30:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: علي كامل\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_msg_cardio_test_1795606936805",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.805Z",
+    "room": "305",
+    "department": "Cardiology",
+    "rawDepartment": "القلب والأوعية الدموية",
+    "patientName": "يوسف محمد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "cardio_202",
+        "name": "Dr. Cardiologist OnDuty",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: القلب والأوعية الدموية\nBy: Ward Nurse\nDate: 14/10/2026 10:00:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 305\nPatient Name: يوسف محمد\nBed: Bed 305"
+  },
+  {
+    "id": "call_msg_msg_night_no_doc_1795606936803",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.804Z",
+    "room": "205",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "خالد علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [],
+    "status": "no_doctor_present",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الباطنة العامة\nBy: Night Nurse\nDate: 14/10/2026 9:15:00 م\nLocation: Elite 2nd Floor\nSub.Location: Room 205\nPatient Name: خالد علي\nBed: Bed 205"
+  },
+  {
+    "id": "call_msg_msg_after_8pm_1795606936428",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.428Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "طارق محمود",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "doc_night",
+        "name": "Dr. Night Surgeon",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Nurse Station\nDate: 14/10/2026 8:30:00 م\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: طارق محمود\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_3EB0_QUOTA_RECOVERY_1795606936412",
+    "callDate": "2026-10-15",
+    "createdAt": "2026-11-25T11:42:16.425Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب 1795606936412",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Ahmed Fathy",
+    "dispatchedDoctors": [
+      {
+        "id": "901",
+        "name": "Dr. Recovered Surgeon",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب 1795606936412\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_msg_mismatch_1795606936410",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.410Z",
+    "room": "201",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "سمير علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "401",
+        "name": "Dr. Internal Med",
+        "phone": "01000000003",
+        "waPhone": "201000000003",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الباطنة العامة\n\nBy: Nurse Station\n\nDate: 14/10/2026 11:00:00 AM\n\nLocation: Elite 2nd Floor\n\nSub.Location: Room 201\n\nPatient Name: سمير علي\nBed: Bed 201"
+  },
+  {
+    "id": "call_msg_msg_out_1795606936409",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.409Z",
+    "room": "405",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد خالد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Head Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "301",
+        "name": "Dr. General Surgeon",
+        "phone": "01000000002",
+        "waPhone": "201000000002",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 405\n\nPatient Name: احمد خالد\nBed: Bed 405"
+  },
+  {
+    "id": "call_msg_msg_night_call_1795606936407",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.407Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد سعيد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "201",
+        "name": "Dr. On-Duty Night Surgeon",
+        "phone": "01000000001",
+        "waPhone": "201000000001",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Nurse\nDate: 15/10/2026 03:45:00 ص\nLocation: Elite 4th Floor\nSub.Location: Room 409\nPatient Name: احمد سعيد\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_test_call_date_1795606936405",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:42:16.405Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب محمد خطابي",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Nurse Fatima",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Dr. Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Nurse Fatima\n\nDate: 14‏/10‏/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_custom_1795606936399_0d2a35",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:42:16.399Z",
+    "room": "OPD Cardiology Center",
+    "department": "Cardiology",
+    "rawDepartment": "Cardiology",
+    "patientName": "OPD Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "202",
+        "name": "Sara Ali",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🩺 *OPD DOCTOR CALL* 🩺\n👨‍⚕️ Dr. @201099998888 *Sara Ali*\n\n📍 *Location:* *OPD Cardiology Center*\n🩺 *Specialty:* Cardiology\n👤 *Patient:* OPD Patient\n📞 *Phone:* 01099998888\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795606936397_6ff8d4",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:42:16.397Z",
+    "room": "ER",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *ER*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795606936393_93d50d",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:42:16.393Z",
+    "room": "324",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "arabicName": "أحمد محمد",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *324*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_msg_msg_nov1_night_1795606918818",
+    "callDate": "2026-10-31",
+    "createdAt": "2026-11-25T11:41:58.818Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "علي كامل",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "surgeon_oct31_night",
+        "name": "Dr. Oct31 Night Surgeon",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Ward Nurse\nDate: 11/1/2026, 12:30:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: علي كامل\nBed: Bed 302"
+  },
+  {
+    "id": "corrupted_call_2",
+    "callDate": "2026-11-01",
+    "createdAt": "2026-11-01T08:30:00.000Z",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: General Surgery\nDate: 11/1/2026, 10:30:00 AM\nRoom: 301",
+    "room": "301",
+    "department": "General Surgery",
+    "status": "no_doctor_present"
+  },
+  {
+    "id": "corrupted_call_1",
+    "callDate": "2026-10-31",
+    "createdAt": "2026-11-01T00:30:00.000Z",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: General Surgery\nDate: 11/1/2026, 12:30:00 AM\nRoom: 201",
+    "room": "201",
+    "department": "General Surgery",
+    "status": "no_doctor_present"
+  },
+  {
+    "id": "call_msg_msg_cardio_test_1795606918700",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.700Z",
+    "room": "305",
+    "department": "Cardiology",
+    "rawDepartment": "القلب والأوعية الدموية",
+    "patientName": "يوسف محمد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Ward Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "cardio_202",
+        "name": "Dr. Cardiologist OnDuty",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: القلب والأوعية الدموية\nBy: Ward Nurse\nDate: 14/10/2026 10:00:00 AM\nLocation: Elite 3rd Floor\nSub.Location: Room 305\nPatient Name: يوسف محمد\nBed: Bed 305"
+  },
+  {
+    "id": "call_msg_msg_night_no_doc_1795606918699",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.699Z",
+    "room": "205",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "خالد علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [],
+    "status": "no_doctor_present",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الباطنة العامة\nBy: Night Nurse\nDate: 14/10/2026 9:15:00 م\nLocation: Elite 2nd Floor\nSub.Location: Room 205\nPatient Name: خالد علي\nBed: Bed 205"
+  },
+  {
+    "id": "call_msg_msg_after_8pm_1795606918235",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.235Z",
+    "room": "302",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "طارق محمود",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "doc_night",
+        "name": "Dr. Night Surgeon",
+        "phone": "01022222222",
+        "waPhone": "201022222222",
+        "shifts": [
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Nurse Station\nDate: 14/10/2026 8:30:00 م\nLocation: Elite 3rd Floor\nSub.Location: Room 302\nPatient Name: طارق محمود\nBed: Bed 302"
+  },
+  {
+    "id": "call_msg_3EB0_QUOTA_RECOVERY_1795606918221",
+    "callDate": "2026-10-15",
+    "createdAt": "2026-11-25T11:41:58.233Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب 1795606918221",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Ahmed Fathy",
+    "dispatchedDoctors": [
+      {
+        "id": "901",
+        "name": "Dr. Recovered Surgeon",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy\n\nDate: 15/10/2026 9:23:12 PM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب 1795606918221\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_msg_mismatch_1795606918218",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.218Z",
+    "room": "201",
+    "department": "Internal Medicine",
+    "rawDepartment": "الباطنة العامة",
+    "patientName": "سمير علي",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Nurse Station",
+    "dispatchedDoctors": [
+      {
+        "id": "401",
+        "name": "Dr. Internal Med",
+        "phone": "01000000003",
+        "waPhone": "201000000003",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الباطنة العامة\n\nBy: Nurse Station\n\nDate: 14/10/2026 11:00:00 AM\n\nLocation: Elite 2nd Floor\n\nSub.Location: Room 201\n\nPatient Name: سمير علي\nBed: Bed 201"
+  },
+  {
+    "id": "call_msg_msg_out_1795606918216",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.216Z",
+    "room": "405",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد خالد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Head Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "301",
+        "name": "Dr. General Surgeon",
+        "phone": "01000000002",
+        "waPhone": "201000000002",
+        "shifts": [
+          "Morning shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Head Nurse\n\nDate: 14/10/2026 10:00:00 AM\n\nLocation: Elite 4th Floor\n\nSub.Location: Room 405\n\nPatient Name: احمد خالد\nBed: Bed 405"
+  },
+  {
+    "id": "call_msg_msg_night_call_1795606918213",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.213Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "احمد سعيد",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Night Nurse",
+    "dispatchedDoctors": [
+      {
+        "id": "201",
+        "name": "Dr. On-Duty Night Surgeon",
+        "phone": "01000000001",
+        "waPhone": "201000000001",
+        "shifts": [
+          "Night shift",
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\nCategory: DoctorCall\nGroup: الجراحة العامة\nBy: Night Nurse\nDate: 15/10/2026 03:45:00 ص\nLocation: Elite 4th Floor\nSub.Location: Room 409\nPatient Name: احمد سعيد\nBed: Bed 409"
+  },
+  {
+    "id": "call_msg_test_call_date_1795606918206",
+    "callDate": "2026-10-14",
+    "createdAt": "2026-11-25T11:41:58.206Z",
+    "room": "409",
+    "department": "General Surgery",
+    "rawDepartment": "الجراحة العامة",
+    "patientName": "مصطفي عبدالوهاب محمد خطابي",
+    "patientBarcode": "0000263656",
+    "admittingPhysician": "Akram Assem",
+    "callerName": "Nurse Fatima",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Dr. Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "Evening shift",
+          "Night shift"
+        ]
+      }
+    ],
+    "status": "failed",
+    "notes": "",
+    "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Nurse Fatima\n\nDate: 14‏/10‏/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram Assem\nBed: Bed 409"
+  },
+  {
+    "id": "call_custom_1795606918204_858c14",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:41:58.204Z",
+    "room": "OPD Cardiology Center",
+    "department": "Cardiology",
+    "rawDepartment": "Cardiology",
+    "patientName": "OPD Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "202",
+        "name": "Sara Ali",
+        "phone": "01099998888",
+        "waPhone": "201099998888",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🩺 *OPD DOCTOR CALL* 🩺\n👨‍⚕️ Dr. @201099998888 *Sara Ali*\n\n📍 *Location:* *OPD Cardiology Center*\n🩺 *Specialty:* Cardiology\n👤 *Patient:* OPD Patient\n📞 *Phone:* 01099998888\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795606918198_92fd04",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:41:58.198Z",
+    "room": "ER",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *ER*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
+    "id": "call_custom_1795606918195_f512dc",
+    "callDate": "2026-11-25",
+    "createdAt": "2026-11-25T11:41:58.195Z",
+    "room": "324",
+    "department": "General Surgery",
+    "rawDepartment": "General Surgery",
+    "patientName": "Elite Patient",
+    "patientBarcode": "N/A",
+    "admittingPhysician": "N/A",
+    "callerName": "Telegram Call",
+    "dispatchedDoctors": [
+      {
+        "id": "101",
+        "name": "Ahmed Mohamed",
+        "arabicName": "أحمد محمد",
+        "phone": "01012345678",
+        "waPhone": "201012345678",
+        "shifts": [
+          "24 shift"
+        ]
+      }
+    ],
+    "status": "dispatched",
+    "rawMessage": "🚨 *INPATIENT DOCTOR CALL* 🚨\n👨‍⚕️ Dr. @201012345678 *Ahmed Mohamed*\n\n📍 *Location:* Room *324*\n🩺 *Specialty:* General Surgery\n👤 *Patient:* Elite Patient\n📞 *Phone:* 01012345678\n\n⚡ _Please attend to the patient promptly._"
+  },
+  {
     "id": "call_msg_3EB0_QUOTA_RECOVERY_1792277322454",
     "callDate": "2026-10-15",
     "createdAt": "2026-10-17T22:48:42.466Z",
@@ -682,7 +1878,7 @@
   {
     "id": "call_msg_3EB015F6FB16C1950B9F65_TEST",
     "callDate": "2026-10-14",
-    "createdAt": "2026-10-17T22:48:42.436Z",
+    "createdAt": "2026-11-25T11:45:27.818Z",
     "room": "409",
     "department": "General Surgery",
     "rawDepartment": "الجراحة العامة",
@@ -690,15 +1886,8 @@
     "patientBarcode": "0000263656",
     "admittingPhysician": "Akram   Assem",
     "callerName": "Ahmed Fathy Salama Elsayed",
-    "dispatchedDoctors": [
-      {
-        "name": "Dr. Ahmed Mohamed",
-        "phone": "",
-        "waPhone": "",
-        "shifts": []
-      }
-    ],
-    "status": "failed",
+    "dispatchedDoctors": [],
+    "status": "no_doctor_present",
     "notes": "",
     "rawMessage": "Type: Request\n\nCategory: DoctorCall\n\nGroup: الجراحة العامة\n\nBy: Ahmed Fathy Salama Elsayed\n\nDate: 14/10/2026 9:23:12 م\n\nLocation: Elite 4th Floor - Elite\n\nSub.Location: Room 409\n\n\nPatient Barcode: 0000263656\nPatient Name: مصطفي عبدالوهاب محمد خطابي\nAdmitting Phys: Akram   Assem\nBed: Bed 409"
   },

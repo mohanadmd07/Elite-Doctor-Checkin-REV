@@ -2022,9 +2022,10 @@ function writeMonthlyCheckInsLocal(checkins: CheckIn[]) {
 const readWeeklyCheckInsLocal = readMonthlyCheckInsLocal;
 const writeWeeklyCheckInsLocal = writeMonthlyCheckInsLocal;
 
-// 30-Day FIFO Sliding Window: strictly enforces maximum 30 distinct calendar days.
-// When 31+ distinct days exist, all records for the oldest day(s) are purged from Supabase & local storage.
+// 30-Day FIFO Sliding Window: strictly enforces maximum 30 distinct past/active calendar days.
+// Future scheduled dates (from Weekly Roster Planner) are ALWAYS preserved and never evict past history.
 async function pruneMonthlyCheckInsTo30Days(checkins: CheckIn[]): Promise<CheckIn[]> {
+  const activeTodayDate = getEgyptDateInfo().isoDate;
   const dateMap = new Map<string, CheckIn[]>();
   for (const c of checkins) {
     const d = getEgyptDateStr(c.timestamp);
@@ -2032,16 +2033,20 @@ async function pruneMonthlyCheckInsTo30Days(checkins: CheckIn[]): Promise<CheckI
     dateMap.get(d)!.push(c);
   }
 
-  const sortedDates = Array.from(dateMap.keys()).sort();
-  if (sortedDates.length <= 30) {
+  const pastOrTodayDates = Array.from(dateMap.keys())
+    .filter((d) => d <= activeTodayDate)
+    .sort();
+  const futureDates = Array.from(dateMap.keys()).filter((d) => d > activeTodayDate);
+
+  if (pastOrTodayDates.length <= 30) {
     return checkins;
   }
 
-  const excessCount = sortedDates.length - 30;
-  const datesToDelete = sortedDates.slice(0, excessCount);
-  const datesToKeep = new Set(sortedDates.slice(excessCount));
+  const excessCount = pastOrTodayDates.length - 30;
+  const datesToDelete = pastOrTodayDates.slice(0, excessCount);
+  const datesToKeep = new Set([...pastOrTodayDates.slice(excessCount), ...futureDates]);
 
-  console.log(`[Elite Server] 30-Day Rolling Window: Archiving ${datesToDelete.length} oldest dates (${datesToDelete.join(", ")}). Preserving in Supabase & archive file.`);
+  console.log(`[Elite Server] 30-Day Rolling Window: Archiving ${datesToDelete.length} oldest dates (${datesToDelete.join(", ")}). Preserving in Supabase, archive file & ${futureDates.length} upcoming scheduled date(s).`);
 
   // 1. Safely archive older records locally so no data is ever lost
   try {
@@ -2490,6 +2495,99 @@ async function getCheckInsForSheetDate(targetDateInput?: string): Promise<CheckI
       mergedMap.set(key, enriched);
     }
   }
+
+  return Array.from(mergedMap.values());
+}
+
+// Effective Active Today Check-Ins: merges live daily checkins with any pre-scheduled weekly/monthly
+// entries for the active hospital sheet date so weekly-scheduled doctors always appear on
+// the Live Today Roster and 8:00 AM WhatsApp Daily Excel Sheet.
+async function getEffectiveTodayCheckIns(): Promise<CheckIn[]> {
+  const activeSheetDate = getEgyptDateInfo().isoDate;
+  const [liveDaily, scheduledForToday] = await Promise.all([
+    readCheckIns(),
+    getCheckInsForSheetDate(activeSheetDate),
+  ]);
+
+  const mergedMap = new Map<string, CheckIn>();
+  for (const c of scheduledForToday) {
+    if (!c || !c.id) continue;
+    const enriched = enrichCheckIn(c);
+    const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+    mergedMap.set(key, enriched);
+  }
+  for (const c of liveDaily) {
+    if (!c || !c.id) continue;
+    const enriched = enrichCheckIn(c);
+    const key = normalizeId(enriched.id) || normalizeName(enriched.doctorName);
+    mergedMap.set(key, enriched);
+  }
+
+  return Array.from(mergedMap.values());
+}
+
+// Query check-ins across a rolling date window (e.g. 7 days for Weekly Doctors Roster Planner)
+async function getCheckInsForDateRange(
+  dateList: string[],
+  filters?: { department?: string; doctorId?: string }
+): Promise<Array<CheckIn & { date: string }>> {
+  const dateSet = new Set(dateList);
+  const activeTodayDate = getEgyptDateInfo().isoDate;
+  const now = Date.now();
+  const isMonthlyCacheWarm = Boolean(monthlyCheckinsCache && (now - lastMonthlyFetchTime < MONTHLY_CACHE_TTL));
+
+  let rangeRecords: CheckIn[] = [];
+  const supabase = getSupabase();
+  if (!isMonthlyCacheWarm && supabase && dateList.length > 0) {
+    try {
+      const { data, error } = await supabase
+        .from("monthly_checkins")
+        .select(CHECKIN_SLIM_COLUMNS)
+        .in("checkin_date", dateList)
+        .order("checkin_timestamp", { ascending: false });
+      if (!error && Array.isArray(data)) {
+        rangeRecords = data.map((row: any) => ({
+          id: String(row.doctor_id || "").replace(/^(emp\.|emp)/i, ""),
+          doctorName: row.doctor_name,
+          doctorArabicName: row.doctor_arabic_name || row.doctor_name,
+          department: row.department,
+          shifts: Array.isArray(row.shifts) ? row.shifts : [],
+          timestamp: row.checkin_timestamp,
+          mobileNumber: row.mobile_number || "",
+        }));
+      } else {
+        rangeRecords = await readMonthlyCheckIns();
+      }
+    } catch (err) {
+      console.warn("[Weekly Range] Narrow Supabase range query failed, falling back:", err);
+      rangeRecords = await readMonthlyCheckIns();
+    }
+  } else {
+    rangeRecords = await readMonthlyCheckIns();
+  }
+
+  const dailyList = dateSet.has(activeTodayDate) ? await readCheckIns() : [];
+  const mergedMap = new Map<string, CheckIn & { date: string }>();
+
+  const ingest = (c: CheckIn) => {
+    if (!c || !c.id) return;
+    const enriched = enrichCheckIn(c);
+    const dStr = getEgyptDateStr(enriched.timestamp);
+    if (!dateSet.has(dStr)) return;
+    if (filters?.doctorId) {
+      const targetIdNorm = normalizeId(filters.doctorId.replace(/^(emp\.|emp)/i, ""));
+      if (normalizeId(enriched.id) !== targetIdNorm) return;
+    }
+    if (filters?.department && filters.department !== "All") {
+      const targetDept = normalizeDepartment(filters.department);
+      if (normalizeDepartment(enriched.department) !== targetDept) return;
+    }
+    const key = `${normalizeId(enriched.id) || normalizeName(enriched.doctorName)}_${dStr}`;
+    mergedMap.set(key, { ...enriched, date: dStr });
+  };
+
+  for (const c of rangeRecords) ingest(c);
+  for (const c of dailyList) ingest(c);
 
   return Array.from(mergedMap.values());
 }
@@ -3327,8 +3425,7 @@ async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
   if (options.dateParam) {
     checkins = await getCheckInsForSheetDate(dateInfo.isoDate);
   } else {
-    const rawCheckins = await readCheckIns();
-    checkins = rawCheckins.map(c => enrichCheckIn(c));
+    checkins = await getEffectiveTodayCheckIns();
     if (checkins.length === 0) {
       checkins = await getCheckInsForSheetDate(dateInfo.isoDate);
     }
@@ -4365,10 +4462,256 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
       return res.json(dateList);
     }
 
-    const list = await readCheckIns();
-    res.json(list.map(c => enrichCheckIn(c)));
+    const list = await getEffectiveTodayCheckIns();
+    res.json(list);
   } catch (err) {
     res.status(500).json({ error: "Failed to read check-ins." });
+  }
+});
+
+// Get scheduled check-ins across a rolling date window (used by Weekly Doctors Roster Planner)
+app.get(["/api/checkins/week", "/checkins/week"], async (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  try {
+    const activeTodayDate = getEgyptDateInfo().isoDate;
+    const startParam = typeof req.query.start === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start.trim())
+      ? req.query.start.trim()
+      : activeTodayDate;
+    const rawDays = parseInt(String(req.query.days || "7"), 10);
+    const daysCount = Number.isFinite(rawDays) ? Math.min(Math.max(rawDays, 1), 14) : 7;
+    const department = typeof req.query.department === "string" ? req.query.department.trim() : undefined;
+    const doctorId = typeof req.query.doctorId === "string" ? req.query.doctorId.trim() : undefined;
+
+    const [yStr, mStr, dStr] = startParam.split("-");
+    const baseUtc = Date.UTC(parseInt(yStr, 10), parseInt(mStr, 10) - 1, parseInt(dStr, 10));
+    const dateList: string[] = [];
+    for (let i = 0; i < daysCount; i++) {
+      const dt = new Date(baseUtc + i * 24 * 60 * 60 * 1000);
+      const iso = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+      dateList.push(iso);
+    }
+
+    const items = await getCheckInsForDateRange(dateList, { department, doctorId });
+    res.json({
+      activeTodayDate,
+      startDate: startParam,
+      dates: dateList,
+      checkins: items,
+    });
+  } catch (err: any) {
+    console.error("Error in GET /api/checkins/week:", err);
+    res.status(500).json({ error: err?.message || "Failed to load weekly roster." });
+  }
+});
+
+// Batch save weekly doctors roster (multi-doctor, multi-day upserts + optional deletions)
+app.post(["/api/checkins/weekly", "/checkins/weekly"], async (req, res) => {
+  const rawEntries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+  const rawDeletions = Array.isArray(req.body?.deletions) ? req.body.deletions : [];
+
+  if (rawEntries.length === 0 && rawDeletions.length === 0) {
+    return res.status(400).json({ error: "Please add at least one shift assignment or change before saving." });
+  }
+  if (rawEntries.length + rawDeletions.length > 250) {
+    return res.status(400).json({ error: "Maximum 250 schedule changes per batch request." });
+  }
+
+  const validShifts = ["Morning shift", "Long shift", "Evening shift", "Night shift", "24 shift"];
+  const validatedEntries: Array<{
+    id: string;
+    doctorName: string;
+    doctorArabicName: string;
+    department: string;
+    shifts: string[];
+    mobileNumber: string;
+    date: string;
+    timestamp: string;
+  }> = [];
+
+  for (let i = 0; i < rawEntries.length; i++) {
+    const item = rawEntries[i];
+    if (!item || !item.id || !item.doctorName || !item.department) {
+      return res.status(400).json({ error: `Entry #${i + 1} is missing required doctor fields.` });
+    }
+    const targetDate = typeof item.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date.trim())
+      ? item.date.trim()
+      : "";
+    if (!targetDate) {
+      return res.status(400).json({ error: `Entry #${i + 1} has an invalid date (expected YYYY-MM-DD).` });
+    }
+    if (!Array.isArray(item.shifts) || item.shifts.length === 0) {
+      return res.status(400).json({ error: `Entry #${i + 1} must select at least one shift.` });
+    }
+    let finalShifts = [...item.shifts];
+    if (
+      finalShifts.length === 3 &&
+      finalShifts.includes("Morning shift") &&
+      finalShifts.includes("Evening shift") &&
+      finalShifts.includes("Night shift")
+    ) {
+      finalShifts = ["24 shift"];
+    }
+    const invalidShifts = finalShifts.filter((s: string) => !validShifts.includes(s));
+    if (invalidShifts.length > 0) {
+      return res.status(400).json({ error: `Invalid shift selected: ${invalidShifts.join(", ")}` });
+    }
+
+    ensureBaseDoctorsInitialized();
+    const cleanId = String(item.id).trim().replace(/^(emp\.|emp)/i, "");
+    const idKey = normalizeId(cleanId);
+    const nameKey = normalizeName(String(item.doctorName));
+    const docInDb = DOCTORS_BY_ID_MAP.get(idKey) || DOCTORS_BY_NAME_MAP.get(nameKey);
+    const hasArabic = (s?: string) => Boolean(s && /[\u0600-\u06FF]/.test(s));
+    let resolvedArabic = String(item.doctorArabicName || "").trim();
+    if (docInDb?.arabicName && hasArabic(docInDb.arabicName) && !hasArabic(resolvedArabic)) {
+      resolvedArabic = docInDb.arabicName;
+    }
+    const resolvedMobile =
+      (item.mobileNumber ? String(item.mobileNumber).trim() : "") ||
+      docInDb?.mobileNumber ||
+      mobileNumbersByCodeMap.get(idKey) ||
+      mobileNumbersByNameMap.get(nameKey) ||
+      "";
+
+    validatedEntries.push({
+      id: cleanId,
+      doctorName: (docInDb?.name || String(item.doctorName)).trim(),
+      doctorArabicName: resolvedArabic || (docInDb?.arabicName || String(item.doctorName)).trim(),
+      department: normalizeDepartment(String(item.department)),
+      shifts: finalShifts,
+      mobileNumber: resolvedMobile,
+      date: targetDate,
+      timestamp: buildTimestampForSheetDate(targetDate),
+    });
+  }
+
+  try {
+    const activeSheetDate = getEgyptDateInfo().isoDate;
+    const affectedDatesSet = new Set<string>();
+    let syncedToTodayCount = 0;
+
+    // 1. Apply deletions first
+    let deletedCount = 0;
+    for (const del of rawDeletions) {
+      if (!del || !del.id || !del.date || !/^\d{4}-\d{2}-\d{2}$/.test(String(del.date).trim())) continue;
+      const dDate = String(del.date).trim();
+      const removed = await deleteCheckInForDate(String(del.id).trim(), dDate);
+      if (removed) {
+        deletedCount++;
+        affectedDatesSet.add(dDate);
+      }
+    }
+
+    // 2. Batch upsert to Supabase (monthly_checkins, legacy weekly_checkins, and today's checkins)
+    const supabase = getSupabase();
+    if (supabase && validatedEntries.length > 0) {
+      const monthlyPayloads = validatedEntries.map((e) => ({
+        doctor_id: e.id,
+        doctor_name: e.doctorName,
+        doctor_arabic_name: e.doctorArabicName,
+        department: e.department,
+        shifts: e.shifts,
+        mobile_number: e.mobileNumber || "",
+        checkin_timestamp: e.timestamp,
+        checkin_date: e.date,
+      }));
+
+      try {
+        const { error: upsertErr } = await supabase
+          .from("monthly_checkins")
+          .upsert(monthlyPayloads, { onConflict: "doctor_id,checkin_date" });
+        if (upsertErr) {
+          for (const p of monthlyPayloads) {
+            await supabase.from("monthly_checkins").delete().eq("doctor_id", p.doctor_id).eq("checkin_date", p.checkin_date);
+            await supabase.from("monthly_checkins").insert(p);
+          }
+        }
+        try {
+          await supabase.from("weekly_checkins").upsert(monthlyPayloads, { onConflict: "doctor_id,checkin_date" });
+        } catch {}
+
+        const todayPayloads = monthlyPayloads.filter((p) => p.checkin_date === activeSheetDate);
+        if (todayPayloads.length > 0) {
+          const { error: dailyErr } = await supabase
+            .from("checkins")
+            .upsert(todayPayloads, { onConflict: "doctor_id" });
+          if (dailyErr) {
+            for (const p of todayPayloads) {
+              await supabase.from("checkins").delete().eq("doctor_id", p.doctor_id);
+              await supabase.from("checkins").insert(p);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[Supabase] POST /api/checkins/weekly batch upsert failed:", err);
+      }
+    }
+
+    // 3. Single-pass local JSON update (monthly_checkins.json, weekly_checkins.json, checkins.json)
+    if (validatedEntries.length > 0) {
+      const localMonthly = readMonthlyCheckInsLocal();
+      const monthlyMap = new Map<string, CheckIn>();
+      for (const c of localMonthly) {
+        if (!c || !c.id) continue;
+        const key = `${normalizeId(c.id)}_${getEgyptDateStr(c.timestamp)}`;
+        monthlyMap.set(key, c);
+      }
+      for (const e of validatedEntries) {
+        const key = `${normalizeId(e.id)}_${e.date}`;
+        monthlyMap.set(key, {
+          id: e.id,
+          doctorName: e.doctorName,
+          doctorArabicName: e.doctorArabicName,
+          department: e.department,
+          shifts: e.shifts,
+          timestamp: e.timestamp,
+          mobileNumber: e.mobileNumber,
+        });
+        affectedDatesSet.add(e.date);
+      }
+      const prunedMonthly = await pruneMonthlyCheckInsTo30Days(Array.from(monthlyMap.values()));
+      writeMonthlyCheckInsLocal(prunedMonthly);
+
+      const todayEntries = validatedEntries.filter((e) => e.date === activeSheetDate);
+      if (todayEntries.length > 0) {
+        syncedToTodayCount = todayEntries.length;
+        const localDaily = readCheckInsLocal();
+        const dailyMap = new Map<string, CheckIn>();
+        for (const c of localDaily) {
+          if (!c || !c.id) continue;
+          dailyMap.set(normalizeId(c.id), c);
+        }
+        for (const e of todayEntries) {
+          dailyMap.set(normalizeId(e.id), {
+            id: e.id,
+            doctorName: e.doctorName,
+            doctorArabicName: e.doctorArabicName,
+            department: e.department,
+            shifts: e.shifts,
+            timestamp: e.timestamp,
+            mobileNumber: e.mobileNumber,
+          });
+        }
+        writeCheckInsLocal(Array.from(dailyMap.values()));
+      }
+    }
+
+    invalidateCheckinsCache();
+    invalidateMonthlyCache();
+
+    res.status(201).json({
+      success: true,
+      savedCount: validatedEntries.length,
+      deletedCount,
+      syncedToTodayCount,
+      affectedDates: Array.from(affectedDatesSet).sort(),
+      checkins: validatedEntries,
+    });
+  } catch (err: any) {
+    console.error("Error in POST /api/checkins/weekly:", err);
+    res.status(500).json({ error: err?.message || "Failed to save weekly roster." });
   }
 });
 
@@ -4414,6 +4757,7 @@ app.get(["/api/checkins/dates", "/checkins/dates"], async (req, res) => {
           doctorsCount: docs.length,
           departmentsCount: depts.size,
           isToday: date === activeTodayDate,
+          isUpcoming: date > activeTodayDate,
         };
       })
       .sort((a, b) => b.date.localeCompare(a.date));

@@ -83,3 +83,78 @@ export function getEgyptResetTime(timestampStr: string): Date {
     return d;
   }
 }
+
+export interface WeekDayInfo {
+  isoDate: string;
+  englishShort: string;
+  englishFull: string;
+  arabicWeekday: string;
+  dayNum: string;
+  monthShort: string;
+  formattedShort: string;
+  isToday: boolean;
+}
+
+const ENGLISH_SHORT_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const ENGLISH_FULL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+const ARABIC_WEEKDAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"] as const;
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+export function getActiveHospitalSheetDateStr(now: Date = new Date()): string {
+  return getEgyptDateStr(now.toISOString());
+}
+
+export function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
+  if (!match) return getActiveHospitalSheetDateStr();
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1;
+  const day = parseInt(match[3], 10);
+  const d = new Date(Date.UTC(year, month, day + deltaDays));
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+export function buildRollingWeekDates(
+  baseIsoDate: string,
+  weekOffset = 0,
+  daysCount = 7,
+  activeTodayIso?: string
+): WeekDayInfo[] {
+  const safeBase = /^\d{4}-\d{2}-\d{2}$/.test(baseIsoDate.trim())
+    ? baseIsoDate.trim()
+    : getActiveHospitalSheetDateStr();
+  const todayIso = activeTodayIso && /^\d{4}-\d{2}-\d{2}$/.test(activeTodayIso.trim())
+    ? activeTodayIso.trim()
+    : safeBase;
+
+  const startDate = shiftIsoDate(safeBase, weekOffset * daysCount);
+  const result: WeekDayInfo[] = [];
+
+  for (let i = 0; i < daysCount; i++) {
+    const iso = shiftIsoDate(startDate, i);
+    const [yStr, mStr, dStr] = iso.split("-");
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10) - 1;
+    const day = parseInt(dStr, 10);
+    const utcDate = new Date(Date.UTC(y, m, day));
+    const dow = utcDate.getUTCDay();
+    const monthShort = SHORT_MONTHS[m] || "";
+    const dayNum = String(day).padStart(2, "0");
+
+    result.push({
+      isoDate: iso,
+      englishShort: ENGLISH_SHORT_DAYS[dow],
+      englishFull: ENGLISH_FULL_DAYS[dow],
+      arabicWeekday: ARABIC_WEEKDAYS[dow],
+      dayNum,
+      monthShort,
+      formattedShort: `${dayNum} ${monthShort}`,
+      isToday: iso === todayIso,
+    });
+  }
+
+  return result;
+}

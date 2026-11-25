@@ -54,13 +54,17 @@ import {
   Edit3,
   MessageSquare,
   Command,
-  Ban
+  Ban,
+  ArrowLeft
 } from "lucide-react";
 import { CANONICAL_SPECIALTIES, NEPHROLOGY_DOCTOR_IDS, SPECIALTY_OPTIONS } from "./data/specialties.js";
 import { useToast } from "./components/common/Toast.tsx";
 import { EmptyState } from "./components/common/EmptyState.tsx";
 import { TableSkeleton, CardGridSkeleton } from "./components/common/TableSkeleton.tsx";
 import { CommandPalette } from "./components/common/CommandPalette.tsx";
+import { EntryModeSelector } from "./components/checkin/EntryModeSelector.tsx";
+import { WeeklyRosterPlanner } from "./components/checkin/WeeklyRosterPlanner.tsx";
+import { getActiveHospitalSheetDateStr } from "./utils/timezone.ts";
 
 // Shift definition
 interface ShiftOption {
@@ -265,6 +269,7 @@ export default function App() {
 
   // Navigation & Screen states
   const [isAdminMode, setIsAdminMode] = useState(false);
+  const [checkinEntryMode, setCheckinEntryMode] = useState<"select" | "daily" | "weekly">("select");
   const [adminPasscode, setAdminPasscode] = useState("");
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [adminRole, setAdminRole] = useState<"admin" | "coordinator" | null>(null);
@@ -327,6 +332,7 @@ export default function App() {
     doctorsCount: number;
     departmentsCount: number;
     isToday: boolean;
+    isUpcoming?: boolean;
   }>>([]);
   const [activeTodaySheetDate, setActiveTodaySheetDate] = useState<string>("");
   const [dateCheckins, setDateCheckins] = useState<CheckIn[]>([]);
@@ -1258,15 +1264,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     isConfirmingAction
   ]);
 
-  // Auto-focus Check-In input when entering Check-In mode
+  // Auto-focus Check-In input when entering Daily Check-In mode
   useEffect(() => {
-    if (!isAdminMode && !showAdminLogin && !submitSuccess) {
+    if (!isAdminMode && checkinEntryMode === "daily" && !showAdminLogin && !submitSuccess) {
       const timer = setTimeout(() => {
         physicianInputRef.current?.focus();
       }, 120);
       return () => clearTimeout(timer);
     }
-  }, [isAdminMode, showAdminLogin, submitSuccess]);
+  }, [isAdminMode, checkinEntryMode, showAdminLogin, submitSuccess]);
 
   const handleToggleSelectDoctor = (id: string) => {
     setSelectedDbDoctorIds((prev) =>
@@ -3588,7 +3594,23 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
 
         <AnimatePresence mode="wait">
           {!isAdminMode ? (
-            
+            checkinEntryMode === "select" ? (
+              <EntryModeSelector
+                activeSheetDate={activeTodaySheetDate || getActiveHospitalSheetDateStr()}
+                todayCheckinsCount={checkins.length}
+                onSelectMode={(mode) => setCheckinEntryMode(mode)}
+              />
+            ) : checkinEntryMode === "weekly" ? (
+              <WeeklyRosterPlanner
+                activeSheetDate={activeTodaySheetDate || getActiveHospitalSheetDateStr()}
+                onBackToModes={() => setCheckinEntryMode("select")}
+                onSwitchToDaily={() => setCheckinEntryMode("daily")}
+                onSaved={() => {
+                  fetchCheckins();
+                  fetchRosterDates();
+                }}
+              />
+            ) : (
             /* ======================================================= */
             /*                 PHYSICIAN CHECK-IN VIEW                 */
             /* ======================================================= */
@@ -3602,20 +3624,37 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
             >
               <div className="bg-white rounded-2xl border border-[#cbdad5] p-6 sm:p-8 shadow-[0_18px_40px_-20px_rgba(6,59,48,0.16)]">
                 
-                <div className="flex items-center justify-between gap-4 pb-5 mb-7 border-b border-[#e4ece9]">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-5 mb-7 border-b border-[#e4ece9]">
                   <div className="flex items-center gap-3">
+                    <button
+                      id="daily-back-to-modes-btn"
+                      type="button"
+                      onClick={() => setCheckinEntryMode("select")}
+                      className="p-2.5 rounded-xl bg-[#f8fbf9] hover:bg-[#e6f2ee] text-[#063b30] border border-[#cbdad5] tactile-press cursor-pointer shrink-0"
+                      title="Back to Entry Mode Selector"
+                      aria-label="Back to Entry Mode Selector"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
                     <div className="w-10 h-10 rounded-xl bg-[#e6f2ee] border border-[#cbdad5] text-[#063b30] flex items-center justify-center shrink-0">
                       <Stethoscope className="w-5 h-5" />
                     </div>
                     <div>
-                      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#063b30]">Doctors Check-In</h2>
+                      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#063b30]">Daily Doctor Check-In</h2>
                       <p className="text-xs text-slate-500 font-medium mt-0.5">Search by Employee ID or Name, then select your duty shifts</p>
                     </div>
                   </div>
-                  <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-bold text-[#063b30] bg-[#f8fbf9] border border-[#cbdad5] px-2.5 py-1 rounded-full">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                    Live Terminal
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      id="daily-switch-to-weekly-btn"
+                      type="button"
+                      onClick={() => setCheckinEntryMode("weekly")}
+                      className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#063b30] bg-[#e6f2ee] hover:bg-[#d7eae3] border border-[#b5d6c9] px-3 py-1.5 rounded-xl tactile-press cursor-pointer"
+                    >
+                      <CalendarDays className="w-3.5 h-3.5" />
+                      <span>Weekly Doctors</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-6">
@@ -4016,6 +4055,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                 </div>
               </div>
             </motion.div>
+            )
           ) : (
             
             /* ======================================================= */
@@ -6395,10 +6435,18 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border bg-white text-[#063b30] border-[#cbdad5]">
-                              {rosterDateFilter ? "HISTORICAL / DATE SHEET EDITOR" : "LIVE TODAY ROSTER"}
+                              {rosterDateFilter
+                                ? activeTodaySheetDate && rosterDateFilter > activeTodaySheetDate
+                                  ? "UPCOMING WEEKLY SCHEDULE"
+                                  : "HISTORICAL / DATE SHEET EDITOR"
+                                : "LIVE TODAY ROSTER"}
                             </span>
                             {rosterDateFilter && (
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-950 border border-amber-400">
+                              <span className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                activeTodaySheetDate && rosterDateFilter > activeTodaySheetDate
+                                  ? "bg-emerald-100 text-emerald-950 border-emerald-300"
+                                  : "bg-amber-200/80 text-amber-950 border-amber-400"
+                              }`}>
                                 Viewing Date: {rosterDateFilter}
                               </span>
                             )}
@@ -6448,7 +6496,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
                           {rosterDatesList.map((item) => (
                             <option key={`roster-date-opt-${item.date}`} value={item.date}>
                               📅 {item.date} ({item.englishWeekday} / {item.arabicWeekday}) — {item.doctorsCount} {item.doctorsCount === 1 ? "Doctor" : "Doctors"}
-                              {item.isToday ? " [Today]" : ""}
+                              {item.isToday ? " [Today]" : item.isUpcoming ? " [Upcoming]" : ""}
                             </option>
                           ))}
                         </select>
