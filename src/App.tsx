@@ -1377,10 +1377,12 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     setLoadingDatabase(true);
     setDatabaseError(null);
     try {
-      const url = `/api/doctors?_t=${Date.now()}${forceRefresh ? "&refresh=true" : ""}`;
-      const res = await fetch(url, {
-        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" }
-      });
+      // Allow Vercel Edge CDN caching on normal loads; bypass cache only on explicit refresh after admin mutations
+      const url = forceRefresh ? `/api/doctors?refresh=true&_t=${Date.now()}` : "/api/doctors";
+      const res = await fetch(
+        url,
+        forceRefresh ? { headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" } } : undefined
+      );
       if (res.ok) {
         const data = await res.json();
         const sorted = data.sort((a: Doctor, b: Doctor) => compareDoctorIds(a.id, b.id));
@@ -1837,11 +1839,68 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
   const [isSavingDirectoryPhone, setIsSavingDirectoryPhone] = useState(false);
   const [directoryMessage, setDirectoryMessage] = useState("");
 
-  // Handle searching directory doctors
+  // Fast client-side doctor search matching server.ts normalization (eliminates per-keystroke Vercel API calls)
+  const searchLocalDoctors = (rawQuery: string, maxResults = 20): Doctor[] => {
+    const cleanQuery = rawQuery.trim().toLowerCase();
+    if (!cleanQuery || fullDoctorList.length === 0) return [];
+    const normAr = (t: string) =>
+      (t || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\u064B-\u065F\u0670]/g, "")
+        .replace(/[أإآٱ]/g, "ا")
+        .replace(/ة/g, "ه")
+        .replace(/ى/g, "ي")
+        .replace(/ؤ/g, "و")
+        .replace(/ئ/g, "ي")
+        .replace(/ء/g, "")
+        .replace(/\s+/g, " ");
+    const normIdFn = (id: string) => (id || "").trim().toLowerCase().replace(/^emp\./, "").replace(/^emp/, "");
+    const normQuery = normAr(cleanQuery);
+    const normIdQuery = normIdFn(cleanQuery);
+    const terms = normQuery.split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return [];
+
+    const scored: { doc: Doctor; score: number }[] = [];
+    for (let i = 0; i < fullDoctorList.length; i++) {
+      const doc = fullDoctorList[i];
+      const nId = normIdFn(doc.id);
+      const nName = (doc.name || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const nAra = normAr(doc.arabicName || "");
+      const nDept = (doc.department || "").trim().toLowerCase();
+      const nMob = (doc.mobileNumber || "").trim().toLowerCase();
+
+      const matchesAll = terms.every(
+        (term) =>
+          nId.includes(term) ||
+          nName.includes(term) ||
+          nAra.includes(term) ||
+          nDept.includes(term) ||
+          nMob.includes(term)
+      );
+      if (!matchesAll && !(normIdQuery && nId === normIdQuery)) continue;
+
+      let score = 100;
+      if (normIdQuery && nId === normIdQuery) score += 1000;
+      else if (normIdQuery && nId.startsWith(normIdQuery)) score += 500;
+      else if (normIdQuery && nId.includes(normIdQuery)) score += 200;
+      if (nName === normQuery || nAra === normQuery) score += 400;
+      else if (nName.startsWith(normQuery) || nAra.startsWith(normQuery)) score += 300;
+      scored.push({ doc, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, maxResults).map((s) => s.doc);
+  };
+
+  // Handle searching directory doctors (local-first with server fallback if directory not loaded yet)
   useEffect(() => {
     const q = directorySearch.trim();
     if (!q) {
       setDirectorySuggestions([]);
+      return;
+    }
+    if (fullDoctorList.length > 0) {
+      setDirectorySuggestions(searchLocalDoctors(q, 20));
       return;
     }
     const timer = setTimeout(async () => {
@@ -1856,7 +1915,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       }
     }, 150);
     return () => clearTimeout(timer);
-  }, [directorySearch]);
+  }, [directorySearch, fullDoctorList]);
 
   const handleSelectDirectoryDoctor = (doc: Doctor) => {
     setSelectedDirectoryDoctor(doc);
@@ -1908,29 +1967,11 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     fetchCheckins();
     fetchFullDoctorsDatabase();
     fetchRosterDates();
-
-    // Background pre-warm and sync of high-res Retina header to server memory cache for 8 AM Cron
-    const timer = setTimeout(async () => {
-      try {
-        const bgHeader = await fetchHeaderImageBase64(undefined, undefined, undefined, undefined, { autoReset: true });
-        if (bgHeader) {
-          fetch("/api/sheet-header-sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ headerBase64: bgHeader })
-          }).catch(() => {});
-        }
-      } catch {
-        // non-blocking
-      }
-    }, 2500);
-
-    return () => clearTimeout(timer);
   }, []);
 
-  // Fetch and live-sync current checkins if admin is authenticated (polls every 10 seconds when tab is visible)
+  // Fetch and live-sync current checkins ONLY when on the Roster tab (polls every 60s when visible)
   useEffect(() => {
-    if (!isAdminAuthenticated) return;
+    if (!isAdminAuthenticated || adminTab !== "roster") return;
 
     const refreshRoster = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
@@ -1941,13 +1982,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     };
 
     fetchCheckins();
-    fetchFullDoctorsDatabase();
+    if (fullDoctorList.length === 0) {
+      fetchFullDoctorsDatabase();
+    }
     fetchRosterDates();
     if (rosterDateFilter) {
       fetchCheckinsForDate(rosterDateFilter, true);
     }
 
-    const intervalId = setInterval(refreshRoster, 10000);
+    const intervalId = setInterval(refreshRoster, 60000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         refreshRoster();
@@ -1959,19 +2002,10 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [isAdminAuthenticated, rosterDateFilter]);
+  }, [isAdminAuthenticated, adminTab, rosterDateFilter]);
 
-  // Global background poller: ensures any open check-in kiosk or browser tab also triggers Green-API journal sync
-  useEffect(() => {
-    const runPoll = () => {
-      fetch("/api/doctor-calls/poll", { method: "POST", cache: "no-store" }).catch(() => {});
-    };
-    runPoll();
-    const bgPollId = setInterval(runPoll, 15000);
-    return () => clearInterval(bgPollId);
-  }, []);
-
-  // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 10 seconds when tab is visible)
+  // Live-sync Inpatient Doctor Calls when on "calls" tab (polls every 30s when visible)
+  // Note: 24/7 Green-API call ingestion is handled by instant webhooks + quotaExceeded recovery + Supabase pg_cron 2-min failsafe
   useEffect(() => {
     if (!isAdminAuthenticated || adminTab !== "calls") return;
 
@@ -1985,7 +2019,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     fetchAutomationStatus();
     fetchAuditLogs();
 
-    const intervalId = setInterval(refreshCallsTab, 10000);
+    const intervalId = setInterval(refreshCallsTab, 30000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         refreshCallsTab();
@@ -1999,7 +2033,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     };
   }, [isAdminAuthenticated, adminTab, callsDateFilter, callsDeptFilter, callsStatusFilter, callsSearch]);
 
-  // Live-sync Prayer Status when on "prayer" tab (polls every 10 seconds when tab is visible)
+  // Live-sync Prayer Status when on "prayer" tab (polls every 5 minutes when visible; countdown runs locally)
   useEffect(() => {
     if (!isAdminAuthenticated || adminTab !== "prayer") return;
 
@@ -2009,7 +2043,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     };
 
     fetchPrayerStatus();
-    const intervalId = setInterval(refreshPrayerTab, 10000);
+    const intervalId = setInterval(refreshPrayerTab, 300000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         refreshPrayerTab();
@@ -2023,7 +2057,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     };
   }, [isAdminAuthenticated, adminTab]);
 
-  // Auto-lookup doctor as they type and fetch autocomplete suggestions
+  // Auto-lookup doctor as they type and fetch autocomplete suggestions (local-first in 0ms; falls back to API only if directory not yet loaded)
   useEffect(() => {
     const query = inputId.trim();
     if (!query) {
@@ -2043,6 +2077,34 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     )) {
       setSuggestions([]);
       setShowSuggestions(false);
+      return;
+    }
+
+    // Fast path: search in-memory fullDoctorList with ZERO Vercel invocations
+    if (fullDoctorList.length > 0) {
+      const localMatches = searchLocalDoctors(query, 20).filter((d: any) =>
+        d.isActive !== false && (!d.department || (CANONICAL_SPECIALTIES as readonly string[]).includes(d.department))
+      );
+      setSuggestions(localMatches);
+      setShowSuggestions(localMatches.length > 0);
+
+      const normQ = query.toLowerCase().replace(/^emp\./, "").replace(/^emp/, "");
+      const exactMatch = localMatches.find(
+        (d) =>
+          d.id.toLowerCase().replace(/^emp\./, "").replace(/^emp/, "") === normQ ||
+          d.name.toLowerCase() === query.toLowerCase() ||
+          (d.arabicName && d.arabicName.toLowerCase() === query.toLowerCase())
+      );
+      if (exactMatch) {
+        setFoundDoctor(exactMatch);
+        setIsManualReg(false);
+        setSearched(true);
+        setErrorMessage("");
+        if (exactMatch.id.toLowerCase().replace(/^emp\./, "").replace(/^emp/, "") === normQ) {
+          setSuggestions([]);
+          setShowSuggestions(false);
+        }
+      }
       return;
     }
 
@@ -2080,7 +2142,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [inputId]);
+  }, [inputId, fullDoctorList]);
 
   // Fetch check-ins list from Express backend
   const fetchCheckins = async () => {
@@ -2156,11 +2218,15 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
     return dt.toISOString().split("T")[0];
   };
 
-  // Autocomplete search inside Add/Edit Check-In Modal
+  // Autocomplete search inside Add/Edit Check-In Modal (local-first with server fallback)
   useEffect(() => {
     const q = checkinModalSearch.trim();
     if (!q) {
       setCheckinModalSuggestions([]);
+      return;
+    }
+    if (fullDoctorList.length > 0) {
+      setCheckinModalSuggestions(searchLocalDoctors(q, 20));
       return;
     }
     const timer = setTimeout(async () => {
@@ -2175,7 +2241,7 @@ CREATE POLICY "Public access to doctor_calls" ON public.doctor_calls FOR ALL USI
       }
     }, 150);
     return () => clearTimeout(timer);
-  }, [checkinModalSearch]);
+  }, [checkinModalSearch, fullDoctorList]);
 
   // Open modal to add a doctor check-in to the currently viewed date (or today)
   const handleOpenAddCheckinModal = () => {

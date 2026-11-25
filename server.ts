@@ -5,12 +5,19 @@ import express from "express";
 import compression from "compression";
 import path from "path";
 import fs from "fs";
-import ExcelJS from "exceljs";
-import { DOCTORS_DATABASE } from "./src/data/doctors.js";
 import { COMPILED_DOCTORS } from "./src/data/compiledDoctors.js";
 import { PRECOMPILED_CODE_PHONES, PRECOMPILED_NAME_PHONES } from "./src/data/compiledPhones.js";
 import { getSupabase, getSupabaseConfig, fetchAllRowsFromSupabase, resetSupabaseClient } from "./src/db/supabase.js";
-import { COMPILED_HEADER_BG_BASE64, COMPILED_ELITE_LOGO_BASE64 } from "./src/data/compiledAssets.js";
+
+// Lazy-loaded heavy modules (only loaded by Excel/SVG endpoints so hot webhooks & APIs cold-start fast)
+let cachedExcelJS: any = null;
+async function getExcelJS(): Promise<any> {
+  if (!cachedExcelJS) {
+    const mod = await import("exceljs");
+    cachedExcelJS = (mod as any).default || mod;
+  }
+  return cachedExcelJS;
+}
 import {
   processDoctorCallWebhook,
   getDoctorCallRecords,
@@ -183,6 +190,7 @@ function isDoctorDeleted(cleanId: string, name: string, araName?: string): boole
 }
 
 function searchDoctors(query: string, maxResults = 20): any[] {
+  ensureBaseDoctorsInitialized();
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
 
@@ -423,18 +431,25 @@ function sanitizeLingeringDeletedDoctors() {
   }
 }
 
-// Immediately initialize the in-memory database with pre-compiled records (0ms startup)
-initPrecompiledPhones();
-updateCachedDeletedKeys(readDeletedDoctorsLocal());
-sanitizeLingeringDeletedDoctors();
-indexDoctorsList(COMPILED_DOCTORS);
-console.log(`[Elite Server] Instantly initialized ${NORMALIZED_DOCTORS_DATABASE.length} doctors into memory on boot.`);
+// Lazily initialize the in-memory doctor database on first doctor/check-in access
+// (avoids wasting Fluid Active CPU on cold starts for webhooks, prayer dispatch, or doctor-calls)
+let baseDoctorsInitialized = false;
+function ensureBaseDoctorsInitialized() {
+  if (baseDoctorsInitialized) return;
+  baseDoctorsInitialized = true;
+  initPrecompiledPhones();
+  updateCachedDeletedKeys(readDeletedDoctorsLocal());
+  sanitizeLingeringDeletedDoctors();
+  indexDoctorsList(COMPILED_DOCTORS);
+  console.log(`[Elite Server] Lazily initialized ${NORMALIZED_DOCTORS_DATABASE.length} doctors into memory.`);
+}
 
 let doctorsRefreshPromise: Promise<void> | null = null;
-let lastDoctorsRefreshTime = 0; // Set to 0 so the initial background delta sync runs immediately!
-const DOCTORS_REFRESH_TTL = 60 * 1000; // 60-second in-memory TTL
+let lastDoctorsRefreshTime = 0; // Set to 0 so the initial delta sync runs on first doctor directory access
+const DOCTORS_REFRESH_TTL = 5 * 60 * 1000; // 5-minute in-memory TTL (invalidated immediately on any write)
 
 async function loadEnrichedDoctorsDatabase(force = false): Promise<void> {
+  ensureBaseDoctorsInitialized();
   const now = Date.now();
   if (!force && NORMALIZED_DOCTORS_DATABASE.length > 0 && (now - lastDoctorsRefreshTime < DOCTORS_REFRESH_TTL)) {
     return;
@@ -588,6 +603,7 @@ interface CheckIn {
 
 function enrichCheckIn(c: CheckIn): CheckIn {
   if (!c) return c;
+  ensureBaseDoctorsInitialized();
   const cleanId = (c.id || "").trim().replace(/^(emp\.|emp)/i, "");
   const idKey = normalizeId(cleanId);
   const nameKey = normalizeName(c.doctorName || "");
@@ -641,7 +657,10 @@ function enrichCheckIn(c: CheckIn): CheckIn {
 const app = express();
 const PORT = 3000;
 
-app.use(compression());
+// Vercel Edge automatically applies Brotli/Gzip; skip Node.js CPU compression on Vercel to save Fluid Active CPU
+if (!process.env.VERCEL) {
+  app.use(compression());
+}
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -834,6 +853,13 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
           mobileNumber: row.mobile_number || "",
         }));
 
+        if (process.env.VERCEL) {
+          // On Vercel, Supabase is the persistent source of truth; skip ephemeral /tmp read-merge-write CPU overhead
+          checkinsCache = mapped;
+          lastCheckinsFetchTime = Date.now();
+          return mapped;
+        }
+
         // Merge with local records so local checkins are never lost if Supabase is partially synced
         const local = readCheckInsLocal();
         const mergedMap = new Map<string, CheckIn>();
@@ -861,6 +887,7 @@ async function readCheckInsRaw(): Promise<CheckIn[]> {
 
 // Fetch all checkins (asynchronous cloud/local) with auto-reset filter for 6:30 PM Egypt Time
 async function readCheckIns(): Promise<CheckIn[]> {
+  ensureBaseDoctorsInitialized();
   const list = await readCheckInsRaw();
   const now = new Date();
 
@@ -2106,7 +2133,10 @@ async function readMonthlyCheckIns(): Promise<CheckIn[]> {
 
   // Enforce 30-day FIFO sliding window
   list = await pruneMonthlyCheckInsTo30Days(list);
-  writeMonthlyCheckInsLocal(list);
+  if (!process.env.VERCEL) {
+    writeMonthlyCheckInsLocal(list);
+  }
+  ensureBaseDoctorsInitialized();
 
   // Normalize details
   const result = list
@@ -2390,11 +2420,44 @@ function buildTimestampForSheetDate(targetDateInput: string, existingTimestamp?:
 
 async function getCheckInsForSheetDate(targetDateInput?: string): Promise<CheckIn[]> {
   const targetDateStr = normalizeSheetDateInput(targetDateInput);
-  const [monthlyList, dailyList] = await Promise.all([
-    readMonthlyCheckIns(),
-    readCheckIns(),
-  ]);
-  const archiveList = readHistoricalArchiveLocal();
+  const now = Date.now();
+  const isMonthlyCacheWarm = Boolean(monthlyCheckinsCache && (now - lastMonthlyFetchTime < MONTHLY_CACHE_TTL));
+
+  let monthlyList: CheckIn[] = [];
+  let dailyList: CheckIn[] = [];
+
+  const supabase = getSupabase();
+  if (!isMonthlyCacheWarm && supabase) {
+    // Narrow single-date Supabase query avoids scanning all 30 days on every date filter view
+    const [narrowMonthlyRes, dailyRes] = await Promise.all([
+      supabase
+        .from("monthly_checkins")
+        .select(CHECKIN_SLIM_COLUMNS)
+        .eq("checkin_date", targetDateStr)
+        .order("checkin_timestamp", { ascending: false }),
+      readCheckIns(),
+    ]);
+    dailyList = dailyRes;
+    if (!narrowMonthlyRes.error && Array.isArray(narrowMonthlyRes.data) && narrowMonthlyRes.data.length > 0) {
+      monthlyList = narrowMonthlyRes.data.map((row: any) => ({
+        id: row.doctor_id,
+        doctorName: row.doctor_name,
+        doctorArabicName: row.doctor_arabic_name || row.doctor_name,
+        department: row.department,
+        shifts: Array.isArray(row.shifts) ? row.shifts : [],
+        timestamp: row.checkin_timestamp,
+        mobileNumber: row.mobile_number || "",
+      }));
+    } else {
+      monthlyList = await readMonthlyCheckIns();
+    }
+  } else {
+    [monthlyList, dailyList] = await Promise.all([
+      readMonthlyCheckIns(),
+      readCheckIns(),
+    ]);
+  }
+  const archiveList = process.env.VERCEL ? [] : readHistoricalArchiveLocal();
 
   const mergedMap = new Map<string, CheckIn>();
 
@@ -2830,12 +2893,27 @@ function escapeXml(unsafe: string): string {
 
 // Memory cache for user-included header image to eliminate repeated disk I/O
 let cachedHeaderBgBase64: string | null = null;
+let cachedEliteLogoBase64: string | null = null;
+let compiledAssetsLoaded = false;
+
+async function preloadCompiledAssets(): Promise<void> {
+  if (compiledAssetsLoaded) return;
+  compiledAssetsLoaded = true;
+  try {
+    const mod = await import("./src/data/compiledAssets.js");
+    if (!cachedHeaderBgBase64 && typeof mod.COMPILED_HEADER_BG_BASE64 === "string" && mod.COMPILED_HEADER_BG_BASE64.length > 0) {
+      cachedHeaderBgBase64 = mod.COMPILED_HEADER_BG_BASE64;
+    }
+    if (!cachedEliteLogoBase64 && typeof mod.COMPILED_ELITE_LOGO_BASE64 === "string" && mod.COMPILED_ELITE_LOGO_BASE64.length > 0) {
+      cachedEliteLogoBase64 = mod.COMPILED_ELITE_LOGO_BASE64;
+    }
+  } catch (err) {
+    console.warn("[Elite Server] Could not dynamically load compiledAssets:", err);
+  }
+}
+
 function getHeaderBgBase64(): string {
   if (cachedHeaderBgBase64) return cachedHeaderBgBase64;
-  if (typeof COMPILED_HEADER_BG_BASE64 === "string" && COMPILED_HEADER_BG_BASE64.length > 0) {
-    cachedHeaderBgBase64 = COMPILED_HEADER_BG_BASE64;
-    return cachedHeaderBgBase64;
-  }
   const candidatePaths = [
     path.join(process.cwd(), "public", "header_bg.png"),
     path.join(process.cwd(), "header_bg.png"),
@@ -2855,13 +2933,8 @@ function getHeaderBgBase64(): string {
 }
 
 // Memory cache for elite_logo.png transparent emblem
-let cachedEliteLogoBase64: string | null = null;
 function getEliteLogoBase64(): string {
   if (cachedEliteLogoBase64) return cachedEliteLogoBase64;
-  if (typeof COMPILED_ELITE_LOGO_BASE64 === "string" && COMPILED_ELITE_LOGO_BASE64.length > 0) {
-    cachedEliteLogoBase64 = COMPILED_ELITE_LOGO_BASE64;
-    return cachedEliteLogoBase64;
-  }
   const candidatePaths = [
     path.join(process.cwd(), "public", "elite_logo.png"),
     path.join(process.cwd(), "elite_logo.png"),
@@ -3114,7 +3187,8 @@ function buildSheetHeaderSvg(options: SheetHeaderOptions = {}): string {
 }
 
 // Endpoint supporting Node.js backend parameters (?date=..., ?day=..., ?title=..., ?w=..., ?h=..., ?format=..., ?autoReset=..., ?cutoff=..., ?nextDay=...)
-app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req, res) => {
+app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], async (req, res) => {
+  await preloadCompiledAssets();
   const widthParam = parseInt(String(req.query.w || req.query.width || "1200"), 10) || 1200;
   const heightParam = parseInt(String(req.query.h || req.query.height || "150"), 10) || 150;
   const dateParam = typeof req.query.date === "string" ? req.query.date.trim() : undefined;
@@ -3169,7 +3243,8 @@ app.get(["/api/sheet-header.svg", "/sheet-header.svg", "/api/header.svg"], (req,
 });
 
 // JSON / Metadata endpoint for sheet header parameters
-app.get("/api/sheet-header", (req, res) => {
+app.get("/api/sheet-header", async (req, res) => {
+  await preloadCompiledAssets();
   const format = String(req.query.format || "").toLowerCase();
   if (format === "svg") {
     const queryStr = new URLSearchParams(req.query as any).toString();
@@ -3263,6 +3338,8 @@ async function buildDailySheetWorkbook(options: DailySheetGenOptions = {}) {
   const formattedDate = dateInfo.formattedDate;
   const fullTitle = `${title} ${arabicWeekday} ${formattedDate}`;
 
+  await preloadCompiledAssets();
+  const ExcelJS = await getExcelJS();
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Roster Report", {
     views: [{ showGridLines: true }]
@@ -3770,12 +3847,6 @@ app.get(["/api/doctor-calls", "/doctor-calls"], async (req, res) => {
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   try {
-    // Piggyback a throttled (15s) opportunistic journal poll instead of running an unthrottled queue drain on every UI list refresh
-    await runOpportunisticJournalPoll(
-      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
-      15000
-    ).catch(() => {});
-
     const date = typeof req.query.date === "string" ? req.query.date : undefined;
     const department = typeof req.query.department === "string" ? req.query.department : undefined;
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
@@ -3928,16 +3999,24 @@ app.get(["/api/doctor-calls/audit-logs", "/doctor-calls/audit-logs"], async (req
 });
 
 // 10. Manual / Background Green-API Notification Poller (Failsafe for when webhooks are blocked)
+// Supports ?mode=fast (used by Supabase pg_cron 2-min failsafe) for low-latency incoming-only journal check with zero sleep
 app.all(["/api/doctor-calls/poll", "/doctor-calls/poll"], async (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   try {
+    const isFastMode =
+      req.query.mode === "fast" ||
+      req.headers["x-vercel-cron"] === "1";
+
     const pollResult = await pollGreenApiNotifications({
       getActiveCheckins: async (callDate?: string) => {
         return getMonthlyCheckinsForDate(callDate);
       },
-      maxCount: 10
+      maxCount: isFastMode ? 3 : 10,
+      skipQueueDrain: isFastMode,
+      journalMinutes: isFastMode ? 15 : 120,
+      incomingOnly: isFastMode
     });
-    res.json({ success: true, ...pollResult });
+    res.json({ success: true, mode: isFastMode ? "fast" : "full", ...pollResult });
   } catch (err: any) {
     console.error("Error polling Green-API notifications:", err);
     res.status(500).json({ success: false, error: err?.message || String(err) });
@@ -4011,7 +4090,9 @@ app.get(["/api/download/monthly-sheet", "/download/monthly-sheet"], async (req, 
     });
     const monthlyData = Array.from(mergedMap.values());
     const titleParam = typeof req.query.title === "string" ? req.query.title.trim() : "الأطباء المتواجدين عن يوم";
-    const workbook = new ExcelJS.Workbook();
+    await preloadCompiledAssets();
+  const ExcelJS = await getExcelJS();
+  const workbook = new ExcelJS.Workbook();
     const headerImgB64 = getHeaderBgBase64();
 
     if (monthlyData.length === 0) {
@@ -4185,12 +4266,19 @@ app.get(["/api/download/monthly-sheet", "/download/monthly-sheet"], async (req, 
 });
 
 app.get(["/api/doctors", "/doctors"], async (req, res) => {
-  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
-  if (req.query.refresh === "true" || NORMALIZED_DOCTORS_DATABASE.length === 0 || lastDoctorsRefreshTime === 0) {
+  ensureBaseDoctorsInitialized();
+  const isForceRefresh = req.query.refresh === "true";
+  if (isForceRefresh) {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+  } else {
+    // Allow Vercel Edge CDN to cache the ~1,900-doctor directory for 5 minutes (bypassed via ?refresh=true after admin edits)
+    res.setHeader("Cache-Control", "public, max-age=30, s-maxage=300, stale-while-revalidate=600");
+  }
+  if (isForceRefresh || NORMALIZED_DOCTORS_DATABASE.length === 0 || lastDoctorsRefreshTime === 0) {
     try {
-      await loadEnrichedDoctorsDatabase(true);
+      await loadEnrichedDoctorsDatabase(isForceRefresh);
     } catch (err) {
       console.error("Error refreshing doctors database on GET:", err);
     }
@@ -4220,6 +4308,7 @@ app.get("/api/doctors/search", (req, res) => {
 
 // Get a single doctor by ID, English name, or Arabic name fallback
 app.get(["/api/doctors/:id", "/doctors/:id"], (req, res) => {
+  ensureBaseDoctorsInitialized();
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
@@ -4270,12 +4359,6 @@ app.get(["/api/checkins", "/checkins"], async (req, res) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   try {
-    // Piggyback a throttled (15s) Green-API journal poll onto check-ins fetches
-    await runOpportunisticJournalPoll(
-      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
-      15000
-    ).catch(() => {});
-
     const dateQuery = typeof req.query.date === "string" ? req.query.date.trim() : "";
     if (dateQuery) {
       const dateList = await getCheckInsForSheetDate(dateQuery);
@@ -5157,23 +5240,28 @@ app.post("/api/supabase/migrate", async (req, res) => {
 
 // Serve Frontend using Vite or static assets
 async function startServer() {
-  // Non-blocking background delta sync with Supabase
-  loadEnrichedDoctorsDatabase(true).catch(err => {
-    console.warn("[Elite Server] Background doctors delta sync:", err);
-  });
+  // Only run eager boot sync & background polling timers on long-running local/VPS Node processes.
+  // On Vercel Fluid Compute, background intervals keep instances alive & waste Provisioned Memory,
+  // and eager 4-table doctor sync bloats cold starts for webhooks/prayer endpoints.
+  if (!process.env.VERCEL) {
+    // Non-blocking background delta sync with Supabase
+    loadEnrichedDoctorsDatabase(true).catch(err => {
+      console.warn("[Elite Server] Background doctors delta sync:", err);
+    });
 
-  // Periodically check and clean up expired check-ins & poll Green-API journal every 20 seconds
-  setInterval(() => {
-    cleanupExpiredCheckIns().catch(err => {
-      console.error("[Elite Server] Background cleanup check-ins failed:", err);
-    });
-    runOpportunisticJournalPoll(
-      async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
-      15000
-    ).catch(err => {
-      console.error("[Elite Server] Background doctor call poll failed:", err);
-    });
-  }, 20000);
+    // Periodically check and clean up expired check-ins & poll Green-API journal every 20 seconds
+    setInterval(() => {
+      cleanupExpiredCheckIns().catch(err => {
+        console.error("[Elite Server] Background cleanup check-ins failed:", err);
+      });
+      runOpportunisticJournalPoll(
+        async (callDate?: string) => getMonthlyCheckinsForDate(callDate),
+        60000
+      ).catch(err => {
+        console.error("[Elite Server] Background doctor call poll failed:", err);
+      });
+    }, 20000);
+  }
 
   // Global JSON error response handler (ensures API never responds with raw HTML <!DOCTYPE>)
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

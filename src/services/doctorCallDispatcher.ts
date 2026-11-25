@@ -1104,8 +1104,8 @@ export async function getDoctorCallRecords(filter?: {
   status?: string;
   search?: string;
 }): Promise<DoctorCallRecord[]> {
-  // Proactively repair corrupted dates once per process lifecycle
-  if (!repairedCorruptedOnce) {
+  // Proactively repair corrupted dates once per local process lifecycle (skip full-table scan on serverless cold starts)
+  if (!repairedCorruptedOnce && !process.env.VERCEL) {
     repairedCorruptedOnce = true;
     await runCorruptedCallDatesRepair().catch(() => 0);
   }
@@ -1271,10 +1271,10 @@ export async function setGreenApiWebhookUrl(webhookUrl: string): Promise<{
         webhookUrl: cleanUrl,
         incomingWebhook: "yes",
         incomingBlockWebhook: "yes",
-        outgoingWebhook: "yes",
+        outgoingWebhook: "no",
         outgoingMessageWebhook: "yes",
-        outgoingAPIMessageWebhook: "yes",
-        stateWebhook: "yes"
+        outgoingAPIMessageWebhook: "no",
+        stateWebhook: "no"
       })
     });
 
@@ -1495,7 +1495,7 @@ let lastOpportunisticJournalPollMs = 0;
  */
 export async function runOpportunisticJournalPoll(
   getActiveCheckins: (callDate?: string) => Promise<any[]>,
-  minIntervalMs: number = 8000
+  minIntervalMs: number = 60000
 ): Promise<DoctorCallRecord | undefined> {
   if (!process.env.GREEN_API_ID_INSTANCE?.trim() || !process.env.GREEN_API_API_TOKEN_INSTANCE?.trim()) {
     return undefined;
@@ -1510,7 +1510,8 @@ export async function runOpportunisticJournalPoll(
       getActiveCheckins,
       maxCount: 3,
       skipQueueDrain: true,
-      journalMinutes: 60
+      journalMinutes: 15,
+      incomingOnly: true
     });
     const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
     return firstHandled?.callRecord;
@@ -1559,25 +1560,14 @@ export async function processDoctorCallWebhook(params: {
   const senderName = rawBody.senderData?.senderName || rawBody.senderData?.chatName || rawBody.senderName || "";
   const typeWebhook = rawBody.typeWebhook || rawBody.typeMessage || rawBody.messageData?.typeMessage || "incomingMessage";
 
-  // Non-message notifications (delivery/read receipts, authorization state changes)
-  // Piggyback an opportunistic journal poll so every Green-API event acts as a background heartbeat when the app is closed!
+  // Non-message notifications (delivery/read receipts, authorization state changes): return immediately without sleeping/polling
   const nonMessageTypes = ["outgoingmessagestatus", "stateinstancechanged", "deviceinfo", "incomingcall", "outgoingcall"];
   if (nonMessageTypes.includes(typeWebhook.toLowerCase())) {
-    if (source === "webhook") {
-      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
-      if (recovered) {
-        return {
-          handled: true,
-          reason: `Recovered source group call via Journal API during ${typeWebhook} webhook heartbeat`,
-          callRecord: recovered
-        };
-      }
-    }
     return { handled: false, reason: `Ignored event notification: ${typeWebhook}` };
   }
 
   // Handle Green-API Developer Plan 'quotaExceeded' webhook by polling Journal API with fast, rate-limit-safe retries
-  // (Stays well under Vercel's 10s serverless timeout while respecting Green-API's 1 req/sec Journal API limit)
+  // (Uses incomingOnly + 15-min window + short backoff to stay well under Vercel timeouts and minimize Fluid Compute)
   if (typeWebhook.toLowerCase() === "quotaexceeded") {
     const blockedChats = Array.isArray(rawBody.quotaData?.correspondents)
       ? rawBody.quotaData.correspondents.join(", ")
@@ -1600,7 +1590,7 @@ export async function processDoctorCallWebhook(params: {
 
     if (source === "webhook") {
       const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
-      const retryDelaysMs = isTestEnv ? [0, 10] : [1200, 2800];
+      const retryDelaysMs = isTestEnv ? [0, 10] : [600, 1400];
 
       for (let attempt = 0; attempt < retryDelaysMs.length; attempt++) {
         const delayMs = retryDelaysMs[attempt];
@@ -1613,8 +1603,8 @@ export async function processDoctorCallWebhook(params: {
             getActiveCheckins,
             maxCount: 5,
             skipQueueDrain: true,
-            journalMinutes: 60,
-            incomingOnly: attempt > 0
+            journalMinutes: 15,
+            incomingOnly: true
           });
           const firstHandled = pollRes.results.find((r: any) => r.handled && r.callRecord);
           if (firstHandled) {
@@ -1715,17 +1705,6 @@ export async function processDoctorCallWebhook(params: {
       reason: skipReason
     });
 
-    if (source === "webhook") {
-      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
-      if (recovered) {
-        return {
-          handled: true,
-          reason: "Recovered source group call via Journal API during non-text webhook",
-          callRecord: recovered
-        };
-      }
-    }
-
     return { handled: false, reason: skipReason };
   }
 
@@ -1769,17 +1748,6 @@ export async function processDoctorCallWebhook(params: {
       handled: false,
       reason: skipReason
     });
-
-    if (source === "webhook") {
-      const recovered = await runOpportunisticJournalPoll(getActiveCheckins);
-      if (recovered) {
-        return {
-          handled: true,
-          reason: "Recovered source group call via Journal API during other chat webhook",
-          callRecord: recovered
-        };
-      }
-    }
 
     return { handled: false, reason: skipReason };
   }

@@ -707,7 +707,6 @@ export async function getPrayerStatus(): Promise<{
   upcoming_dates: string[];
 }> {
   const isEnabled = process.env.PRAYER_NOTIFICATIONS_ENABLED === "true";
-  const isPaused = await isPrayerPaused();
   const cairoParts = getCairoParts();
   const today = getCairoDateString();
   const cairoTime = `${String(cairoParts.hour).padStart(2, "0")}:${String(cairoParts.minute).padStart(2, "0")}:${String(
@@ -715,13 +714,17 @@ export async function getPrayerStatus(): Promise<{
   ).padStart(2, "0")}`;
 
   const availableGroups = getAllConfiguredPrayerGroups();
-  const activeSelected = await getActivePrayerWhatsAppGroupIds();
+  const allConfiguredIds = availableGroups.map((g) => g.id);
   const supabase = getSupabase();
 
   if (!supabase) {
+    const activeSelected =
+      selectedPrayerGroupsMemory === null
+        ? allConfiguredIds
+        : allConfiguredIds.filter((id) => selectedPrayerGroupsMemory!.includes(id));
     return {
       enabled: isEnabled,
-      isPaused,
+      isPaused: isPrayerPausedMemory,
       cairo_now: `${today} ${cairoTime}`,
       cairo_time: cairoTime,
       configured_groups_count: availableGroups.length,
@@ -733,10 +736,31 @@ export async function getPrayerStatus(): Promise<{
     };
   }
 
-  const [timesRes, notifsRes] = await Promise.all([
+  // Fetch settings, upcoming prayer times, and today's notifications in a single parallel round-trip
+  const [settingsRes, timesRes, notifsRes] = await Promise.all([
+    supabase
+      .from("prayer_notifications")
+      .select("status, group_results")
+      .eq("prayer_date", "1970-01-01")
+      .eq("prayer", "__SETTINGS__")
+      .maybeSingle(),
     supabase.from("prayer_times").select("*").gte("prayer_date", today).order("prayer_date", { ascending: true }),
     supabase.from("prayer_notifications").select("*").eq("prayer_date", today),
   ]);
+
+  if (settingsRes.data) {
+    if (typeof settingsRes.data.status === "string") {
+      isPrayerPausedMemory = settingsRes.data.status === "paused";
+    }
+    if (settingsRes.data.group_results && Array.isArray((settingsRes.data.group_results as any).selectedGroups)) {
+      selectedPrayerGroupsMemory = (settingsRes.data.group_results as any).selectedGroups;
+    }
+  }
+  const isPaused = isPrayerPausedMemory;
+  const activeSelected =
+    selectedPrayerGroupsMemory === null
+      ? allConfiguredIds
+      : allConfiguredIds.filter((id) => selectedPrayerGroupsMemory!.includes(id));
 
   let allUpcomingTimes = timesRes.data || [];
   const todayNotifs = notifsRes.data || [];
